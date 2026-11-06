@@ -1,0 +1,300 @@
+@import "tailwindcss";
+
+:root {
+  --dp-color-ground: #f7f2e7;
+  --dp-color-ink: #38352f;
+  --dp-color-ink-muted: #514d44;
+  --dp-color-line: #b3ac9d;
+  --dp-color-accent: #9e3a2e;
+  --dp-color-annotation: #344c69;
+  --dp-color-highlight: #f0dfa0;
+  --dp-color-scrap: #fcf8ef;
+  --dp-typography-reading-face: "Sketch Working Hand", var(--font-sketch-hand), cursive;
+  --dp-typography-display-face: "Sketch Working Marker", var(--font-sketch-marker), cursive;
+  --dp-typography-body: 24px;
+  --dp-typography-reading: 23px;
+  --dp-typography-detail: 21px;
+  --dp-spacing-item-gap: 16px;
+  --dp-radius-control: 9px 4px 17px 5px / 4px 12px 5px 9px;
+  --dp-border-fine-stroke: 1.5px;
+  --dp-motion-control: 100ms;
+}
+
+@layer base {
+  html {
+    scroll-behavior: smooth;
+  }
+
+  body.sketch-sheet {
+    background-color: var(--dp-color-ground);
+    background-image:
+      radial-gradient(rgba(56, 53, 47, 0.045) 1px, transparent 0),
+      linear-gradient(to bottom, rgba(179, 172, 157, 0.14) 1px, transparent 1px);
+    background-size: 22px 22px, 100% 36px;
+    color: var(--dp-color-ink);
+    font-family: var(--dp-typography-reading-face);
+    font-size: 19px;
+    line-height: 1.55;
+    letter-spacing: 0.01em;
+  }
+
+  h1, h2, h3, h4 {
+    font-family: var(--dp-typography-display-face);
+    color: var(--dp-color-ink);
+    line-height: 1.22;
+    text-wrap: balance;
+  }
+
+  .font-mono {
+    font-family: var(--font-mono), monospace;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Dashed blue focus outline for keyboard accessibility */
+  button:focus-visible,
+  a:focus-visible,
+  input:focus-visible,
+  select:focus-visible,
+  textarea:focus-visible {
+    outline: 2.5px dashed var(--dp-color-annotation) !important;
+    outline-offset: 3px !important;
+  }
+}
+
+/* ============================================================================
+   SKETCH WORKING SHEET COMPONENT PRIMITIVES
+   ============================================================================ */
+
+.sketch-scrap {
+  background-color: var(--dp-color-scrap);
+  border: var(--dp-border-fine-stroke) solid var(--dp-color-ink);
+  border-radius: var(--dp-radius-control);
+  box-shadow: 3px 3px 0px rgba(56, 53, 47, 0.18);
+}
+
+.sketch-strip {
+  background-color: #efe8d8;
+  border: var(--dp-border-fine-stroke) solid var(--dp-color-line);
+  border-radius: 13px 6px 14px 5px / 6px 15px 5px 11px;
+}
+
+.sketch-highlight {
+  background-color: var(--dp-color-highlight);
+  padding: 0 6px;
+  border-radius: 6px 3px 8px 4px;
+  color: var(--dp-color-ink);
+}
+
+.sketch-annotation {
+  color: var(--dp-color-annotation);
+  font-family: var(--dp-typography-reading-face);
+}
+
+.sketch-correction {
+  color: var(--dp-color-accent);
+  font-family: var(--dp-typography-display-face);
+}
+
+.sketch-photo-mount {
+  position: relative;
+  background-color: var(--dp-color-scrap);
+  border: var(--dp-border-fine-stroke) solid var(--dp-color-ink);
+  border-radius: 8px 5px 12px 6px / 5px 10px 6px 9px;
+  padding: 10px;
+  box-shadow: 3px 4px 0px rgba(56, 53, 47, 0.22);
+}
+
+.sketch-tape {
+  position: absolute;
+  top: -10px;
+  left: 50%;
+  transform: translateX(-50%) rotate(-2deg);
+  width: 86px;
+  height: 22px;
+  background-color: rgba(240, 223, 160, 0.72);
+  border-left: 1.5px dashed rgba(56, 53, 47, 0.28);
+  border-right: 1.5px dashed rgba(56, 53, 47, 0.28);
+  border-top: 1px solid rgba(179, 172, 157, 0.5);
+  border-bottom: 1px solid rgba(179, 172, 157, 0.5);
+  pointer-events: none;
+  z-index: 10;
+}
+
+/* Irregular Outlined Buttons with Pencil or Red Hard Offset Shadow */
+body.sketch-sheet button {
+  border-radius: var(--dp-radius-control);
+  transition:
+    transform var(--dp-motion-control) ease,
+    box-shadow var(--dp-motion-control) ease,
+    background-color var(--dp-motion-control) ease;
+}
+
+body.sketch-sheet button:not(:disabled):hover {
+  transform: translate(-1px, -1px) rotate(-0.4deg);
+}
+
+body.sketch-sheet button:not(:disabled):active {
+  transform: translate(1px, 2px) rotate(0deg);
+  box-shadow: 0px 0px 0px var(--dp-color-ink) !important;
+}
+
+body.sketch-sheet input[type="text"],
+body.sketch-sheet input[type="email"],
+body.sketch-sheet input[type="password"],
+body.sketch-sheet input[type="number"],
+body.sketch-sheet input[type="date"],
+body.sketch-sheet select,
+body.sketch-sheet textarea {
+  background-color: var(--dp-color-scrap) !important;
+  color: var(--dp-color-ink) !important;
+  border: var(--dp-border-fine-stroke) solid var(--dp-color-ink) !important;
+  border-radius: var(--dp-radius-control) !important;
+  box-shadow: inset 1px 1px 0px rgba(56, 53, 47, 0.08);
+}
+
+/* ============================================================================
+   UNIFIED WORKING-SHEET SURFACE & INK REMAPPING (ZERO SPLIT-BRAIN CONTRAST)
+   ============================================================================ */
+
+body.sketch-sheet .bg-stone-950 {
+  background-color: var(--dp-color-ground) !important;
+}
+
+body.sketch-sheet .bg-stone-950\/90,
+body.sketch-sheet .bg-stone-950\/80,
+body.sketch-sheet .bg-stone-950\/60 {
+  background-color: #f2ebd9 !important;
+}
+
+body.sketch-sheet .bg-stone-900,
+body.sketch-sheet .bg-stone-900\/90,
+body.sketch-sheet .bg-stone-900\/80,
+body.sketch-sheet .bg-stone-900\/60,
+body.sketch-sheet .bg-stone-900\/50 {
+  background-color: var(--dp-color-scrap) !important;
+  box-shadow: 2px 3px 0px rgba(56, 53, 47, 0.14);
+}
+
+body.sketch-sheet .bg-stone-800,
+body.sketch-sheet .bg-stone-800\/40 {
+  background-color: #ebe3d0 !important;
+}
+
+body.sketch-sheet .text-stone-100,
+body.sketch-sheet .text-stone-200 {
+  color: var(--dp-color-ink) !important;
+}
+
+body.sketch-sheet .text-stone-300,
+body.sketch-sheet .text-stone-400,
+body.sketch-sheet .text-stone-500 {
+  color: var(--dp-color-ink-muted) !important;
+}
+
+body.sketch-sheet .border-stone-800,
+body.sketch-sheet .border-stone-800\/80,
+body.sketch-sheet .border-stone-800\/60,
+body.sketch-sheet .border-stone-700 {
+  border-color: var(--dp-color-line) !important;
+}
+
+body.sketch-sheet .divide-stone-800\/60 > :not([hidden]) ~ :not([hidden]) {
+  border-color: var(--dp-color-line) !important;
+}
+
+/* Primary Action Buttons -> Red Correction Ink (#9e3a2e) or Yellow Highlight (#f0dfa0) with Dark Pencil Ink */
+body.sketch-sheet .bg-amber-500,
+body.sketch-sheet .bg-emerald-500,
+body.sketch-sheet .bg-rose-500 {
+  background-color: var(--dp-color-accent) !important;
+  color: var(--dp-color-scrap) !important;
+  border: var(--dp-border-fine-stroke) solid var(--dp-color-ink) !important;
+  box-shadow: 2px 3px 0px var(--dp-color-ink) !important;
+}
+
+body.sketch-sheet .bg-amber-500:hover,
+body.sketch-sheet .bg-emerald-500:hover,
+body.sketch-sheet .bg-rose-500:hover {
+  background-color: #872f24 !important;
+}
+
+body.sketch-sheet .bg-teal-500,
+body.sketch-sheet .bg-teal-400 {
+  background-color: var(--dp-color-highlight) !important;
+  color: var(--dp-color-ink) !important;
+  border: var(--dp-border-fine-stroke) solid var(--dp-color-ink) !important;
+  box-shadow: 2px 3px 0px var(--dp-color-ink) !important;
+}
+
+/* Highlighted Tabs & Active Chips -> Pale Yellow Highlight (#f0dfa0) */
+body.sketch-sheet .bg-amber-500\/20,
+body.sketch-sheet .bg-amber-500\/15,
+body.sketch-sheet .bg-amber-500\/10,
+body.sketch-sheet .bg-amber-500\/5,
+body.sketch-sheet .bg-teal-500\/20,
+body.sketch-sheet .bg-teal-500\/10,
+body.sketch-sheet .bg-emerald-500\/15,
+body.sketch-sheet .bg-emerald-500\/10,
+body.sketch-sheet .bg-rose-500\/20,
+body.sketch-sheet .bg-rose-500\/15,
+body.sketch-sheet .bg-rose-500\/10 {
+  background-color: var(--dp-color-highlight) !important;
+  color: var(--dp-color-ink) !important;
+  border-color: var(--dp-color-ink) !important;
+}
+
+/* Ink Accent Text Colors -> Red Corrections (#9e3a2e) & Blue Notes (#344c69) */
+body.sketch-sheet .text-amber-300,
+body.sketch-sheet .text-amber-300\/90,
+body.sketch-sheet .text-amber-400,
+body.sketch-sheet .text-amber-200,
+body.sketch-sheet .text-rose-300,
+body.sketch-sheet .text-rose-300\/90,
+body.sketch-sheet .text-rose-400,
+body.sketch-sheet .text-rose-200 {
+  color: var(--dp-color-accent) !important;
+}
+
+body.sketch-sheet .text-teal-300,
+body.sketch-sheet .text-teal-400,
+body.sketch-sheet .text-teal-200,
+body.sketch-sheet .text-emerald-400,
+body.sketch-sheet .text-emerald-300,
+body.sketch-sheet .text-emerald-200 {
+  color: var(--dp-color-annotation) !important;
+}
+
+body.sketch-sheet .border-amber-500,
+body.sketch-sheet .border-amber-500\/60,
+body.sketch-sheet .border-amber-500\/50,
+body.sketch-sheet .border-amber-500\/40,
+body.sketch-sheet .border-amber-500\/30,
+body.sketch-sheet .border-rose-500\/50,
+body.sketch-sheet .border-rose-500\/40,
+body.sketch-sheet .border-rose-500\/30,
+body.sketch-sheet .border-rose-400 {
+  border-color: var(--dp-color-accent) !important;
+}
+
+body.sketch-sheet .border-teal-500\/50,
+body.sketch-sheet .border-teal-500\/40,
+body.sketch-sheet .border-teal-400,
+body.sketch-sheet .border-emerald-500\/50,
+body.sketch-sheet .border-emerald-500\/40 {
+  border-color: var(--dp-color-annotation) !important;
+}
+
+/* Reduced motion preference removes transforms and transitions */
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto !important;
+  }
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    transform: none !important;
+  }
+}
