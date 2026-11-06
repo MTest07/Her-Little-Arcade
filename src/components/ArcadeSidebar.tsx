@@ -19,9 +19,12 @@ import {
   X,
   Coins,
   ShieldCheck,
+  Sun,
+  Moon,
 } from 'lucide-react';
 import { PlayerProfile } from './AuthModal';
 import { EnrichedCouplePairing } from './CouplePairingPanel';
+import { ArcadeInlineSpinner } from './ArcadeLoader';
 import { soundFX } from '@/src/lib/sound';
 
 export type ArcadeNavSection =
@@ -50,59 +53,59 @@ export const SIDEBAR_NAV_ITEMS: SidebarNavItem[] = [
   {
     id: 'home',
     label: 'Home',
-    purpose: 'Main arcade dashboard',
+    purpose: 'Main arcade notebook',
     icon: Home,
   },
   {
     id: 'single',
     label: 'Single Player',
-    purpose: 'All 7 single-player games',
+    purpose: 'All 7 solo cozy games',
     icon: Gamepad2,
     badge: '7',
   },
   {
     id: 'multiplayer',
     label: 'Multiplayer',
-    purpose: '1v1, 2v2, rooms, matchmaking & invitations',
+    purpose: '1v1, 2v2, rooms & queue',
     icon: Users,
     badge: '14',
   },
   {
     id: 'couple-profile',
     label: 'Couple Profile',
-    purpose: 'Shared couple profile and statistics',
+    purpose: 'Shared couple keepsake & stats',
     icon: HeartHandshake,
   },
   {
     id: 'trophy-road',
     label: 'Trophy Road',
-    purpose: '2v2 trophy progression',
+    purpose: '2v2 couple milestones',
     icon: Crown,
     badge: '2v2',
   },
   {
     id: 'leaderboard',
     label: 'Leaderboard',
-    purpose: '2v2 couple rankings',
+    purpose: '2v2 couple standings',
     icon: Trophy,
     badge: '2v2',
   },
   {
     id: 'shop',
     label: 'Shop',
-    purpose: 'Coins, Rename Cards and cosmetics',
+    purpose: 'Coins, Rename Card & items',
     icon: ShoppingBag,
   },
   {
     id: 'achievements',
     label: 'Achievements',
-    purpose: 'Individual and couple achievements',
+    purpose: '21 games & custom studio',
     icon: Sparkles,
   },
   {
     id: 'settings',
     label: 'Settings',
-    purpose: 'Account and application preferences',
+    purpose: 'Audio & theme preferences',
     icon: Settings,
   },
 ];
@@ -135,6 +138,9 @@ interface ArcadeSidebarProps {
   activeSection: ArcadeNavSection;
   activeGameTitle: string | null;
   isCollapsed: boolean;
+  isLoadingData?: boolean;
+  isDarkTheme?: boolean;
+  onToggleDarkTheme?: () => void;
   onToggleCollapse: () => void;
   onSelectSection: (section: ArcadeNavSection) => void;
   onOpenAccountModal: () => void;
@@ -149,6 +155,9 @@ export function ArcadeSidebar({
   activeSection,
   activeGameTitle,
   isCollapsed,
+  isLoadingData = false,
+  isDarkTheme = false,
+  onToggleDarkTheme,
   onToggleCollapse,
   onSelectSection,
   onOpenAccountModal,
@@ -158,6 +167,8 @@ export function ArcadeSidebar({
   const [hoveredItem, setHoveredItem] = useState<ArcadeNavSection | null>(null);
 
   const desktopSidebarRef = useRef<HTMLElement | null>(null);
+  const brandBadgeRef = useRef<HTMLSpanElement | null>(null);
+  const collapseBtnRef = useRef<HTMLButtonElement | null>(null);
   const mobileDrawerRef = useRef<HTMLDivElement | null>(null);
   const mobileBackdropRef = useRef<HTMLDivElement | null>(null);
   const navListRef = useRef<HTMLDivElement | null>(null);
@@ -172,7 +183,7 @@ export function ArcadeSidebar({
       ? 'achievements'
       : activeSection;
 
-  // GSAP expand / collapse width animation for Desktop/Tablet sidebar
+  // GSAP expand / collapse width & label animation for Desktop/Tablet sidebar
   useEffect(() => {
     const el = desktopSidebarRef.current;
     if (!el) return;
@@ -181,7 +192,7 @@ export function ArcadeSidebar({
       typeof window !== 'undefined' &&
       window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
-    const targetWidth = isCollapsed ? 80 : 264;
+    const targetWidth = isCollapsed ? 82 : 268;
 
     if (prefersReducedMotion) {
       gsap.set(el, { width: targetWidth });
@@ -190,30 +201,58 @@ export function ArcadeSidebar({
 
     gsap.to(el, {
       width: targetWidth,
-      duration: 0.34,
+      duration: 0.36,
       ease: 'power3.inOut',
       overwrite: 'auto',
     });
+
+    if (collapseBtnRef.current) {
+      gsap.fromTo(
+        collapseBtnRef.current,
+        { scale: 0.88, rotation: isCollapsed ? -12 : 12 },
+        {
+          scale: 1,
+          rotation: 0,
+          duration: 0.32,
+          ease: 'back.out(1.8)',
+          overwrite: 'auto',
+        }
+      );
+    }
+
+    if (brandBadgeRef.current && !isCollapsed) {
+      gsap.fromTo(
+        brandBadgeRef.current,
+        { scale: 0.85, rotation: -8 },
+        {
+          scale: 1,
+          rotation: 0,
+          duration: 0.36,
+          ease: 'back.out(1.7)',
+          overwrite: 'auto',
+        }
+      );
+    }
 
     const textLabels = el.querySelectorAll('.sidebar-label-item');
     if (isCollapsed) {
       gsap.to(textLabels, {
         opacity: 0,
-        x: -8,
-        duration: 0.16,
+        x: -10,
+        duration: 0.15,
         ease: 'power2.in',
         overwrite: 'auto',
       });
     } else {
       gsap.fromTo(
         textLabels,
-        { opacity: 0, x: -8 },
+        { opacity: 0, x: -10 },
         {
           opacity: 1,
           x: 0,
-          duration: 0.26,
-          delay: 0.1,
-          stagger: 0.015,
+          duration: 0.28,
+          delay: 0.08,
+          stagger: 0.016,
           ease: 'power2.out',
           overwrite: 'auto',
         }
@@ -234,19 +273,19 @@ export function ArcadeSidebar({
     const buttons = navEl.querySelectorAll('.sidebar-nav-btn');
     gsap.fromTo(
       buttons,
-      { x: -14, opacity: 0 },
+      { x: -12, opacity: 0 },
       {
         x: 0,
         opacity: 1,
-        duration: 0.38,
-        stagger: 0.035,
+        duration: 0.36,
+        stagger: 0.032,
         ease: 'power3.out',
         clearProps: 'transform,opacity',
       }
     );
   }, []);
 
-  // GSAP animation for Mobile Slide-Out Drawer
+  // GSAP animation for Mobile Slide-Out Drawer open
   useEffect(() => {
     if (!mobileDrawerOpen) return;
     const drawer = mobileDrawerRef.current;
@@ -268,8 +307,22 @@ export function ArcadeSidebar({
     if (drawer) {
       gsap.fromTo(
         drawer,
-        { x: -290, opacity: 0.8 },
-        { x: 0, opacity: 1, duration: 0.32, ease: 'power3.out' }
+        { x: -300, opacity: 0.85 },
+        { x: 0, opacity: 1, duration: 0.34, ease: 'power3.out' }
+      );
+      const mobileItems = drawer.querySelectorAll('.mobile-nav-item');
+      gsap.fromTo(
+        mobileItems,
+        { x: -12, opacity: 0 },
+        {
+          x: 0,
+          opacity: 1,
+          duration: 0.28,
+          stagger: 0.025,
+          delay: 0.08,
+          ease: 'power2.out',
+          clearProps: 'transform,opacity',
+        }
       );
     }
   }, [mobileDrawerOpen]);
@@ -280,12 +333,22 @@ export function ArcadeSidebar({
       window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     if (prefersReducedMotion) return;
 
+    const iconEl = e.currentTarget.querySelector('.sidebar-nav-icon');
     gsap.to(e.currentTarget, {
       x: entering ? 3 : 0,
       duration: 0.18,
       ease: 'power2.out',
       overwrite: 'auto',
     });
+    if (iconEl) {
+      gsap.to(iconEl, {
+        scale: entering ? 1.12 : 1,
+        rotation: entering ? -6 : 0,
+        duration: 0.2,
+        ease: 'back.out(1.7)',
+        overwrite: 'auto',
+      });
+    }
   }
 
   function closeMobileDrawerWithAnimation(callback?: () => void) {
@@ -305,9 +368,9 @@ export function ArcadeSidebar({
       gsap.to(backdrop, { opacity: 0, duration: 0.18, ease: 'power2.in' });
     }
     gsap.to(drawer, {
-      x: -290,
-      opacity: 0.8,
-      duration: 0.22,
+      x: -300,
+      opacity: 0.85,
+      duration: 0.24,
       ease: 'power2.in',
       onComplete: () => {
         setMobileDrawerOpen(false);
@@ -319,9 +382,9 @@ export function ArcadeSidebar({
   return (
     <>
       {/* ====================================================================
-          MOBILE TOP BAR (< md): Menu Trigger + Brand + Avatar Pill
+          MOBILE TOP BAR (< md): Cozy Sketch Sheet Header
           ==================================================================== */}
-      <div className="sticky top-0 z-40 flex items-center justify-between border-b border-stone-800 bg-stone-950/95 px-4 py-3 backdrop-blur-md md:hidden">
+      <div className="arcade-sidebar-shell sticky top-0 z-40 flex items-center justify-between border-b border-[var(--dp-color-line)] px-4 py-2.5 md:hidden">
         <div className="flex items-center gap-2.5">
           <button
             type="button"
@@ -330,107 +393,159 @@ export function ArcadeSidebar({
               setMobileDrawerOpen(true);
             }}
             aria-label="Open navigation menu"
-            className="flex h-9 w-9 items-center justify-center rounded-xl border border-stone-800 bg-stone-900 text-stone-100"
+            className="flex h-9 w-9 items-center justify-center border border-[var(--dp-color-ink)] bg-[var(--dp-color-scrap)] text-[var(--dp-color-ink)] shadow-[2px_2px_0px_rgba(56,53,47,0.18)]"
           >
             <Menu className="h-4 w-4" />
           </button>
+
           <button
             type="button"
             onClick={() => onSelectSection('home')}
-            className="text-base font-bold tracking-tight text-amber-300"
+            className="flex items-center gap-1.5 text-left"
           >
-            Her Little Arcade
+            <span className="text-base font-bold tracking-tight text-[var(--dp-color-ink)]">
+              Her Little Arcade
+            </span>
+            {isLoadingData && (
+              <ArcadeInlineSpinner size={14} className="text-[var(--dp-color-accent)]" />
+            )}
           </button>
         </div>
 
-        <button
-          type="button"
-          onClick={() => onSelectSection('couple-profile')}
-          className="flex items-center gap-2 rounded-xl border border-stone-800 bg-stone-900 px-2.5 py-1.5 text-xs font-semibold text-stone-100"
-        >
-          <span>{getAvatarEmoji(currentUser.avatar)}</span>
-          <span className="max-w-[100px] truncate">{currentUser.username}</span>
-          <span className="font-mono text-[11px] text-amber-300">Lv.{levelMetrics.level}</span>
-        </button>
+        <div className="flex items-center gap-2">
+          {onToggleDarkTheme && (
+            <button
+              type="button"
+              onClick={onToggleDarkTheme}
+              aria-label={isDarkTheme ? 'Switch to warm light paper' : 'Switch to cozy night paper'}
+              className="flex h-8 w-8 items-center justify-center border border-[var(--dp-color-line)] bg-[var(--dp-color-ground)] text-[var(--dp-color-ink)]"
+            >
+              {isDarkTheme ? <Sun className="h-3.5 w-3.5" /> : <Moon className="h-3.5 w-3.5" />}
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() => onSelectSection('couple-profile')}
+            className="flex items-center gap-1.5 border border-[var(--dp-color-ink)] bg-[var(--dp-color-highlight)] px-2.5 py-1 text-xs font-bold text-[var(--dp-color-ink)]"
+          >
+            <span>{getAvatarEmoji(currentUser.avatar)}</span>
+            <span className="max-w-[92px] truncate">{currentUser.username}</span>
+            <span className="font-mono text-[11px] text-[var(--dp-color-accent)]">
+              Lv.{levelMetrics.level}
+            </span>
+          </button>
+        </div>
       </div>
 
       {/* ====================================================================
-          MOBILE SLIDE-OUT DRAWER (< md)
+          MOBILE SLIDE-OUT DRAWER (< md) — Cozy Unboxed Sketchbook Margin
           ==================================================================== */}
       {mobileDrawerOpen && (
-        <div className="fixed inset-0 z-50 flex md:hidden" role="dialog" aria-modal="true" aria-label="Arcade Navigation Drawer">
+        <div
+          className="fixed inset-0 z-50 flex md:hidden"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Arcade Navigation Drawer"
+        >
           <div
             ref={mobileBackdropRef}
             onClick={() => closeMobileDrawerWithAnimation()}
-            className="fixed inset-0 bg-stone-950/70 backdrop-blur-xs"
+            className="fixed inset-0 bg-[#38352f]/45 backdrop-blur-[2px]"
           />
 
           <div
             ref={mobileDrawerRef}
-            className="relative z-10 flex h-full w-72 max-w-[85vw] flex-col justify-between border-r border-stone-800 bg-stone-900 p-4 shadow-2xl"
+            className="arcade-sidebar-shell relative z-10 flex h-full w-72 max-w-[86vw] flex-col justify-between p-4 shadow-2xl"
           >
             <div className="space-y-4 overflow-y-auto pr-1">
-              {/* Drawer Header */}
-              <div className="flex items-center justify-between border-b border-stone-800 pb-3">
-                <div>
-                  <span className="text-base font-bold tracking-tight text-amber-300">
-                    Her Little Arcade
+              {/* Drawer Brand Header */}
+              <div className="flex items-center justify-between border-b border-dashed border-[var(--dp-color-line)] pb-3">
+                <div className="flex items-center gap-2.5">
+                  <span className="flex h-9 w-9 shrink-0 items-center justify-center border-[1.5px] border-[var(--dp-color-ink)] bg-[var(--dp-color-highlight)] text-base shadow-[2px_2px_0px_var(--dp-color-accent)]">
+                    🐰
                   </span>
-                  <p className="text-[11px] text-stone-400">Cozy Couple &amp; Solo Gaming Hub</p>
+                  <div>
+                    <span className="block text-base font-bold tracking-tight text-[var(--dp-color-ink)]">
+                      Her Little Arcade
+                    </span>
+                    <span className="sketch-annotation block text-xs">
+                      Cozy Sketchbook Hub
+                    </span>
+                  </div>
                 </div>
                 <button
                   type="button"
                   onClick={() => closeMobileDrawerWithAnimation()}
                   aria-label="Close navigation menu"
-                  className="flex h-8 w-8 items-center justify-center rounded-lg border border-stone-800 bg-stone-950 text-stone-300"
+                  className="flex h-8 w-8 items-center justify-center border border-[var(--dp-color-line)] bg-[var(--dp-color-ground)] text-[var(--dp-color-ink)]"
                 >
                   <X className="h-4 w-4" />
                 </button>
               </div>
 
-              {/* Mobile User Profile Summary */}
-              <div className="rounded-2xl border border-stone-800 bg-stone-950 p-3">
+              {/* Clean Unboxed Mobile Player & Partner Summary */}
+              <div className="border-b border-dashed border-[var(--dp-color-line)] pb-3.5">
                 <div className="flex items-center gap-3">
                   <button
                     type="button"
                     onClick={() =>
                       closeMobileDrawerWithAnimation(() => onSelectSection('couple-profile'))
                     }
-                    className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-amber-500/40 bg-stone-900 text-lg"
+                    className="flex h-11 w-11 shrink-0 items-center justify-center border-[1.5px] border-[var(--dp-color-ink)] bg-[var(--dp-color-ground)] text-xl shadow-[2px_2px_0px_rgba(56,53,47,0.16)]"
                   >
                     {getAvatarEmoji(currentUser.avatar)}
                   </button>
                   <div className="min-w-0 flex-1">
-                    <div className="truncate text-sm font-bold text-stone-100">
-                      {currentUser.username}
+                    <div className="flex items-center justify-between gap-1">
+                      <span className="truncate text-sm font-bold text-[var(--dp-color-ink)]">
+                        {currentUser.username}
+                      </span>
+                      <span className="font-mono text-xs font-bold text-[var(--dp-color-accent)] tabular-nums">
+                        Lv.{levelMetrics.level}
+                      </span>
                     </div>
-                    <div className="font-mono text-[11px] text-amber-300 tabular-nums">
-                      Lv.{levelMetrics.level} · {currentUser.xp} XP · {currentUser.coins} Coins
+                    <div className="font-mono text-[11px] text-[var(--dp-color-ink-muted)] tabular-nums">
+                      {currentUser.coins} Coins · {currentUser.xp} XP
+                    </div>
+                    <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full border border-[var(--dp-color-line)] bg-[var(--dp-color-ground)]">
+                      <div
+                        className="h-full origin-left bg-[var(--dp-color-accent)] transition-transform duration-300"
+                        style={{ transform: `scaleX(${levelMetrics.progressPercent / 100})` }}
+                      />
                     </div>
                   </div>
                 </div>
-                {activeCouple && pairedPartnerUsername ? (
-                  <div className="mt-2 flex items-center justify-between text-[11px] text-rose-300">
-                    <span className="truncate font-semibold">
-                      ♥ Paired with @{pairedPartnerUsername}
-                    </span>
-                    <span className="font-mono">🏆 {activeCouple.coupleTrophies ?? 0}</span>
-                  </div>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={() =>
-                      closeMobileDrawerWithAnimation(() => onSelectSection('couple-profile'))
-                    }
-                    className="mt-2 flex items-center gap-1 text-[11px] font-semibold text-amber-300 hover:underline"
-                  >
-                    <HeartHandshake className="h-3 w-3" />
-                    <span>Pair with Partner</span>
-                  </button>
-                )}
+
+                <div className="mt-2.5 text-xs">
+                  {activeCouple && pairedPartnerUsername ? (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        closeMobileDrawerWithAnimation(() => onSelectSection('couple-profile'))
+                      }
+                      className="flex w-full items-center justify-between font-semibold text-[var(--dp-color-accent)] hover:underline"
+                    >
+                      <span className="truncate">♥ Paired with @{pairedPartnerUsername}</span>
+                      <span className="font-mono text-[11px] text-[var(--dp-color-annotation)] tabular-nums">
+                        🏆 {activeCouple.coupleTrophies ?? 0}
+                      </span>
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        closeMobileDrawerWithAnimation(() => onSelectSection('couple-profile'))
+                      }
+                      className="flex items-center gap-1.5 font-semibold text-[var(--dp-color-annotation)] hover:underline"
+                    >
+                      <HeartHandshake className="h-3.5 w-3.5" />
+                      <span>Pair with Partner</span>
+                    </button>
+                  )}
+                </div>
               </div>
 
-              {/* Mobile Navigation List */}
+              {/* Mobile Navigation List (Clean Unboxed Marker Rows) */}
               <nav aria-label="Mobile Arcade Navigation" className="space-y-1">
                 {SIDEBAR_NAV_ITEMS.map((item) => {
                   const Icon = item.icon;
@@ -443,27 +558,27 @@ export function ArcadeSidebar({
                         soundFX.playMove();
                         closeMobileDrawerWithAnimation(() => onSelectSection(item.id));
                       }}
-                      className={`flex w-full items-center justify-between rounded-xl px-3 py-2.5 text-left text-xs font-semibold transition-colors ${
-                        isActive
-                          ? 'bg-amber-500 text-stone-950 font-bold'
-                          : 'text-stone-300 hover:bg-stone-950 hover:text-stone-100'
+                      className={`mobile-nav-item arcade-sidebar-nav-item flex w-full items-center justify-between px-3 py-2 text-left text-xs font-semibold ${
+                        isActive ? 'arcade-sidebar-nav-item-active font-bold' : ''
                       }`}
                     >
-                      <div className="flex items-center gap-3">
-                        <Icon className="h-4 w-4 shrink-0" />
-                        <div>
-                          <div>{item.label}</div>
-                          <div
-                            className={`text-[10px] font-normal ${
-                              isActive ? 'text-stone-900' : 'text-stone-400'
-                            }`}
-                          >
+                      <div className="flex items-center gap-3 min-w-0">
+                        <Icon
+                          className={`h-4 w-4 shrink-0 ${
+                            isActive
+                              ? 'text-[var(--dp-color-accent)]'
+                              : 'text-[var(--dp-color-ink-muted)]'
+                          }`}
+                        />
+                        <div className="min-w-0">
+                          <div className="truncate text-[var(--dp-color-ink)]">{item.label}</div>
+                          <div className="truncate text-[11px] font-normal text-[var(--dp-color-ink-muted)]">
                             {item.purpose}
                           </div>
                         </div>
                       </div>
                       {item.badge && (
-                        <span className="font-mono text-[10px] font-bold opacity-80">
+                        <span className="font-mono text-[11px] font-bold text-[var(--dp-color-annotation)] tabular-nums">
                           {item.badge}
                         </span>
                       )}
@@ -473,16 +588,30 @@ export function ArcadeSidebar({
               </nav>
             </div>
 
-            {/* Mobile Drawer Footer: Account & Logout */}
-            <div className="space-y-2 border-t border-stone-800 pt-3">
+            {/* Mobile Drawer Footer: Unboxed Clean Notebook Actions */}
+            <div className="space-y-1.5 border-t border-dashed border-[var(--dp-color-line)] pt-3">
+              {onToggleDarkTheme && (
+                <button
+                  type="button"
+                  onClick={onToggleDarkTheme}
+                  className="arcade-sidebar-nav-item flex w-full items-center gap-2.5 px-3 py-1.5 text-xs font-semibold text-[var(--dp-color-ink)]"
+                >
+                  {isDarkTheme ? (
+                    <Sun className="h-4 w-4 text-[var(--dp-color-accent)]" />
+                  ) : (
+                    <Moon className="h-4 w-4 text-[var(--dp-color-annotation)]" />
+                  )}
+                  <span>{isDarkTheme ? 'Warm Day Sketchbook' : 'Cozy Night Sketchbook'}</span>
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => {
                   closeMobileDrawerWithAnimation(() => onOpenAccountModal());
                 }}
-                className="flex w-full items-center gap-2 rounded-xl border border-stone-800 bg-stone-950 px-3 py-2 text-xs font-semibold text-stone-200"
+                className="arcade-sidebar-nav-item flex w-full items-center gap-2.5 px-3 py-1.5 text-xs font-semibold text-[var(--dp-color-ink)]"
               >
-                <ShieldCheck className="h-4 w-4 text-teal-400" />
+                <ShieldCheck className="h-4 w-4 text-[var(--dp-color-annotation)]" />
                 <span>Account &amp; Rename Card</span>
               </button>
               <button
@@ -490,7 +619,7 @@ export function ArcadeSidebar({
                 onClick={() => {
                   closeMobileDrawerWithAnimation(() => onLogout());
                 }}
-                className="flex w-full items-center gap-2 rounded-xl border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs font-bold text-rose-300"
+                className="arcade-sidebar-nav-item flex w-full items-center gap-2.5 px-3 py-1.5 text-xs font-bold text-[var(--dp-color-accent)]"
               >
                 <LogOut className="h-4 w-4" />
                 <span>Log Out</span>
@@ -502,68 +631,98 @@ export function ArcadeSidebar({
 
       {/* ====================================================================
           DESKTOP & TABLET PERSISTENT COLLAPSIBLE SIDEBAR (md and up)
+          Cozy Sketchbook Margin — Clean & Unboxed
           ==================================================================== */}
       <aside
         ref={desktopSidebarRef}
         aria-label="Main Arcade Sidebar"
-        style={{ width: isCollapsed ? 80 : 264 }}
-        className="sticky top-0 z-30 hidden h-screen shrink-0 flex-col justify-between border-r border-stone-800 bg-stone-900/95 p-3 backdrop-blur-md md:flex"
+        style={{ width: isCollapsed ? 82 : 268 }}
+        className="arcade-sidebar-shell sticky top-0 z-30 hidden h-screen shrink-0 flex-col justify-between px-3.5 py-4 md:flex"
       >
-        <div className="flex min-h-0 flex-1 flex-col gap-3">
-          {/* Brand Header & Collapse Toggle */}
-          <div
-            className={`flex items-center ${
-              isCollapsed ? 'justify-center' : 'justify-between'
-            } border-b border-stone-800 pb-3`}
-          >
-            {!isCollapsed && (
-              <button
-                type="button"
-                onClick={() => onSelectSection('home')}
-                className="sidebar-label-item flex items-center gap-2 text-left"
-              >
-                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-amber-500 text-sm font-bold text-stone-950">
-                  ♥
-                </span>
-                <div className="min-w-0">
-                  <div className="truncate text-sm font-bold tracking-tight text-stone-100">
-                    Her Little Arcade
-                  </div>
-                  <div className="truncate text-[10px] text-stone-400">
-                    Solo &amp; Couple Gaming Hub
-                  </div>
-                </div>
-              </button>
-            )}
-
-            <button
-              type="button"
-              onClick={() => {
-                soundFX.playMove();
-                onToggleCollapse();
-              }}
-              aria-label={isCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-              title={isCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-stone-800 bg-stone-950 text-stone-300 transition-colors hover:border-amber-500/60 hover:text-amber-300"
+        <div className="flex min-h-0 flex-1 flex-col gap-3.5">
+          {/* 1. Brand Header + Hand-Drawn Red Wave & Collapse Toggle */}
+          <div className="border-b border-dashed border-[var(--dp-color-line)] pb-3">
+            <div
+              className={`flex items-center ${
+                isCollapsed ? 'justify-center' : 'justify-between gap-2'
+              }`}
             >
-              {isCollapsed ? (
-                <PanelLeftOpen className="h-4 w-4" />
-              ) : (
-                <PanelLeftClose className="h-4 w-4" />
+              {!isCollapsed && (
+                <button
+                  type="button"
+                  onClick={() => onSelectSection('home')}
+                  className="sidebar-label-item group flex min-w-0 items-center gap-2.5 text-left"
+                >
+                  <span
+                    ref={brandBadgeRef}
+                    className="flex h-9 w-9 shrink-0 items-center justify-center border-[1.5px] border-[var(--dp-color-ink)] bg-[var(--dp-color-highlight)] text-base shadow-[2px_2px_0px_var(--dp-color-accent)]"
+                  >
+                    🐰
+                  </span>
+                  <div className="min-w-0">
+                    <div className="truncate font-display text-base font-bold tracking-tight text-[var(--dp-color-ink)]">
+                      Her Little Arcade
+                    </div>
+                    <div className="sketch-annotation flex items-center gap-1.5 truncate text-xs">
+                      <span>Solo &amp; Couple Notebook</span>
+                      {isLoadingData && (
+                        <ArcadeInlineSpinner
+                          size={12}
+                          className="text-[var(--dp-color-accent)]"
+                        />
+                      )}
+                    </div>
+                  </div>
+                </button>
               )}
-            </button>
+
+              <button
+                ref={collapseBtnRef}
+                type="button"
+                onClick={() => {
+                  soundFX.playMove();
+                  onToggleCollapse();
+                }}
+                aria-label={isCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+                title={isCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+                className="flex h-8 w-8 shrink-0 items-center justify-center border-[1.5px] border-[var(--dp-color-line)] bg-[var(--dp-color-ground)] text-[var(--dp-color-ink)] transition-colors hover:border-[var(--dp-color-ink)] hover:bg-[var(--dp-color-highlight)]"
+              >
+                {isCollapsed ? (
+                  <PanelLeftOpen className="h-4 w-4" />
+                ) : (
+                  <PanelLeftClose className="h-4 w-4" />
+                )}
+              </button>
+            </div>
+
+            {/* Subtle hand-drawn red sketch underline under brand */}
+            {!isCollapsed && (
+              <svg
+                aria-hidden="true"
+                viewBox="0 0 220 8"
+                className="sidebar-label-item mt-1.5 h-2 w-44 text-[var(--dp-color-accent)] opacity-75"
+                fill="none"
+              >
+                <path
+                  d="M2 5.5 C62 1.5, 148 7.5, 216 3"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                />
+              </svg>
+            )}
           </div>
 
-          {/* Player Avatar & Couple Status Card */}
-          <div className="rounded-2xl border border-stone-800 bg-stone-950 p-2.5">
+          {/* 2. Unboxed Player Identity & Partner Status Note */}
+          <div className="border-b border-dashed border-[var(--dp-color-line)] pb-3.5">
             <div className={`flex items-center ${isCollapsed ? 'justify-center' : 'gap-2.5'}`}>
               <button
                 type="button"
                 onClick={() => onSelectSection('couple-profile')}
                 title={`${currentUser.username} · Lv.${levelMetrics.level} (${currentUser.coins} Coins)`}
-                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-amber-500/40 bg-stone-900 text-lg transition-transform hover:scale-105"
+                className="relative flex h-10 w-10 shrink-0 items-center justify-center border-[1.5px] border-[var(--dp-color-ink)] bg-[var(--dp-color-ground)] text-lg shadow-[2px_2px_0px_rgba(56,53,47,0.16)] transition-transform hover:scale-105"
               >
-                {getAvatarEmoji(currentUser.avatar)}
+                <span>{getAvatarEmoji(currentUser.avatar)}</span>
               </button>
 
               {!isCollapsed && (
@@ -572,28 +731,28 @@ export function ArcadeSidebar({
                     <button
                       type="button"
                       onClick={() => onSelectSection('couple-profile')}
-                      className="truncate text-xs font-bold text-stone-100 hover:underline"
+                      className="truncate text-sm font-bold text-[var(--dp-color-ink)] hover:underline"
                     >
                       {currentUser.username}
                     </button>
-                    <span className="font-mono text-[10px] font-bold text-amber-300 tabular-nums">
+                    <span className="font-mono text-[11px] font-bold text-[var(--dp-color-accent)] tabular-nums">
                       Lv.{levelMetrics.level}
                     </span>
                   </div>
 
-                  <div className="mt-0.5 flex items-center gap-2 font-mono text-[10px] text-stone-400 tabular-nums">
-                    <span className="inline-flex items-center gap-1 text-teal-300">
+                  <div className="flex items-center gap-1.5 font-mono text-[11px] text-[var(--dp-color-ink-muted)] tabular-nums">
+                    <span className="inline-flex items-center gap-1 font-semibold text-[var(--dp-color-annotation)]">
                       <Coins className="h-3 w-3" />
                       {currentUser.coins}
                     </span>
-                    <span>·</span>
+                    <span aria-hidden="true">·</span>
                     <span>{currentUser.xp} XP</span>
                   </div>
 
-                  {/* Level XP Mini Bar */}
-                  <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-stone-900">
+                  {/* Hand-sketched XP progress track */}
+                  <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full border border-[var(--dp-color-line)] bg-[var(--dp-color-ground)]">
                     <div
-                      className="h-full origin-left bg-amber-400 transition-transform duration-300"
+                      className="h-full origin-left bg-[var(--dp-color-accent)] transition-transform duration-300"
                       style={{ transform: `scaleX(${levelMetrics.progressPercent / 100})` }}
                     />
                   </div>
@@ -602,17 +761,15 @@ export function ArcadeSidebar({
             </div>
 
             {!isCollapsed && (
-              <div className="sidebar-label-item mt-2 flex items-center justify-between pt-1.5 text-[11px]">
+              <div className="sidebar-label-item mt-2.5 flex items-center justify-between text-xs">
                 {activeCouple && pairedPartnerUsername ? (
                   <button
                     type="button"
                     onClick={() => onSelectSection('couple-profile')}
-                    className="flex w-full items-center justify-between text-left text-rose-300 hover:underline"
+                    className="flex w-full items-center justify-between text-left font-semibold text-[var(--dp-color-accent)] hover:underline"
                   >
-                    <span className="truncate font-semibold">
-                      ♥ @{pairedPartnerUsername}
-                    </span>
-                    <span className="font-mono text-[10px] font-bold text-amber-300 tabular-nums">
+                    <span className="truncate">♥ @{pairedPartnerUsername}</span>
+                    <span className="font-mono text-[11px] font-bold text-[var(--dp-color-annotation)] tabular-nums">
                       🏆 {activeCouple.coupleTrophies ?? 0}
                     </span>
                   </button>
@@ -620,9 +777,9 @@ export function ArcadeSidebar({
                   <button
                     type="button"
                     onClick={() => onSelectSection('couple-profile')}
-                    className="flex w-full items-center gap-1.5 font-semibold text-amber-300 hover:underline"
+                    className="flex w-full items-center gap-1.5 font-semibold text-[var(--dp-color-annotation)] hover:underline"
                   >
-                    <HeartHandshake className="h-3.5 w-3.5 shrink-0" />
+                    <HeartHandshake className="h-3.5 w-3.5 shrink-0 text-[var(--dp-color-accent)]" />
                     <span className="truncate">Pair with Partner</span>
                   </button>
                 )}
@@ -630,7 +787,7 @@ export function ArcadeSidebar({
             )}
           </div>
 
-          {/* Primary Navigation Items */}
+          {/* 3. Primary Navigation Items (Playful Sketchbook Marker Highlight) */}
           <nav
             ref={navListRef}
             aria-label="Primary Sidebar Navigation"
@@ -659,40 +816,62 @@ export function ArcadeSidebar({
                     }}
                     aria-current={isActive ? 'page' : undefined}
                     title={isCollapsed ? `${item.label} — ${item.purpose}` : item.purpose}
-                    className={`sidebar-nav-btn group relative flex w-full items-center ${
-                      isCollapsed ? 'justify-center px-2 py-2.5' : 'justify-between px-3 py-2.5'
-                    } rounded-xl text-left text-xs font-semibold transition-colors ${
-                      isActive
-                        ? 'bg-amber-500 text-stone-950 font-bold shadow-xs'
-                        : 'text-stone-300 hover:bg-stone-950 hover:text-stone-100'
+                    className={`sidebar-nav-btn arcade-sidebar-nav-item group relative flex w-full items-center ${
+                      isCollapsed ? 'justify-center px-2 py-2.5' : 'justify-between px-3 py-2'
+                    } text-left text-xs font-semibold ${
+                      isActive ? 'arcade-sidebar-nav-item-active font-bold' : ''
                     }`}
                   >
-                    <div className="flex items-center gap-3 min-w-0">
-                      <Icon className="h-4 w-4 shrink-0" />
+                    <div className="flex min-w-0 items-center gap-2.5">
+                      <Icon
+                        className={`sidebar-nav-icon h-4 w-4 shrink-0 transition-colors ${
+                          isActive
+                            ? 'text-[var(--dp-color-accent)]'
+                            : 'text-[var(--dp-color-ink-muted)] group-hover:text-[var(--dp-color-ink)]'
+                        }`}
+                      />
                       {!isCollapsed && (
-                        <span className="sidebar-label-item truncate">{item.label}</span>
+                        <span className="sidebar-label-item truncate text-sm">
+                          {item.label}
+                        </span>
                       )}
                     </div>
 
-                    {!isCollapsed && item.badge && (
-                      <span
-                        className={`sidebar-label-item font-mono text-[10px] font-bold tabular-nums ${
-                          isActive ? 'text-stone-950' : 'text-amber-300'
-                        }`}
-                      >
-                        {item.badge}
-                      </span>
+                    {!isCollapsed && (
+                      <div className="sidebar-label-item flex items-center gap-1.5">
+                        {item.badge && (
+                          <span
+                            className={`font-mono text-[11px] font-bold tabular-nums ${
+                              isActive
+                                ? 'text-[var(--dp-color-accent)]'
+                                : 'text-[var(--dp-color-annotation)]'
+                            }`}
+                          >
+                            {item.badge}
+                          </span>
+                        )}
+                        {isActive && (
+                          <span
+                            aria-hidden="true"
+                            className="text-xs font-bold text-[var(--dp-color-accent)]"
+                          >
+                            ✦
+                          </span>
+                        )}
+                      </div>
                     )}
                   </button>
 
-                  {/* Floating Tooltip when Sidebar is Collapsed */}
+                  {/* Floating Sketchbook Note Tooltip when Sidebar is Collapsed */}
                   {isCollapsed && isHovered && (
                     <div
                       role="tooltip"
-                      className="pointer-events-none fixed left-20 z-50 ml-2 w-48 rounded-xl border border-stone-800 bg-stone-900 px-3 py-2 text-xs shadow-xl"
+                      className="sketch-scrap pointer-events-none fixed left-20 z-50 ml-2 w-48 px-3 py-2 text-xs"
                     >
-                      <div className="font-bold text-stone-100">{item.label}</div>
-                      <div className="mt-0.5 text-[11px] text-stone-400">{item.purpose}</div>
+                      <div className="font-bold text-[var(--dp-color-ink)]">{item.label}</div>
+                      <div className="mt-0.5 text-[11px] text-[var(--dp-color-ink-muted)]">
+                        {item.purpose}
+                      </div>
                     </div>
                   )}
                 </div>
@@ -701,27 +880,58 @@ export function ArcadeSidebar({
           </nav>
         </div>
 
-        {/* Bottom Actions: Account Security & Clear Logout Button */}
-        <div className="space-y-1.5 border-t border-stone-800 pt-3">
+        {/* 4. Unboxed Footer Controls: Theme Toggle, Account & Clear Logout */}
+        <div className="space-y-1 border-t border-dashed border-[var(--dp-color-line)] pt-3">
+          {onToggleDarkTheme && (
+            <button
+              type="button"
+              onClick={() => {
+                soundFX.playMove();
+                onToggleDarkTheme();
+              }}
+              title={
+                isDarkTheme
+                  ? 'Switch to Warm Day Sketchbook'
+                  : 'Switch to Cozy Night Sketchbook'
+              }
+              className={`arcade-sidebar-nav-item flex w-full items-center ${
+                isCollapsed ? 'justify-center px-2' : 'gap-2.5 px-3'
+              } py-1.5 text-xs font-semibold text-[var(--dp-color-ink)]`}
+            >
+              {isDarkTheme ? (
+                <Sun className="h-4 w-4 shrink-0 text-[var(--dp-color-accent)]" />
+              ) : (
+                <Moon className="h-4 w-4 shrink-0 text-[var(--dp-color-annotation)]" />
+              )}
+              {!isCollapsed && (
+                <span className="sidebar-label-item truncate">
+                  {isDarkTheme ? 'Warm Day Sheet' : 'Cozy Night Sheet'}
+                </span>
+              )}
+            </button>
+          )}
+
           <button
             type="button"
             onClick={onOpenAccountModal}
             title="Account Security, Email Verification & Rename Card"
-            className={`flex w-full items-center ${
+            className={`arcade-sidebar-nav-item flex w-full items-center ${
               isCollapsed ? 'justify-center px-2' : 'gap-2.5 px-3'
-            } rounded-xl border border-stone-800 bg-stone-950 py-2 text-xs font-semibold text-stone-300 transition-colors hover:border-amber-500/50 hover:text-stone-100`}
+            } py-1.5 text-xs font-semibold text-[var(--dp-color-ink)]`}
           >
-            <ShieldCheck className="h-4 w-4 shrink-0 text-teal-400" />
-            {!isCollapsed && <span className="sidebar-label-item truncate">Account &amp; Rename</span>}
+            <ShieldCheck className="h-4 w-4 shrink-0 text-[var(--dp-color-annotation)]" />
+            {!isCollapsed && (
+              <span className="sidebar-label-item truncate">Account &amp; Rename</span>
+            )}
           </button>
 
           <button
             type="button"
             onClick={onLogout}
             title="Log out of your account"
-            className={`flex w-full items-center ${
+            className={`arcade-sidebar-nav-item flex w-full items-center ${
               isCollapsed ? 'justify-center px-2' : 'gap-2.5 px-3'
-            } rounded-xl border border-rose-500/40 bg-rose-500/10 py-2 text-xs font-bold text-rose-300 transition-colors hover:bg-rose-500/20`}
+            } py-1.5 text-xs font-bold text-[var(--dp-color-accent)]`}
           >
             <LogOut className="h-4 w-4 shrink-0" />
             {!isCollapsed && <span className="sidebar-label-item truncate">Log Out</span>}

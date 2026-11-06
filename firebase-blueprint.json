@@ -1,0 +1,402 @@
+{
+  "entities": {
+    "UserPublic": {
+      "title": "UserPublic",
+      "description": "Public arcade profile for a registered player (PII isolated in private subcollection).",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "description": "Unique player UID matching request.auth.uid.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "username": {
+          "type": "string",
+          "description": "Unique arcade username chosen by the player.",
+          "minLength": 0,
+          "maxLength": 20,
+          "pattern": "^[a-zA-Z0-9_\\-]*$"
+        },
+        "usernameSetupCompleted": {
+          "type": "boolean",
+          "description": "Whether initial username onboarding is complete."
+        },
+        "renameCards": {
+          "type": "integer",
+          "description": "Owned 10,000-coin Official Rename Cards."
+        },
+        "avatar": {
+          "type": "string",
+          "description": "Equipped avatar identifier.",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "xp": {
+          "type": "integer",
+          "description": "Total experience points earned."
+        },
+        "level": {
+          "type": "integer",
+          "description": "Calculated player level."
+        },
+        "coins": {
+          "type": "integer",
+          "description": "Arcade coin balance (earned exclusively in 2v2 matches)."
+        },
+        "streak": {
+          "type": "integer",
+          "description": "Daily play streak count."
+        },
+        "wins": {
+          "type": "integer",
+          "description": "Total personal wins."
+        },
+        "losses": {
+          "type": "integer",
+          "description": "Total personal losses."
+        },
+        "draws": {
+          "type": "integer",
+          "description": "Total personal draws."
+        },
+        "theme": {
+          "type": "string",
+          "description": "Equipped arcade theme.",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "presenceStatus": {
+          "type": "string",
+          "description": "Current online presence state.",
+          "enum": ["online", "in_queue", "in_match", "offline"],
+          "maxLength": 32
+        },
+        "activeRoomCode": {
+          "type": "string",
+          "description": "Currently active multiplayer room code.",
+          "maxLength": 16
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Immutable creation timestamp."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Last update timestamp."
+        }
+      },
+      "required": [
+        "uid",
+        "username",
+        "usernameSetupCompleted",
+        "avatar",
+        "xp",
+        "level",
+        "coins",
+        "wins",
+        "losses",
+        "draws",
+        "theme",
+        "presenceStatus",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "UserPrivate": {
+      "title": "UserPrivate",
+      "description": "Strictly owner-isolated private PII document for a user.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "description": "Owner UID matching parent userId and request.auth.uid.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "description": "Verified player email address.",
+          "minLength": 3,
+          "maxLength": 254
+        },
+        "emailVerified": {
+          "type": "boolean",
+          "description": "Whether the email address is verified."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Immutable creation timestamp."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Last update timestamp."
+        }
+      },
+      "required": ["uid", "email", "emailVerified", "createdAt", "updatedAt"]
+    },
+    "CouplePairing": {
+      "title": "CouplePairing",
+      "description": "Two-step mutual couple account pairing and shared 2v2 Couple Trophy profile.",
+      "type": "object",
+      "properties": {
+        "pairingCode": {
+          "type": "string",
+          "description": "6-character uppercase pairing invite code.",
+          "minLength": 6,
+          "maxLength": 12,
+          "pattern": "^[A-Z0-9_\\-]+$"
+        },
+        "requesterUid": {
+          "type": "string",
+          "description": "UID of the partner who initiated the pairing.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "partnerUid": {
+          "type": "string",
+          "description": "UID of the invited partner.",
+          "maxLength": 128
+        },
+        "status": {
+          "type": "string",
+          "description": "Lifecycle state of the couple pairing.",
+          "enum": ["pending_partner", "pending_requester_confirm", "active", "unpaired"],
+          "maxLength": 32
+        },
+        "coupleName": {
+          "type": "string",
+          "description": "Shared couple display name.",
+          "maxLength": 80
+        },
+        "coupleTitle": {
+          "type": "string",
+          "description": "Unlocked 2v2 Trophy Road title.",
+          "maxLength": 64
+        },
+        "coupleBanner": {
+          "type": "string",
+          "description": "Equipped couple banner.",
+          "maxLength": 64
+        },
+        "coupleTrophies": {
+          "type": "integer",
+          "description": "Current 2v2 Couple Trophies."
+        },
+        "highestTrophies": {
+          "type": "integer",
+          "description": "All-time peak 2v2 Couple Trophies."
+        },
+        "coupleWins": {
+          "type": "integer",
+          "description": "Total 2v2 couple wins."
+        },
+        "coupleLosses": {
+          "type": "integer",
+          "description": "Total 2v2 couple losses."
+        },
+        "coupleDraws": {
+          "type": "integer",
+          "description": "Total 2v2 couple draws."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Immutable creation timestamp."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Last update timestamp."
+        }
+      },
+      "required": [
+        "pairingCode",
+        "requesterUid",
+        "partnerUid",
+        "status",
+        "coupleName",
+        "coupleTitle",
+        "coupleBanner",
+        "coupleTrophies",
+        "highestTrophies",
+        "coupleWins",
+        "coupleLosses",
+        "coupleDraws",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "GameRecord": {
+      "title": "GameRecord",
+      "description": "Completed single-player, 1v1, or 2v2 match record.",
+      "type": "object",
+      "properties": {
+        "userUid": {
+          "type": "string",
+          "description": "UID of the player who recorded the match.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "username": {
+          "type": "string",
+          "description": "Player username at match completion.",
+          "minLength": 1,
+          "maxLength": 20
+        },
+        "gameId": {
+          "type": "string",
+          "description": "Arcade game identifier.",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "mode": {
+          "type": "string",
+          "description": "Match mode.",
+          "enum": ["single", "1v1", "2v2", "coop"],
+          "maxLength": 16
+        },
+        "result": {
+          "type": "string",
+          "description": "Match outcome.",
+          "enum": ["win", "loss", "draw", "completed"],
+          "maxLength": 16
+        },
+        "score": {
+          "type": "integer",
+          "description": "Final numeric score."
+        },
+        "xpEarned": {
+          "type": "integer",
+          "description": "XP awarded."
+        },
+        "coinsEarned": {
+          "type": "integer",
+          "description": "Coins awarded (2v2 exclusive)."
+        },
+        "trophiesDelta": {
+          "type": "integer",
+          "description": "Couple trophy change (2v2 exclusive)."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Immutable match completion timestamp."
+        }
+      },
+      "required": [
+        "userUid",
+        "username",
+        "gameId",
+        "mode",
+        "result",
+        "score",
+        "xpEarned",
+        "coinsEarned",
+        "trophiesDelta",
+        "createdAt"
+      ]
+    },
+    "Room": {
+      "title": "Room",
+      "description": "Synchronized 1v1 or 2v2 multiplayer game room.",
+      "type": "object",
+      "properties": {
+        "roomCode": {
+          "type": "string",
+          "description": "6-character room code.",
+          "minLength": 4,
+          "maxLength": 12,
+          "pattern": "^[A-Z0-9_\\-]+$"
+        },
+        "gameId": {
+          "type": "string",
+          "description": "Active game ID.",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "mode": {
+          "type": "string",
+          "description": "Multiplayer mode (1v1 or 2v2).",
+          "enum": ["1v1", "2v2"],
+          "maxLength": 8
+        },
+        "maxPlayers": {
+          "type": "integer",
+          "description": "Maximum allowed players (2 or 4)."
+        },
+        "hostUid": {
+          "type": "string",
+          "description": "Room creator UID.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "hostName": {
+          "type": "string",
+          "description": "Room creator username.",
+          "minLength": 1,
+          "maxLength": 20
+        },
+        "status": {
+          "type": "string",
+          "description": "Room status.",
+          "enum": ["lobby", "playing", "finished", "expired"],
+          "maxLength": 16
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Immutable creation timestamp."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Last update timestamp."
+        }
+      },
+      "required": [
+        "roomCode",
+        "gameId",
+        "mode",
+        "maxPlayers",
+        "hostUid",
+        "hostName",
+        "status",
+        "createdAt",
+        "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserPublic" },
+      "description": "Public player profile documents keyed by Firebase Auth UID."
+    },
+    "/users/{userId}/private/{docId}": {
+      "schema": { "$ref": "#/entities/UserPrivate" },
+      "description": "Owner-isolated private PII subcollection for player email."
+    },
+    "/couple_pairings/{pairingId}": {
+      "schema": { "$ref": "#/entities/CouplePairing" },
+      "description": "Couple pairing invitations and active shared couple profiles."
+    },
+    "/game_records/{recordId}": {
+      "schema": { "$ref": "#/entities/GameRecord" },
+      "description": "Historical match records for players and couples."
+    },
+    "/rooms/{roomCode}": {
+      "schema": { "$ref": "#/entities/Room" },
+      "description": "Real-time multiplayer lobby and game state documents."
+    }
+  }
+}

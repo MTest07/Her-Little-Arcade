@@ -23,6 +23,7 @@ import {
 } from 'lucide-react';
 import { MULTIPLAYER_GAMES } from '@/src/lib/arcade-data';
 import { EnrichedCouplePairing } from './CouplePairingPanel';
+import { ArcadeCircularLoader, ArcadeInlineSpinner } from './ArcadeLoader';
 import { soundFX } from '@/src/lib/sound';
 
 export interface RoomParticipant {
@@ -1177,7 +1178,20 @@ export function VoiceAndLobbyDock({
                 </div>
 
                 {myQueueEntry.status === 'searching' && (
-                  <div className="space-y-2">
+                  <div className="space-y-3">
+                    <ArcadeCircularLoader
+                      active={true}
+                      variant="card"
+                      messages={[
+                        'Searching for an online couple...',
+                        'Matching 2v2 Couple Trophies...',
+                        'Setting up your game...',
+                        'Getting everything ready...',
+                      ]}
+                      subtitle={`Trophy window ±${
+                        myQueueEntry.allowedTrophyRange || 150
+                      } 🏆 · Elapsed ${searchElapsedSec}s`}
+                    />
                     <p className="text-xs text-stone-300">
                       Searching for an online couple near 🏆{' '}
                       {myQueueEntry.coupleTrophies || 0} (±
@@ -1190,9 +1204,13 @@ export function VoiceAndLobbyDock({
                       type="button"
                       disabled={loadingRoomAction}
                       onClick={handleCancelMatchmakingQueue}
-                      className="w-full rounded-lg border border-rose-500/40 bg-rose-500/15 py-2 text-xs font-bold text-rose-200 hover:bg-rose-500/25"
+                      className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-rose-500/40 bg-rose-500/15 py-2 text-xs font-bold text-rose-200 hover:bg-rose-500/25"
                     >
-                      Cancel 2v2 Matchmaking
+                      {loadingRoomAction ? (
+                        <ArcadeInlineSpinner size={14} label="Cancelling..." />
+                      ) : (
+                        'Cancel 2v2 Matchmaking'
+                      )}
                     </button>
                   </div>
                 )}
@@ -1287,14 +1305,18 @@ export function VoiceAndLobbyDock({
                   onClick={handleEnterMatchmakingQueue}
                   className="flex w-full items-center justify-center gap-1.5 rounded-xl bg-amber-500 py-2.5 text-xs font-bold text-stone-950 hover:bg-amber-400 disabled:opacity-50"
                 >
-                  <Sparkles className="h-4 w-4" />
-                  <span>
-                    {loadingRoomAction
-                      ? 'Entering 2v2 Queue...'
-                      : !activeCouple
-                      ? 'Pair with Partner Required'
-                      : 'Find 2v2 Couple Trophy Match'}
-                  </span>
+                  {loadingRoomAction ? (
+                    <ArcadeInlineSpinner size={15} label="Entering 2v2 Queue..." />
+                  ) : (
+                    <>
+                      <Sparkles className="h-4 w-4" />
+                      <span>
+                        {!activeCouple
+                          ? 'Pair with Partner Required'
+                          : 'Find 2v2 Couple Trophy Match'}
+                      </span>
+                    </>
+                  )}
                 </button>
 
                 <div className="flex items-center justify-between border-t border-stone-800 pt-2 text-[11px] text-stone-400">
@@ -1704,20 +1726,36 @@ export function VoiceAndLobbyDock({
               </select>
             </div>
 
+            {loadingRoomAction && (
+              <ArcadeCircularLoader
+                active={loadingRoomAction}
+                variant="compact"
+                messages={[
+                  'Opening multiplayer room...',
+                  'Setting up your game...',
+                  'Almost there!',
+                ]}
+              />
+            )}
+
             <button
               type="button"
               disabled={loadingRoomAction || !activeCouple}
               onClick={handleCreateRoomSubmit}
               className="flex w-full items-center justify-center gap-1.5 rounded-xl bg-amber-500 py-2 text-xs font-bold text-stone-950 hover:bg-amber-400 disabled:opacity-50"
             >
-              <PlusCircle className="h-4 w-4" />
-              <span>
-                {loadingRoomAction
-                  ? 'Creating Room...'
-                  : !activeCouple
-                  ? 'Pair with Partner Required'
-                  : 'Create Room & Generate Room Number'}
-              </span>
+              {loadingRoomAction ? (
+                <ArcadeInlineSpinner size={15} label="Creating Room..." />
+              ) : (
+                <>
+                  <PlusCircle className="h-4 w-4" />
+                  <span>
+                    {!activeCouple
+                      ? 'Pair with Partner Required'
+                      : 'Create Room & Generate Room Number'}
+                  </span>
+                </>
+              )}
             </button>
           </div>
         )}
@@ -1744,8 +1782,14 @@ export function VoiceAndLobbyDock({
                   disabled={loadingRoomAction}
                   className="flex items-center gap-1 rounded-lg bg-stone-800 px-3 py-1.5 text-xs font-bold text-stone-100 hover:bg-stone-700 whitespace-nowrap shrink-0"
                 >
-                  <Search className="h-3.5 w-3.5" />
-                  <span>Look Up</span>
+                  {loadingRoomAction ? (
+                    <ArcadeInlineSpinner size={14} label="Checking..." />
+                  ) : (
+                    <>
+                      <Search className="h-3.5 w-3.5" />
+                      <span>Look Up</span>
+                    </>
+                  )}
                 </button>
               </div>
             </form>

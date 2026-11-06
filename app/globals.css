@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *));
 
 :root {
   --dp-color-ground: #f7f2e7;
@@ -9,6 +10,7 @@
   --dp-color-annotation: #344c69;
   --dp-color-highlight: #f0dfa0;
   --dp-color-scrap: #fcf8ef;
+  --dp-color-hover: #efe8d8;
   --dp-typography-reading-face: "Sketch Working Hand", var(--font-sketch-hand), cursive;
   --dp-typography-display-face: "Sketch Working Marker", var(--font-sketch-marker), cursive;
   --dp-typography-body: 24px;
@@ -18,6 +20,18 @@
   --dp-radius-control: 9px 4px 17px 5px / 4px 12px 5px 9px;
   --dp-border-fine-stroke: 1.5px;
   --dp-motion-control: 100ms;
+}
+
+.dark {
+  --dp-color-ground: #1e1b18;
+  --dp-color-ink: #f5efe2;
+  --dp-color-ink-muted: #c4bba9;
+  --dp-color-line: #4d463d;
+  --dp-color-accent: #d96b5c;
+  --dp-color-annotation: #88b2de;
+  --dp-color-highlight: #463b22;
+  --dp-color-scrap: #28241f;
+  --dp-color-hover: #332e27;
 }
 
 @layer base {
@@ -36,6 +50,12 @@
     font-size: 19px;
     line-height: 1.55;
     letter-spacing: 0.01em;
+  }
+
+  .dark body.sketch-sheet {
+    background-image:
+      radial-gradient(rgba(245, 239, 226, 0.04) 1px, transparent 0),
+      linear-gradient(to bottom, rgba(77, 70, 61, 0.22) 1px, transparent 1px);
   }
 
   h1, h2, h3, h4 {
@@ -73,7 +93,7 @@
 }
 
 .sketch-strip {
-  background-color: #efe8d8;
+  background-color: var(--dp-color-hover);
   border: var(--dp-border-fine-stroke) solid var(--dp-color-line);
   border-radius: 13px 6px 14px 5px / 6px 15px 5px 11px;
 }
@@ -120,6 +140,47 @@
   z-index: 10;
 }
 
+/* Cozy Sketchbook Sidebar Primitives */
+.arcade-sidebar-shell {
+  background-color: var(--dp-color-scrap);
+  background-image:
+    radial-gradient(rgba(56, 53, 47, 0.04) 1px, transparent 0),
+    linear-gradient(to bottom, rgba(179, 172, 157, 0.12) 1px, transparent 1px);
+  background-size: 20px 20px, 100% 34px;
+  border-right: 1.5px solid var(--dp-color-line);
+  color: var(--dp-color-ink);
+}
+
+.dark .arcade-sidebar-shell {
+  background-image:
+    radial-gradient(rgba(245, 239, 226, 0.035) 1px, transparent 0),
+    linear-gradient(to bottom, rgba(77, 70, 61, 0.18) 1px, transparent 1px);
+}
+
+.arcade-sidebar-nav-item {
+  border-radius: var(--dp-radius-control);
+  color: var(--dp-color-ink-muted);
+  border: 1.5px solid transparent;
+  transition:
+    background-color 140ms ease,
+    color 140ms ease,
+    border-color 140ms ease,
+    box-shadow 140ms ease;
+}
+
+.arcade-sidebar-nav-item:hover {
+  background-color: var(--dp-color-hover);
+  color: var(--dp-color-ink);
+  border-color: var(--dp-color-line);
+}
+
+.arcade-sidebar-nav-item-active {
+  background-color: var(--dp-color-highlight) !important;
+  color: var(--dp-color-ink) !important;
+  border: 1.5px solid var(--dp-color-ink) !important;
+  box-shadow: 2px 2.5px 0px var(--dp-color-accent) !important;
+}
+
 /* Irregular Outlined Buttons with Pencil or Red Hard Offset Shadow */
 body.sketch-sheet button {
   border-radius: var(--dp-radius-control);
@@ -160,13 +221,15 @@ body.sketch-sheet .bg-stone-950 {
   background-color: var(--dp-color-ground) !important;
 }
 
+body.sketch-sheet .bg-stone-950\/95,
 body.sketch-sheet .bg-stone-950\/90,
 body.sketch-sheet .bg-stone-950\/80,
 body.sketch-sheet .bg-stone-950\/60 {
-  background-color: #f2ebd9 !important;
+  background-color: var(--dp-color-hover) !important;
 }
 
 body.sketch-sheet .bg-stone-900,
+body.sketch-sheet .bg-stone-900\/95,
 body.sketch-sheet .bg-stone-900\/90,
 body.sketch-sheet .bg-stone-900\/80,
 body.sketch-sheet .bg-stone-900\/60,
@@ -177,7 +240,7 @@ body.sketch-sheet .bg-stone-900\/50 {
 
 body.sketch-sheet .bg-stone-800,
 body.sketch-sheet .bg-stone-800\/40 {
-  background-color: #ebe3d0 !important;
+  background-color: var(--dp-color-hover) !important;
 }
 
 body.sketch-sheet .text-stone-100,

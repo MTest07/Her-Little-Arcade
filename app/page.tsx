@@ -41,6 +41,11 @@ import {
 } from '@/src/components/SinglePlayerGames';
 import { MultiplayerGameArena } from '@/src/components/MultiplayerGames';
 import { ArcadeSidebar, ArcadeNavSection } from '@/src/components/ArcadeSidebar';
+import {
+  ArcadeCircularLoader,
+  ArcadeInlineSpinner,
+  DEFAULT_LOADING_MESSAGES,
+} from '@/src/components/ArcadeLoader';
 import { soundFX } from '@/src/lib/sound';
 import {
   Users,
@@ -156,11 +161,77 @@ export default function HerLittleArcadePage() {
   const [customPromptType, setCustomPromptType] = useState<'truth' | 'dare'>('truth');
   const [customStatusBanner, setCustomStatusBanner] = useState<string | null>(null);
 
-  // Audio & Sidebar settings
+  // Audio, Theme & Sidebar settings
   const [sfxEnabled, setSfxEnabled] = useState<boolean>(true);
   const [sfxVolume, setSfxVolume] = useState<number>(35);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState<boolean>(false);
+  const [isDarkTheme, setIsDarkTheme] = useState<boolean>(false);
+
+  // Real Application Loading States (Zero Fake Progress)
+  const [isInitialBoot, setIsInitialBoot] = useState<boolean>(true);
+  const [isBootstrappingProfile, setIsBootstrappingProfile] = useState<boolean>(false);
+  const [isFetchingDatabase, setIsFetchingDatabase] = useState<boolean>(false);
+  const [gameLoadingTarget, setGameLoadingTarget] = useState<string | null>(null);
+  const [pendingShopItemId, setPendingShopItemId] = useState<string | null>(null);
+  const [pendingMilestoneId, setPendingMilestoneId] = useState<string | null>(null);
+  const [isSavingCustomItem, setIsSavingCustomItem] = useState<boolean>(false);
+
+  const hasBootstrappedOnceRef = useRef<boolean>(false);
+  const gameSwitchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mainViewportRef = useRef<HTMLElement | null>(null);
+
+  // Sync Light / Dark Sketchbook class on <html>
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+    document.documentElement.classList.toggle('dark', isDarkTheme);
+  }, [isDarkTheme]);
+
+  // Smooth initial website boot transition
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setIsInitialBoot(false);
+    }, 380);
+    return () => clearTimeout(timer);
+  }, []);
+
+  // Helper to launch or switch between games with a smooth circular loading transition
+  const handleLaunchGame = useCallback(
+    (
+      nextGameId: string | null,
+      options?: { autostart?: boolean; mode?: '1v1' | '2v2' }
+    ) => {
+      if (gameSwitchTimeoutRef.current) {
+        clearTimeout(gameSwitchTimeoutRef.current);
+      }
+      if (options?.mode) {
+        setSelectedMultiplayerMode(options.mode);
+      }
+      if (!nextGameId) {
+        setGameLoadingTarget(null);
+        setActiveGameId(null);
+        setAutostartGame(false);
+        return;
+      }
+
+      const prefersReducedMotion =
+        typeof window !== 'undefined' &&
+        window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+      setAutostartGame(Boolean(options?.autostart));
+      setActiveGameId(nextGameId);
+
+      if (prefersReducedMotion) {
+        setGameLoadingTarget(null);
+        return;
+      }
+
+      setGameLoadingTarget(nextGameId);
+      gameSwitchTimeoutRef.current = setTimeout(() => {
+        setGameLoadingTarget(null);
+      }, 340);
+    },
+    []
+  );
 
   // GSAP Page Transition & Staggered Collection Entrance Animations
   useEffect(() => {
@@ -209,6 +280,11 @@ export default function HerLittleArcadePage() {
 
   const loadBootstrapData = useCallback(async (uid: string) => {
     if (!uid) return;
+    const isFirstBootstrap = !hasBootstrappedOnceRef.current;
+    if (isFirstBootstrap) {
+      setIsBootstrappingProfile(true);
+    }
+    setIsFetchingDatabase(true);
     try {
       const res = await fetch(`/api/arcade?uid=${encodeURIComponent(uid)}`);
       if (!res.ok) return;
@@ -250,8 +326,12 @@ export default function HerLittleArcadePage() {
       if (Array.isArray(data.coinTransactions)) {
         setCoinTransactions(data.coinTransactions);
       }
+      hasBootstrappedOnceRef.current = true;
     } catch {
       // Non-fatal network error
+    } finally {
+      setIsFetchingDatabase(false);
+      setIsBootstrappingProfile(false);
     }
   }, []);
 
@@ -446,13 +526,14 @@ export default function HerLittleArcadePage() {
       !isRenameCard && (currentUser.unlockedItems.includes(itemId) || costCoins === 0);
 
     if (!isOwned) {
-      if (currentUser.coins < costCoins) {
+      if ( currentUser.coins < costCoins) {
         setRewardStatusBanner(
           `Insufficient Coins! You need ${costCoins.toLocaleString()} Coins (you have ${currentUser.coins.toLocaleString()} Coins). Play 2v2 Couple Matches to earn Coins!`
         );
         soundFX.playError();
         return;
       }
+      setPendingShopItemId(itemId);
       try {
         const res = await fetch('/api/arcade', {
           method: 'POST',
@@ -483,6 +564,8 @@ export default function HerLittleArcadePage() {
         soundFX.playSuccess();
       } catch {
         setRewardStatusBanner('Network error while purchasing item.');
+      } finally {
+        setPendingShopItemId(null);
       }
     } else {
       const updates: Partial<PlayerProfile> = {};
@@ -500,6 +583,7 @@ export default function HerLittleArcadePage() {
   async function handleClaimTrophyMilestone(milestoneId: string) {
     if (!currentUser || !sessionToken) return;
     setRewardStatusBanner(null);
+    setPendingMilestoneId(milestoneId);
     try {
       const res = await fetch('/api/arcade', {
         method: 'POST',
@@ -526,6 +610,8 @@ export default function HerLittleArcadePage() {
       soundFX.playSuccess();
     } catch {
       setRewardStatusBanner('Could not claim milestone right now.');
+    } finally {
+      setPendingMilestoneId(null);
     }
   }
 
@@ -560,6 +646,7 @@ export default function HerLittleArcadePage() {
       };
     }
 
+    setIsSavingCustomItem(true);
     try {
       const res = await fetch('/api/arcade', {
         method: 'POST',
@@ -586,6 +673,8 @@ export default function HerLittleArcadePage() {
       soundFX.playSuccess();
     } catch {
       setCustomStatusBanner('Could not save item right now.');
+    } finally {
+      setIsSavingCustomItem(false);
     }
   }
 
@@ -593,31 +682,40 @@ export default function HerLittleArcadePage() {
   // Every player must register/sign in AND choose a valid unique username before accessing the arcade
   if (!currentUser || !currentUser.usernameSetupCompleted || !currentUser.username.trim()) {
     return (
-      <AuthModal
-        isOpen={true}
-        isFullPageGate={true}
-        onClose={() => {}}
-        currentUser={currentUser}
-        sessionToken={sessionToken}
-        onAuthenticated={(profile, token, verifyCode) => {
-          setSessionToken(token);
-          setCurrentUser(profile);
-          if (verifyCode) setVerificationCodeHint(verifyCode);
-          if (profile.usernameSetupCompleted && profile.username) {
-            loadBootstrapData(profile.uid);
-          }
-        }}
-        onProfileUpdated={(updatedProfile) => {
-          setCurrentUser(updatedProfile);
-          if (updatedProfile.usernameSetupCompleted && updatedProfile.username) {
-            loadBootstrapData(updatedProfile.uid);
-          }
-        }}
-        onLogout={() => {
-          setCurrentUser(null);
-          setSessionToken('');
-        }}
-      />
+      <>
+        <ArcadeCircularLoader
+          active={isInitialBoot}
+          variant="fullscreen"
+          messages={DEFAULT_LOADING_MESSAGES}
+          subtitle="Her Little Arcade · Working Sheet Edition"
+        />
+        <AuthModal
+          isOpen={true}
+          isFullPageGate={true}
+          onClose={() => {}}
+          currentUser={currentUser}
+          sessionToken={sessionToken}
+          onAuthenticated={(profile, token, verifyCode) => {
+            setSessionToken(token);
+            setCurrentUser(profile);
+            if (verifyCode) setVerificationCodeHint(verifyCode);
+            if (profile.usernameSetupCompleted && profile.username) {
+              loadBootstrapData(profile.uid);
+            }
+          }}
+          onProfileUpdated={(updatedProfile) => {
+            setCurrentUser(updatedProfile);
+            if (updatedProfile.usernameSetupCompleted && updatedProfile.username) {
+              loadBootstrapData(updatedProfile.uid);
+            }
+          }}
+          onLogout={() => {
+            hasBootstrappedOnceRef.current = false;
+            setCurrentUser(null);
+            setSessionToken('');
+          }}
+        />
+      </>
     );
   }
 
@@ -649,6 +747,19 @@ export default function HerLittleArcadePage() {
 
   return (
     <div className="flex min-h-screen flex-col bg-stone-950 text-stone-100 md:flex-row">
+      {/* Fullscreen Little Rabbit Circular Loader when bootstrapping initial session/profile */}
+      <ArcadeCircularLoader
+        active={isInitialBoot || isBootstrappingProfile}
+        variant="fullscreen"
+        messages={[
+          'Preparing your arcade...',
+          'Loading your notebook & couple profile...',
+          'Getting everything ready...',
+          'Almost there!',
+        ]}
+        subtitle="Syncing your real PostgreSQL arcade ledger"
+      />
+
       {/* Collapsible Left Sidebar (Desktop/Tablet) + Slide-Out Drawer (Mobile) */}
       <ArcadeSidebar
         currentUser={currentUser}
@@ -658,10 +769,12 @@ export default function HerLittleArcadePage() {
         activeSection={activeSection}
         activeGameTitle={activeGameDef?.title || null}
         isCollapsed={Boolean(activeGameDef) || isSidebarCollapsed}
+        isLoadingData={isFetchingDatabase}
+        isDarkTheme={isDarkTheme}
+        onToggleDarkTheme={() => setIsDarkTheme((prev) => !prev)}
         onToggleCollapse={() => setIsSidebarCollapsed((prev) => !prev)}
         onSelectSection={(nextSection) => {
-          setActiveGameId(null);
-          setAutostartGame(false);
+          handleLaunchGame(null);
           if (nextSection === 'trophy-road') {
             setLeaderboardTab('trophy-road');
             setActiveSection('trophy-road');
@@ -680,6 +793,7 @@ export default function HerLittleArcadePage() {
           setCurrentUser(null);
           setSessionToken('');
           setActiveRoom(null);
+          handleLaunchGame(null);
         }}
       />
 
@@ -723,7 +837,23 @@ export default function HerLittleArcadePage() {
                     : 'xl:col-span-12'
                 }
               >
-                {activeGameDef.collection === 'single' ? (
+                {gameLoadingTarget ? (
+                  <ArcadeCircularLoader
+                    active={true}
+                    variant="card"
+                    messages={[
+                      `Setting up ${activeGameDef.title}...`,
+                      'Preparing game pieces & rules...',
+                      'Getting everything ready...',
+                      'Almost there!',
+                    ]}
+                    subtitle={
+                      activeGameDef.collection === 'single'
+                        ? 'Single-Player Sanctuary'
+                        : `${(activeRoom?.mode || selectedMultiplayerMode).toUpperCase()} Multiplayer Arena`
+                    }
+                  />
+                ) : activeGameDef.collection === 'single' ? (
                   /* Single-Player Mode: Never requires account pairing or a partner */
                   <SinglePlayerGameArena
                     gameId={activeGameDef.id}
@@ -734,8 +864,7 @@ export default function HerLittleArcadePage() {
                     personalizedItems={personalizedItems}
                     onUpdatePet={(nextPet) => handleUpdateProfile({ petState: nextPet })}
                     onBackToArcade={() => {
-                      setActiveGameId(null);
-                      setAutostartGame(false);
+                      handleLaunchGame(null);
                     }}
                     onGameComplete={(gId, score, xp, coins, details) =>
                       handleRecordMatch(gId, 'single', 'win', score, xp, coins, details)
@@ -767,8 +896,7 @@ export default function HerLittleArcadePage() {
                       <button
                         type="button"
                         onClick={() => {
-                          setActiveGameId(null);
-                          setAutostartGame(false);
+                          handleLaunchGame(null);
                           setActiveSection('profile');
                         }}
                         className="flex items-center gap-2 rounded-xl bg-amber-500 px-5 py-2.5 text-xs font-bold text-stone-950 hover:bg-amber-400"
@@ -779,8 +907,7 @@ export default function HerLittleArcadePage() {
                       <button
                         type="button"
                         onClick={() => {
-                          setActiveGameId(null);
-                          setAutostartGame(false);
+                          handleLaunchGame(null);
                           setActiveSection('multiplayer');
                         }}
                         className="flex items-center gap-2 rounded-xl border border-stone-700 bg-stone-950 px-5 py-2.5 text-xs font-semibold text-stone-100 hover:border-amber-500"
@@ -807,8 +934,7 @@ export default function HerLittleArcadePage() {
                       });
                     }}
                     onBackToArcade={() => {
-                      setActiveGameId(null);
-                      setAutostartGame(false);
+                      handleLaunchGame(null);
                     }}
                     onMatchFinished={(res, score, details) =>
                       handleRecordMatch('chess', '1v1', res, score, 30, 0, details)
@@ -836,8 +962,7 @@ export default function HerLittleArcadePage() {
                     autostart={autostartGame}
                     personalizedItems={personalizedItems}
                     onBackToArcade={() => {
-                      setActiveGameId(null);
-                      setAutostartGame(false);
+                      handleLaunchGame(null);
                     }}
                     onMatchFinished={(gId, mode, res, score, xp, coins, details) =>
                       handleRecordMatch(gId, mode, res, score, xp, coins, details)
@@ -857,12 +982,11 @@ export default function HerLittleArcadePage() {
                     onRefreshInvitations={() => loadBootstrapData(currentUser.uid)}
                     onUpdateRoom={handlePersistRoom}
                     onStartRoomGame={(room) => {
-                      setActiveGameId(room.gameId);
-                      setAutostartGame(true);
+                      handleLaunchGame(room.gameId, { autostart: true });
                     }}
-                    onSelectGame={(nextId) => setActiveGameId(nextId)}
+                    onSelectGame={(nextId) => handleLaunchGame(nextId)}
                     onOpenCouplePairing={() => {
-                      setActiveGameId(null);
+                      handleLaunchGame(null);
                       setActiveSection('profile');
                     }}
                     onVoiceAchievement={() => setVoiceJoinedOnce(true)}
@@ -971,7 +1095,7 @@ export default function HerLittleArcadePage() {
 
                           <button
                             type="button"
-                            onClick={() => setActiveGameId('chess')}
+                            onClick={() => handleLaunchGame('chess')}
                             className="rounded-xl border border-stone-700 bg-stone-950 px-4 py-2.5 text-xs font-semibold text-stone-100 hover:border-amber-500/60 whitespace-nowrap shrink-0"
                           >
                             Play Chess
@@ -1097,7 +1221,7 @@ export default function HerLittleArcadePage() {
                             game={game}
                             isFavorite={currentUser.favoriteGames.includes(game.id)}
                             personalBest={personalBestByGame[game.id]}
-                            onPlay={() => setActiveGameId(game.id)}
+                            onPlay={() => handleLaunchGame(game.id)}
                             onToggleFav={() => toggleFavoriteGame(game.id)}
                           />
                         ))}
@@ -1140,7 +1264,7 @@ export default function HerLittleArcadePage() {
                               <div className="flex flex-col gap-1.5 shrink-0">
                                 <button
                                   type="button"
-                                  onClick={() => setActiveGameId(ch.gameId)}
+                                  onClick={() => handleLaunchGame(ch.gameId)}
                                   className="rounded-lg border border-stone-700 bg-stone-950 px-3 py-1.5 text-xs font-semibold text-stone-200 hover:border-amber-500/60 whitespace-nowrap"
                                 >
                                   Play
@@ -1201,7 +1325,7 @@ export default function HerLittleArcadePage() {
                         game={game}
                         isFavorite={currentUser.favoriteGames.includes(game.id)}
                         personalBest={personalBestByGame[game.id]}
-                        onPlay={() => setActiveGameId(game.id)}
+                        onPlay={() => handleLaunchGame(game.id)}
                         onToggleFav={() => toggleFavoriteGame(game.id)}
                       />
                     ))}
@@ -1464,7 +1588,7 @@ export default function HerLittleArcadePage() {
                               </div>
                               <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                                 {MULTIPLAYER_1V1_EXCLUSIVE_GAMES.map((game) => (
-                                  <GameCard
+                                    <GameCard
                                     key={`1v1-excl-${game.id}`}
                                     game={game}
                                     forcedMultiplayerMode="1v1"
@@ -1479,7 +1603,7 @@ export default function HerLittleArcadePage() {
                                           mode: '1v1',
                                         });
                                       }
-                                      setActiveGameId(game.id);
+                                      handleLaunchGame(game.id, { mode: '1v1' });
                                     }}
                                     onToggleFav={() => toggleFavoriteGame(game.id)}
                                   />
@@ -1514,7 +1638,7 @@ export default function HerLittleArcadePage() {
                                           mode: '1v1',
                                         });
                                       }
-                                      setActiveGameId(game.id);
+                                      handleLaunchGame(game.id, { mode: '1v1' });
                                     }}
                                     onToggleFav={() => toggleFavoriteGame(game.id)}
                                   />
@@ -1573,7 +1697,7 @@ export default function HerLittleArcadePage() {
                                           mode: '2v2',
                                         });
                                       }
-                                      setActiveGameId(game.id);
+                                      handleLaunchGame(game.id, { mode: '2v2' });
                                     }}
                                     onToggleFav={() => toggleFavoriteGame(game.id)}
                                   />
@@ -1610,7 +1734,7 @@ export default function HerLittleArcadePage() {
                                           mode: '2v2',
                                         });
                                       }
-                                      setActiveGameId(game.id);
+                                      handleLaunchGame(game.id, { mode: '2v2' });
                                     }}
                                     onToggleFav={() => toggleFavoriteGame(game.id)}
                                   />
@@ -1712,10 +1836,15 @@ export default function HerLittleArcadePage() {
                                   ) : isEligible ? (
                                     <button
                                       type="button"
+                                      disabled={pendingMilestoneId === ms.id}
                                       onClick={() => handleClaimTrophyMilestone(ms.id)}
-                                      className="w-full rounded-xl bg-amber-500 py-2 text-xs font-bold text-stone-950 hover:bg-amber-400"
+                                      className="flex w-full items-center justify-center gap-1.5 rounded-xl bg-amber-500 py-2 text-xs font-bold text-stone-950 hover:bg-amber-400 disabled:opacity-60"
                                     >
-                                      Claim Milestone Reward
+                                      {pendingMilestoneId === ms.id ? (
+                                        <ArcadeInlineSpinner size={14} label="Claiming Milestone..." />
+                                      ) : (
+                                        <span>Claim Milestone Reward</span>
+                                      )}
                                     </button>
                                   ) : (
                                     <div className="flex items-center justify-center gap-1.5 rounded-xl border border-stone-800 bg-stone-950 py-2 font-mono text-xs text-stone-500 tabular-nums">
@@ -1876,12 +2005,11 @@ export default function HerLittleArcadePage() {
                       onRefreshInvitations={() => loadBootstrapData(currentUser.uid)}
                       onUpdateRoom={handlePersistRoom}
                       onStartRoomGame={(room) => {
-                        setActiveGameId(room.gameId);
-                        setAutostartGame(true);
+                        handleLaunchGame(room.gameId, { autostart: true });
                       }}
-                      onSelectGame={(gId) => setActiveGameId(gId)}
+                      onSelectGame={(gId) => handleLaunchGame(gId)}
                       onOpenCouplePairing={() => {
-                        setActiveGameId(null);
+                        handleLaunchGame(null);
                         setActiveSection('profile');
                       }}
                       onVoiceAchievement={() => setVoiceJoinedOnce(true)}
@@ -2061,11 +2189,12 @@ export default function HerLittleArcadePage() {
                         personalBest={personalBestByGame[game.id]}
                         onPlay={() => {
                           if (catalogFilter === '2v2' && game.supports2v2) {
-                            setSelectedMultiplayerMode('2v2');
+                            handleLaunchGame(game.id, { mode: '2v2' });
                           } else if (game.collection === 'multiplayer') {
-                            setSelectedMultiplayerMode('1v1');
+                            handleLaunchGame(game.id, { mode: '1v1' });
+                          } else {
+                            handleLaunchGame(game.id);
                           }
-                          setActiveGameId(game.id);
                         }}
                         onToggleFav={() => toggleFavoriteGame(game.id)}
                       />
@@ -2179,10 +2308,17 @@ export default function HerLittleArcadePage() {
 
                           <button
                             type="submit"
-                            className="flex items-center gap-1.5 rounded-xl bg-amber-500 px-4 py-2 text-xs font-bold text-stone-950 hover:bg-amber-400"
+                            disabled={isSavingCustomItem}
+                            className="flex items-center gap-1.5 rounded-xl bg-amber-500 px-4 py-2 text-xs font-bold text-stone-950 hover:bg-amber-400 disabled:opacity-60"
                           >
-                            <Plus className="h-3.5 w-3.5" />
-                            <span>Save to Personalized Games</span>
+                            {isSavingCustomItem ? (
+                              <ArcadeInlineSpinner size={14} label="Saving Keepsake..." />
+                            ) : (
+                              <>
+                                <Plus className="h-3.5 w-3.5" />
+                                <span>Save to Personalized Games</span>
+                              </>
+                            )}
                           </button>
                           {customStatusBanner && (
                             <p className="text-xs font-medium text-emerald-400">
@@ -2511,10 +2647,15 @@ export default function HerLittleArcadePage() {
                                 ) : isEligible ? (
                                   <button
                                     type="button"
+                                    disabled={pendingMilestoneId === ms.id}
                                     onClick={() => handleClaimTrophyMilestone(ms.id)}
-                                    className="w-full rounded-xl bg-amber-500 py-2 text-xs font-bold text-stone-950 hover:bg-amber-400"
+                                    className="flex w-full items-center justify-center gap-1.5 rounded-xl bg-amber-500 py-2 text-xs font-bold text-stone-950 hover:bg-amber-400 disabled:opacity-60"
                                   >
-                                    Claim Milestone Reward
+                                    {pendingMilestoneId === ms.id ? (
+                                      <ArcadeInlineSpinner size={14} label="Claiming Milestone..." />
+                                    ) : (
+                                      <span>Claim Milestone Reward</span>
+                                    )}
                                   </button>
                                 ) : (
                                   <div className="flex items-center justify-center gap-1.5 rounded-xl border border-stone-800 bg-stone-950 py-2 font-mono text-xs text-stone-500 tabular-nums">
@@ -2584,6 +2725,7 @@ export default function HerLittleArcadePage() {
                       <div className="flex flex-wrap items-center gap-2.5 shrink-0">
                         <button
                           type="button"
+                          disabled={pendingShopItemId === 'rename-card'}
                           onClick={() =>
                             handleBuyOrEquipShopItem(
                               'rename-card',
@@ -2592,9 +2734,13 @@ export default function HerLittleArcadePage() {
                               'rename-card'
                             )
                           }
-                          className="rounded-xl bg-amber-500 px-4 py-2.5 text-xs font-bold text-stone-950 hover:bg-amber-400"
+                          className="flex items-center gap-1.5 rounded-xl bg-amber-500 px-4 py-2.5 text-xs font-bold text-stone-950 hover:bg-amber-400 disabled:opacity-60"
                         >
-                          Buy Rename Card ({RENAME_CARD_COST_COINS.toLocaleString()} Coins)
+                          {pendingShopItemId === 'rename-card' ? (
+                            <ArcadeInlineSpinner size={14} label="Purchasing Rename Card..." />
+                          ) : (
+                            <span>Buy Rename Card ({RENAME_CARD_COST_COINS.toLocaleString()} Coins)</span>
+                          )}
                         </button>
                         <button
                           type="button"
@@ -2646,6 +2792,7 @@ export default function HerLittleArcadePage() {
 
                             <button
                               type="button"
+                              disabled={pendingShopItemId === item.id}
                               onClick={() =>
                                 handleBuyOrEquipShopItem(
                                   item.id,
@@ -2654,7 +2801,7 @@ export default function HerLittleArcadePage() {
                                   item.previewCode
                                 )
                               }
-                              className={`mt-4 flex w-full items-center justify-center gap-1.5 rounded-xl py-2 text-xs font-bold transition-colors ${
+                              className={`mt-4 flex w-full items-center justify-center gap-1.5 rounded-xl py-2 text-xs font-bold transition-colors disabled:opacity-60 ${
                                 isEquipped
                                   ? 'border border-emerald-500/50 bg-emerald-500/15 text-emerald-200'
                                   : isOwned
@@ -2662,7 +2809,9 @@ export default function HerLittleArcadePage() {
                                   : 'bg-amber-500 text-stone-950 hover:bg-amber-400'
                               }`}
                             >
-                              {isEquipped ? (
+                              {pendingShopItemId === item.id ? (
+                                <ArcadeInlineSpinner size={14} label="Updating Vault..." />
+                              ) : isEquipped ? (
                                 <>
                                   <Check className="h-3.5 w-3.5" />
                                   <span>Equipped</span>
@@ -2866,7 +3015,7 @@ export default function HerLittleArcadePage() {
                                 <button
                                   key={fId}
                                   type="button"
-                                  onClick={() => setActiveGameId(fId)}
+                                  onClick={() => handleLaunchGame(fId)}
                                   className="rounded-lg border border-stone-700 bg-stone-950 px-3 py-1.5 text-xs font-medium text-stone-200 hover:border-amber-500"
                                 >
                                   {g.title}
@@ -2995,6 +3144,26 @@ export default function HerLittleArcadePage() {
                             {th.label}
                           </button>
                         ))}
+                      </div>
+                    </div>
+
+                    <div className="border-t border-stone-800 pt-4">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <div className="text-sm font-bold text-stone-100">
+                            Sketchbook Paper Lighting (Day vs Night Sheet)
+                          </div>
+                          <div className="text-xs text-stone-400">
+                            Switch between the Warm Day Working Sheet and Cozy Night Sketchbook palette across the sidebar and loader.
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setIsDarkTheme((prev) => !prev)}
+                          className="rounded-xl border border-stone-700 bg-stone-950 px-3.5 py-2 text-xs font-bold text-amber-300 hover:border-amber-500"
+                        >
+                          {isDarkTheme ? 'Cozy Night Sheet (Dark)' : 'Warm Day Sheet (Light)'}
+                        </button>
                       </div>
                     </div>
                   </div>

@@ -1,0 +1,444 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 1. Global Safety Net (Default-Deny Catch-All)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Hardened Global Primitives
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function userExists(uid) {
+      return exists(/databases/$(database)/documents/users/$(uid));
+    }
+
+    // Validation Blueprint: UserPublic
+    function isValidUserPublic(data) {
+      return data.keys().hasAll([
+          'uid',
+          'username',
+          'usernameSetupCompleted',
+          'avatar',
+          'xp',
+          'level',
+          'coins',
+          'wins',
+          'losses',
+          'draws',
+          'theme',
+          'presenceStatus',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'uid',
+          'username',
+          'usernameSetupCompleted',
+          'renameCards',
+          'avatar',
+          'xp',
+          'level',
+          'coins',
+          'streak',
+          'wins',
+          'losses',
+          'draws',
+          'theme',
+          'presenceStatus',
+          'activeRoomCode',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        data.uid is string && data.uid.size() >= 1 && data.uid.size() <= 128 &&
+        data.uid == request.auth.uid &&
+        data.username is string && data.username.size() <= 20 && data.username.matches('^[a-zA-Z0-9_\\-]*$') &&
+        data.usernameSetupCompleted is bool &&
+        (!('renameCards' in data) || (data.renameCards is number && data.renameCards >= 0 && data.renameCards <= 1000)) &&
+        data.avatar is string && data.avatar.size() >= 1 && data.avatar.size() <= 64 &&
+        data.xp is number && data.xp >= 0 &&
+        data.level is number && data.level >= 1 &&
+        data.coins is number && data.coins >= 0 &&
+        (!('streak' in data) || (data.streak is number && data.streak >= 0)) &&
+        data.wins is number && data.wins >= 0 &&
+        data.losses is number && data.losses >= 0 &&
+        data.draws is number && data.draws >= 0 &&
+        data.theme is string && data.theme.size() >= 1 && data.theme.size() <= 64 &&
+        data.presenceStatus is string && data.presenceStatus.size() <= 32 &&
+        data.presenceStatus in ['online', 'in_queue', 'in_match', 'offline'] &&
+        (!('activeRoomCode' in data) || (data.activeRoomCode is string && data.activeRoomCode.size() <= 16)) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    // Validation Blueprint: UserPrivate (PII Split Collection)
+    function isValidUserPrivate(data) {
+      return data.keys().hasAll(['uid', 'email', 'emailVerified', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['uid', 'email', 'emailVerified', 'createdAt', 'updatedAt']) &&
+        data.uid is string && data.uid.size() >= 1 && data.uid.size() <= 128 &&
+        data.uid == request.auth.uid &&
+        data.email is string && data.email.size() >= 3 && data.email.size() <= 254 &&
+        data.emailVerified is bool &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    // Validation Blueprint: CouplePairing
+    function isValidCouplePairing(data) {
+      return data.keys().hasAll([
+          'pairingCode',
+          'requesterUid',
+          'partnerUid',
+          'status',
+          'coupleName',
+          'coupleTitle',
+          'coupleBanner',
+          'coupleTrophies',
+          'highestTrophies',
+          'coupleWins',
+          'coupleLosses',
+          'coupleDraws',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'pairingCode',
+          'requesterUid',
+          'partnerUid',
+          'status',
+          'coupleName',
+          'coupleTitle',
+          'coupleBanner',
+          'coupleTrophies',
+          'highestTrophies',
+          'coupleWins',
+          'coupleLosses',
+          'coupleDraws',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        data.pairingCode is string && data.pairingCode.size() >= 6 && data.pairingCode.size() <= 12 &&
+        data.pairingCode.matches('^[A-Z0-9_\\-]+$') &&
+        data.requesterUid is string && data.requesterUid.size() >= 1 && data.requesterUid.size() <= 128 &&
+        data.partnerUid is string && data.partnerUid.size() <= 128 &&
+        data.status is string && data.status.size() <= 32 &&
+        data.status in ['pending_partner', 'pending_requester_confirm', 'active', 'unpaired'] &&
+        data.coupleName is string && data.coupleName.size() <= 80 &&
+        data.coupleTitle is string && data.coupleTitle.size() <= 64 &&
+        data.coupleBanner is string && data.coupleBanner.size() <= 64 &&
+        data.coupleTrophies is number && data.coupleTrophies >= 0 &&
+        data.highestTrophies is number && data.highestTrophies >= 0 &&
+        data.coupleWins is number && data.coupleWins >= 0 &&
+        data.coupleLosses is number && data.coupleLosses >= 0 &&
+        data.coupleDraws is number && data.coupleDraws >= 0 &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    // Validation Blueprint: GameRecord
+    function isValidGameRecord(data) {
+      return data.keys().hasAll([
+          'userUid',
+          'username',
+          'gameId',
+          'mode',
+          'result',
+          'score',
+          'xpEarned',
+          'coinsEarned',
+          'trophiesDelta',
+          'createdAt'
+        ]) &&
+        data.keys().hasOnly([
+          'userUid',
+          'username',
+          'gameId',
+          'mode',
+          'result',
+          'score',
+          'xpEarned',
+          'coinsEarned',
+          'trophiesDelta',
+          'createdAt'
+        ]) &&
+        data.userUid is string && data.userUid.size() >= 1 && data.userUid.size() <= 128 &&
+        data.userUid == request.auth.uid &&
+        data.username is string && data.username.size() >= 1 && data.username.size() <= 20 &&
+        data.gameId is string && data.gameId.size() >= 1 && data.gameId.size() <= 64 &&
+        data.mode is string && data.mode.size() <= 16 &&
+        data.mode in ['single', '1v1', '2v2', 'coop'] &&
+        data.result is string && data.result.size() <= 16 &&
+        data.result in ['win', 'loss', 'draw', 'completed'] &&
+        data.score is number && data.score >= 0 &&
+        data.xpEarned is number && data.xpEarned >= 0 && data.xpEarned <= 100 &&
+        data.coinsEarned is number && data.coinsEarned >= 0 && data.coinsEarned <= 100 &&
+        data.trophiesDelta is number && data.trophiesDelta >= -50 && data.trophiesDelta <= 50 &&
+        data.createdAt is timestamp;
+    }
+
+    // Validation Blueprint: Room
+    function isValidRoom(data) {
+      return data.keys().hasAll([
+          'roomCode',
+          'gameId',
+          'mode',
+          'maxPlayers',
+          'hostUid',
+          'hostName',
+          'status',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'roomCode',
+          'gameId',
+          'mode',
+          'maxPlayers',
+          'hostUid',
+          'hostName',
+          'status',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        data.roomCode is string && data.roomCode.size() >= 4 && data.roomCode.size() <= 12 &&
+        data.roomCode.matches('^[A-Z0-9_\\-]+$') &&
+        data.gameId is string && data.gameId.size() >= 1 && data.gameId.size() <= 64 &&
+        data.mode is string && data.mode.size() <= 8 &&
+        data.mode in ['1v1', '2v2'] &&
+        data.maxPlayers is number && data.maxPlayers in [2, 4] &&
+        data.hostUid is string && data.hostUid.size() >= 1 && data.hostUid.size() <= 128 &&
+        data.hostName is string && data.hostName.size() >= 1 && data.hostName.size() <= 20 &&
+        data.status is string && data.status.size() <= 16 &&
+        data.status in ['lobby', 'playing', 'finished', 'expired'] &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    // Collection 1: Public User Profiles
+    match /users/{userId} {
+      allow get: if isSignedIn() && isValidId(userId) && userId == request.auth.uid;
+      allow list: if isSignedIn() && existing().uid == request.auth.uid;
+
+      allow create: if isVerifiedUser() &&
+        isValidId(userId) &&
+        userId == request.auth.uid &&
+        isValidUserPublic(incoming()) &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+
+      allow update: if isVerifiedUser() &&
+        isValidId(userId) &&
+        userId == request.auth.uid &&
+        isValidUserPublic(incoming()) &&
+        incoming().uid == existing().uid &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        (
+          // Action 1: Profile & Cosmetics Update
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'username',
+            'usernameSetupCompleted',
+            'renameCards',
+            'avatar',
+            'theme',
+            'presenceStatus',
+            'activeRoomCode',
+            'updatedAt'
+          ]) ||
+          // Action 2: Match Progression Update
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'xp',
+            'level',
+            'coins',
+            'streak',
+            'wins',
+            'losses',
+            'draws',
+            'presenceStatus',
+            'updatedAt'
+          ]) ||
+          // Action 3: Full Owner Profile Sync
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'username',
+            'usernameSetupCompleted',
+            'renameCards',
+            'avatar',
+            'xp',
+            'level',
+            'coins',
+            'streak',
+            'wins',
+            'losses',
+            'draws',
+            'theme',
+            'presenceStatus',
+            'activeRoomCode',
+            'updatedAt'
+          ])
+        );
+
+      allow delete: if false;
+
+      // Subcollection 1A: Strict Owner-Only Private PII (Email)
+      match /private/{docId} {
+        allow get: if isSignedIn() &&
+          isValidId(userId) &&
+          isValidId(docId) &&
+          userId == request.auth.uid;
+
+        allow list: if false;
+
+        allow create: if isVerifiedUser() &&
+          isValidId(userId) &&
+          isValidId(docId) &&
+          userId == request.auth.uid &&
+          isValidUserPrivate(incoming()) &&
+          incoming().createdAt == request.time &&
+          incoming().updatedAt == request.time &&
+          userExists(userId);
+
+        allow update: if isVerifiedUser() &&
+          isValidId(userId) &&
+          isValidId(docId) &&
+          userId == request.auth.uid &&
+          isValidUserPrivate(incoming()) &&
+          incoming().uid == existing().uid &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().updatedAt == request.time &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['email', 'emailVerified', 'updatedAt']) &&
+          userExists(userId);
+
+        allow delete: if false;
+      }
+    }
+
+    // Collection 2: Couple Pairings
+    match /couple_pairings/{pairingId} {
+      allow get: if isSignedIn() &&
+        isValidId(pairingId) &&
+        (resource == null || existing().requesterUid == request.auth.uid || existing().partnerUid == request.auth.uid);
+
+      allow list: if isSignedIn() &&
+        (existing().requesterUid == request.auth.uid || existing().partnerUid == request.auth.uid);
+
+      allow create: if isVerifiedUser() &&
+        isValidId(pairingId) &&
+        isValidCouplePairing(incoming()) &&
+        incoming().requesterUid == request.auth.uid &&
+        incoming().status == 'pending_partner' &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time &&
+        userExists(request.auth.uid);
+
+      allow update: if isVerifiedUser() &&
+        isValidId(pairingId) &&
+        isValidCouplePairing(incoming()) &&
+        existing().status != 'unpaired' &&
+        incoming().pairingCode == existing().pairingCode &&
+        incoming().requesterUid == existing().requesterUid &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        userExists(request.auth.uid) &&
+        (
+          // Action 1: Partner accepts pending invite
+          (
+            existing().status == 'pending_partner' &&
+            incoming().partnerUid == request.auth.uid &&
+            incoming().status == 'pending_requester_confirm' &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['partnerUid', 'status', 'updatedAt'])
+          ) ||
+          // Action 2: Requester confirms active pairing or updates shared profile
+          (
+            (existing().requesterUid == request.auth.uid || existing().partnerUid == request.auth.uid) &&
+            incoming().partnerUid == existing().partnerUid &&
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'status',
+              'coupleName',
+              'coupleTitle',
+              'coupleBanner',
+              'coupleTrophies',
+              'highestTrophies',
+              'coupleWins',
+              'coupleLosses',
+              'coupleDraws',
+              'updatedAt'
+            ])
+          )
+        );
+
+      allow delete: if false;
+    }
+
+    // Collection 3: Game Records (Immutable Historical Log)
+    match /game_records/{recordId} {
+      allow get: if isSignedIn() &&
+        isValidId(recordId) &&
+        (resource == null || existing().userUid == request.auth.uid);
+
+      allow list: if isSignedIn() &&
+        existing().userUid == request.auth.uid;
+
+      allow create: if isVerifiedUser() &&
+        isValidId(recordId) &&
+        isValidGameRecord(incoming()) &&
+        incoming().userUid == request.auth.uid &&
+        incoming().createdAt == request.time &&
+        userExists(request.auth.uid);
+
+      allow update, delete: if false;
+    }
+
+    // Collection 4: Multiplayer Rooms
+    match /rooms/{roomCode} {
+      allow get: if isSignedIn() &&
+        isValidId(roomCode) &&
+        (resource == null || existing().hostUid == request.auth.uid);
+
+      allow list: if isSignedIn() &&
+        existing().hostUid == request.auth.uid;
+
+      allow create: if isVerifiedUser() &&
+        isValidId(roomCode) &&
+        isValidRoom(incoming()) &&
+        incoming().hostUid == request.auth.uid &&
+        incoming().status == 'lobby' &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time &&
+        userExists(request.auth.uid);
+
+      allow update: if isVerifiedUser() &&
+        isValidId(roomCode) &&
+        isValidRoom(incoming()) &&
+        existing().status != 'finished' &&
+        existing().status != 'expired' &&
+        incoming().roomCode == existing().roomCode &&
+        incoming().hostUid == existing().hostUid &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        existing().hostUid == request.auth.uid &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['gameId', 'mode', 'status', 'updatedAt']) &&
+        userExists(request.auth.uid);
+
+      allow delete: if false;
+    }
+  }
+}

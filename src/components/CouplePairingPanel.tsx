@@ -2,6 +2,7 @@
 
 import React, { useState } from 'react';
 import { PlayerProfile } from './AuthModal';
+import { ArcadeCircularLoader, ArcadeInlineSpinner } from './ArcadeLoader';
 import { soundFX } from '@/src/lib/sound';
 import {
   HeartHandshake,
@@ -334,6 +335,20 @@ export function CouplePairingPanel({
         <div className="mt-4 flex items-start gap-2 rounded-xl border border-emerald-500/40 bg-emerald-500/10 p-3 text-xs text-emerald-200">
           <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-400" />
           <span>{statusMsg}</span>
+        </div>
+      )}
+
+      {loading && (
+        <div className="mt-4">
+          <ArcadeCircularLoader
+            active={loading}
+            variant="compact"
+            messages={[
+              'Syncing Couple Pairing with database...',
+              'Getting everything ready...',
+              'Almost there!',
+            ]}
+          />
         </div>
       )}
 
@@ -676,8 +691,14 @@ export function CouplePairingPanel({
                 onClick={handleGenerateInviteCode}
                 className="flex items-center gap-2 rounded-xl bg-amber-500 px-4 py-2.5 text-xs font-bold text-stone-950 transition-colors hover:bg-amber-400"
               >
-                <Sparkles className="h-4 w-4" />
-                <span>Generate Partner Pairing Code</span>
+                {loading ? (
+                  <ArcadeInlineSpinner size={15} label="Generating Code..." />
+                ) : (
+                  <>
+                    <Sparkles className="h-4 w-4" />
+                    <span>Generate Partner Pairing Code</span>
+                  </>
+                )}
               </button>
             )}
           </div>
@@ -725,8 +746,14 @@ export function CouplePairingPanel({
                 disabled={loading}
                 className="flex items-center gap-1.5 rounded-lg bg-stone-800 px-3.5 py-2 text-xs font-bold text-stone-100 hover:bg-stone-700 whitespace-nowrap shrink-0"
               >
-                <Search className="h-3.5 w-3.5" />
-                <span>Verify Code</span>
+                {loading ? (
+                  <ArcadeInlineSpinner size={14} label="Verifying..." />
+                ) : (
+                  <>
+                    <Search className="h-3.5 w-3.5" />
+                    <span>Verify Code</span>
+                  </>
+                )}
               </button>
             </form>
 

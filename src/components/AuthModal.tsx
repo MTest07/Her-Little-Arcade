@@ -9,7 +9,7 @@ import {
   sendEmailVerification,
   signOut,
 } from 'firebase/auth';
-import { auth, googleAuthProvider } from '@/src/lib/firebase';
+import { auth, googleAuthProvider, syncPlayerProfileToFirestore } from '@/src/lib/firebase';
 import { HERO_BANNER_IMAGE } from '@/src/lib/arcade-data';
 import {
   X,
@@ -22,6 +22,7 @@ import {
   ShieldCheck,
   KeyRound,
 } from 'lucide-react';
+import { ArcadeCircularLoader, ArcadeInlineSpinner } from './ArcadeLoader';
 
 export interface PlayerProfile {
   uid: string;
@@ -240,6 +241,7 @@ export function AuthModal({
         throw new Error(data.error || 'Failed to save your chosen username.');
       }
       const updated = normalizePlayerProfile(data.profile);
+      await syncPlayerProfileToFirestore(updated).catch(() => {});
       setStatusMsg(`Username "@${updated.username}" confirmed! Entering Her Little Arcade...`);
       onProfileUpdated?.(updated);
       if (!isFullPageGate) onClose();
@@ -273,6 +275,7 @@ export function AuthModal({
         throw new Error(data.error || 'Failed to use Rename Card.');
       }
       const updated = normalizePlayerProfile(data.profile);
+      await syncPlayerProfileToFirestore(updated).catch(() => {});
       onProfileUpdated?.(updated);
       setNewUsernameInput('');
       setStatusMsg(
@@ -314,6 +317,7 @@ export function AuthModal({
         throw new Error(data.error || 'Could not synchronize Google account');
       }
       const profile = normalizePlayerProfile(data.profile);
+      await syncPlayerProfileToFirestore(profile).catch(() => {});
       // Never pre-fill username with Google account name
       setNewUsernameInput('');
       setNewUsernameAvail({ checking: false, available: null, reason: '' });
@@ -587,13 +591,17 @@ export function AuthModal({
             </div>
             <button
               type="button"
-              disabled={loading || !newUsernameInput.trim()}
+              disabled={loading || newUsernameAvail.checking || !newUsernameInput.trim()}
               onClick={() =>
                 checkUsernameLive(newUsernameInput, setNewUsernameAvail, currentUser.uid)
               }
               className="rounded-lg border border-stone-700 bg-stone-950 px-3 py-2 text-xs font-semibold text-stone-200 hover:border-amber-500 whitespace-nowrap shrink-0"
             >
-              Check
+              {newUsernameAvail.checking ? (
+                <ArcadeInlineSpinner size={14} label="Checking..." />
+              ) : (
+                'Check'
+              )}
             </button>
           </div>
 
@@ -626,12 +634,29 @@ export function AuthModal({
           </div>
         )}
 
+        {loading && (
+          <ArcadeCircularLoader
+            active={loading}
+            variant="compact"
+            messages={[
+              'Verifying your unique username...',
+              'Preparing your arcade...',
+              'Almost there!',
+            ]}
+            subtitle="Checking PostgreSQL player directory"
+          />
+        )}
+
         <button
           type="submit"
           disabled={loading || newUsernameAvail.available === false}
-          className="w-full rounded-lg bg-amber-500 px-4 py-2.5 text-sm font-bold text-stone-950 transition-colors hover:bg-amber-400 disabled:opacity-50"
+          className="flex w-full items-center justify-center gap-2 rounded-lg bg-amber-500 px-4 py-2.5 text-sm font-bold text-stone-950 transition-colors hover:bg-amber-400 disabled:opacity-50"
         >
-          {loading ? 'Validating & Saving Username...' : 'Confirm Username & Enter Arcade'}
+          {loading ? (
+            <ArcadeInlineSpinner size={16} label="Validating & Saving Username..." />
+          ) : (
+            'Confirm Username & Enter Arcade'
+          )}
         </button>
       </form>
 
@@ -993,20 +1018,38 @@ export function AuthModal({
               </div>
             )}
 
+            {loading && (
+              <ArcadeCircularLoader
+                active={loading}
+                variant="compact"
+                messages={[
+                  mode === 'signup'
+                    ? 'Creating your arcade notebook...'
+                    : mode === 'signin'
+                    ? 'Signing in to Her Little Arcade...'
+                    : 'Updating account security...',
+                  'Getting everything ready...',
+                  'Almost there!',
+                ]}
+              />
+            )}
+
             <button
               type="submit"
               disabled={loading}
-              className="w-full rounded-lg bg-amber-500 px-4 py-2.5 text-sm font-bold text-stone-950 transition-colors hover:bg-amber-400 disabled:opacity-50 whitespace-nowrap shrink-0"
+              className="flex w-full items-center justify-center gap-2 rounded-lg bg-amber-500 px-4 py-2.5 text-sm font-bold text-stone-950 transition-colors hover:bg-amber-400 disabled:opacity-50 whitespace-nowrap shrink-0"
             >
-              {loading
-                ? 'Authenticating...'
-                : mode === 'signup'
-                ? 'Continue to Choose Username'
-                : mode === 'signin'
-                ? 'Sign In with Email'
-                : resetStep === 'request'
-                ? 'Send Password Reset Code'
-                : 'Confirm New Password'}
+              {loading ? (
+                <ArcadeInlineSpinner size={16} label="Authenticating..." />
+              ) : mode === 'signup' ? (
+                'Continue to Choose Username'
+              ) : mode === 'signin' ? (
+                'Sign In with Email'
+              ) : resetStep === 'request' ? (
+                'Send Password Reset Code'
+              ) : (
+                'Confirm New Password'
+              )}
             </button>
           </form>
 
