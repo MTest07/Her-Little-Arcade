@@ -21,8 +21,9 @@ export const users = pgTable('users', {
   losses: integer('losses').notNull().default(0),
   draws: integer('draws').notNull().default(0),
   theme: text('theme').notNull().default('twilight-cocoa'),
+  equippedSkin: text('equipped_skin').notNull().default('skin-classic-notebook'),
   favoriteGames: text('favorite_games').notNull().default('[]'),
-  unlockedItems: text('unlocked_items').notNull().default('["avatar-kitsune","avatar-star-cat","theme-twilight-cocoa","pet-bell-collar"]'),
+  unlockedItems: text('unlocked_items').notNull().default('["avatar-kitsune","avatar-star-cat","theme-twilight-cocoa","pet-bell-collar","skin-classic-notebook"]'),
   petState: text('pet_state').notNull().default('{"name":"Mochi","hunger":85,"happiness":90,"energy":90,"accessory":"bell-collar","stage":1}'),
   presenceStatus: text('presence_status').notNull().default('online'), // 'online' | 'in_queue' | 'in_match' | 'offline'
   activeRoomCode: text('active_room_code').notNull().default(''),
@@ -43,6 +44,7 @@ export const couplePairings = pgTable('couple_pairings', {
   coupleBio: text('couple_bio').notNull().default(''),
   coupleBanner: text('couple_banner').notNull().default('twilight-lanterns'),
   coupleTitle: text('couple_title').notNull().default('Newborn Duo'),
+  equippedCoupleSkin: text('equipped_couple_skin').notNull().default('skin-classic-notebook'),
   coupleTrophies: integer('couple_trophies').notNull().default(0),
   highestTrophies: integer('highest_trophies').notNull().default(0),
   claimedTrophyMilestones: text('claimed_trophy_milestones').notNull().default('[]'),
@@ -107,11 +109,50 @@ export const dailyChallenges = pgTable('daily_challenges', {
   id: serial('id').primaryKey(),
   userUid: text('user_uid').notNull(),
   challengeKey: text('challenge_key').notNull(),
+  periodType: text('period_type').notNull().default('daily'), // 'daily' | 'weekly' | 'monthly'
+  periodKey: text('period_key').notNull().default(''),
   progress: integer('progress').notNull().default(0),
   target: integer('target').notNull().default(1),
   completed: integer('completed').notNull().default(0),
   claimed: integer('claimed').notNull().default(0),
+  xpAwarded: integer('xp_awarded').notNull().default(0),
+  claimedAt: timestamp('claimed_at'),
   updatedAt: timestamp('updated_at').defaultNow(),
+});
+
+export const seasons = pgTable('seasons', {
+  id: serial('id').primaryKey(),
+  seasonNumber: integer('season_number').notNull().unique(),
+  title: text('title').notNull(),
+  status: text('status').notNull().default('active'), // 'active' | 'completed'
+  startsAt: timestamp('starts_at').notNull(),
+  endsAt: timestamp('ends_at').notNull(),
+  bracketConfigJson: text('bracket_config_json').notNull().default('{}'),
+  isTransitioning: boolean('is_transitioning').notNull().default(false),
+  completedAt: timestamp('completed_at'),
+  createdAt: timestamp('created_at').defaultNow(),
+});
+
+export const seasonStandings = pgTable('season_standings', {
+  id: serial('id').primaryKey(),
+  seasonId: integer('season_id').notNull(),
+  seasonNumber: integer('season_number').notNull(),
+  rank: integer('rank').notNull(),
+  coupleId: integer('couple_id').notNull(),
+  coupleName: text('couple_name').notNull(),
+  requesterUid: text('requester_uid').notNull(),
+  requesterUsername: text('requester_username').notNull(),
+  partnerUid: text('partner_uid').notNull(),
+  partnerUsername: text('partner_username').notNull(),
+  finalTrophies: integer('final_trophies').notNull().default(0),
+  coupleWins: integer('couple_wins').notNull().default(0),
+  coupleLosses: integer('couple_losses').notNull().default(0),
+  coupleDraws: integer('couple_draws').notNull().default(0),
+  skinRewardId: text('skin_reward_id').notNull().default(''),
+  skinRarity: text('skin_rarity').notNull().default(''),
+  coinReward: integer('coin_reward').notNull().default(0),
+  rewardKey: text('reward_key').notNull().unique(),
+  createdAt: timestamp('created_at').defaultNow(),
 });
 
 export const matchmakingQueue = pgTable('matchmaking_queue', {
@@ -143,7 +184,7 @@ export const coinTransactions = pgTable('coin_transactions', {
   coupleId: integer('couple_id').notNull().default(0),
   amount: integer('amount').notNull(),
   balanceAfter: integer('balance_after').notNull(),
-  txType: text('tx_type').notNull(), // '2v2_match_reward' | 'shop_purchase' | 'rename_card_purchase'
+  txType: text('tx_type').notNull(), // '2v2_match_reward' | 'shop_purchase' | 'rename_card_purchase' | 'seasonal_leaderboard_reward'
   referenceId: text('reference_id').notNull().default(''),
   description: text('description').notNull(),
   createdAt: timestamp('created_at').defaultNow(),
@@ -178,5 +219,6 @@ export const gameRecordsRelations = relations(gameRecords, ({ one }) => ({
     references: [users.uid],
   }),
 }));
+
 
 

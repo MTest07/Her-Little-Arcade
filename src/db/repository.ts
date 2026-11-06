@@ -7,6 +7,8 @@ import {
   rooms,
   personalizedContent,
   dailyChallenges,
+  seasons,
+  seasonStandings,
   matchmakingQueue,
   coinTransactions,
   gameInvitations,
@@ -19,6 +21,12 @@ import {
   REWARD_SHOP_ITEMS,
   RENAME_CARD_COST_COINS,
   TROPHY_ROAD_MILESTONES,
+  ARCADE_SKINS,
+  ARCADE_CHALLENGE_CATALOG,
+  getChallengePeriodWindow,
+  DEFAULT_SEASONAL_BRACKET_CONFIG,
+  computeDynamicSeasonalBracket,
+  SeasonalBracketConfig,
 } from '../lib/arcade-data.ts';
 import { generateFreshGameSeed } from '../lib/game-randomizer.ts';
 
@@ -84,6 +92,15 @@ export function sanitizeUserRow(row: typeof users.$inferSelect) {
       row.username &&
       row.username.trim().length >= 3
   );
+  let unlockedParsed: string[] = [];
+  try {
+    unlockedParsed = JSON.parse(row.unlockedItems || '[]');
+  } catch {
+    unlockedParsed = [];
+  }
+  if (!unlockedParsed.includes('skin-classic-notebook')) {
+    unlockedParsed.push('skin-classic-notebook');
+  }
   return {
     id: row.id,
     uid: row.uid,
@@ -101,8 +118,9 @@ export function sanitizeUserRow(row: typeof users.$inferSelect) {
     losses: row.losses,
     draws: row.draws,
     theme: row.theme,
+    equippedSkin: row.equippedSkin || 'skin-classic-notebook',
     favoriteGames: row.favoriteGames,
-    unlockedItems: row.unlockedItems,
+    unlockedItems: JSON.stringify(unlockedParsed),
     petState: row.petState,
     presenceStatus: online ? row.presenceStatus || 'online' : 'offline',
     activeRoomCode: row.activeRoomCode || '',
@@ -312,6 +330,15 @@ export async function redeemRenameCardForUsername(uid: string, desiredUsername: 
 
 export async function purchaseRewardShopItem(uid: string, itemId: string) {
   try {
+    const seasonalSkin = ARCADE_SKINS.find(
+      (s) => s.id === itemId && s.acquisitionSource === 'seasonal_exclusive'
+    );
+    if (seasonalSkin) {
+      throw new Error(
+        `"${seasonalSkin.name}" is an Exclusive Seasonal Championship Skin (${seasonalSkin.rarity}) awarded only to Top 3 Couples at the end of a season.`
+      );
+    }
+
     const shopItem = REWARD_SHOP_ITEMS.find((item) => item.id === itemId);
     if (!shopItem) {
       throw new Error('Reward item not found in the official shop catalog.');
@@ -347,6 +374,8 @@ export async function purchaseRewardShopItem(uid: string, itemId: string) {
     const nextUnlocked = shopItem.consumable
       ? unlockedList
       : Array.from(new Set([...unlockedList, shopItem.id]));
+    const nextEquippedSkin =
+      shopItem.category === 'skin' ? shopItem.id : user.equippedSkin || 'skin-classic-notebook';
 
     const updated = await db
       .update(users)
@@ -354,6 +383,7 @@ export async function purchaseRewardShopItem(uid: string, itemId: string) {
         coins: nextCoins,
         renameCards: nextRenameCards,
         unlockedItems: JSON.stringify(nextUnlocked),
+        equippedSkin: nextEquippedSkin,
         lastSeenAt: new Date(),
       })
       .where(eq(users.uid, uid))
@@ -361,20 +391,92 @@ export async function purchaseRewardShopItem(uid: string, itemId: string) {
 
     const coupleCtx = await getCoupleContextForUser(uid);
 
-    await db.insert(coinTransactions).values({
-      userUid: uid,
-      coupleId: coupleCtx.activeCouple?.id || 0,
-      amount: -shopItem.costCoins,
-      balanceAfter: nextCoins,
-      txType: shopItem.id === 'rename-card' ? 'rename_card_purchase' : 'shop_purchase',
-      referenceId: `shop-${shopItem.id}-${Date.now()}`,
-      description: `Purchased ${shopItem.name}`,
-    });
+    if (shopItem.costCoins > 0) {
+      await db.insert(coinTransactions).values({
+        userUid: uid,
+        coupleId: coupleCtx.activeCouple?.id || 0,
+        amount: -shopItem.costCoins,
+        balanceAfter: nextCoins,
+        txType: shopItem.id === 'rename-card' ? 'rename_card_purchase' : 'shop_purchase',
+        referenceId: `shop-${shopItem.id}-${Date.now()}`,
+        description: `Purchased ${shopItem.name}`,
+      });
+    }
 
     return sanitizeUserRow(updated[0]);
   } catch (error) {
     console.error('Database purchaseRewardShopItem failed:', error);
     const msg = error instanceof Error ? error.message : 'Failed to purchase item.';
+    throw new Error(msg, { cause: error });
+  }
+}
+
+export async function equipOrUnequipSkin(
+  uid: string,
+  skinId: string,
+  applyToCouple?: boolean
+) {
+  try {
+    const userRows = await db.select().from(users).where(eq(users.uid, uid));
+    if (!userRows.length) {
+      throw new Error('Player account not found.');
+    }
+    const user = userRows[0];
+
+    const targetSkinId = (skinId || '').trim() || 'skin-classic-notebook';
+    const skinDef = ARCADE_SKINS.find(
+      (s) => s.id === targetSkinId || s.previewCode === targetSkinId
+    );
+    if (!skinDef) {
+      throw new Error('Selected skin does not exist in the arcade catalog.');
+    }
+
+    const unlockedList: string[] = (() => {
+      try {
+        return JSON.parse(user.unlockedItems || '[]');
+      } catch {
+        return [];
+      }
+    })();
+
+    const isStarter = skinDef.acquisitionSource === 'starter' || skinDef.id === 'skin-classic-notebook';
+    if (!isStarter && !unlockedList.includes(skinDef.id)) {
+      throw new Error(
+        `You cannot equip "${skinDef.name}" (${skinDef.rarity}) because you do not own it yet.`
+      );
+    }
+
+    const nextUnlocked = isStarter
+      ? Array.from(new Set([...unlockedList, skinDef.id]))
+      : unlockedList;
+
+    const updated = await db
+      .update(users)
+      .set({
+        equippedSkin: skinDef.id,
+        unlockedItems: JSON.stringify(nextUnlocked),
+        lastSeenAt: new Date(),
+      })
+      .where(eq(users.uid, uid))
+      .returning();
+
+    if (applyToCouple) {
+      const coupleCtx = await getCoupleContextForUser(uid);
+      if (coupleCtx.activeCouple) {
+        await db
+          .update(couplePairings)
+          .set({
+            equippedCoupleSkin: skinDef.id,
+            updatedAt: new Date(),
+          })
+          .where(eq(couplePairings.id, coupleCtx.activeCouple.id));
+      }
+    }
+
+    return sanitizeUserRow(updated[0]);
+  } catch (error) {
+    console.error('Database equipOrUnequipSkin failed:', error);
+    const msg = error instanceof Error ? error.message : 'Failed to equip skin.';
     throw new Error(msg, { cause: error });
   }
 }
@@ -1122,11 +1224,658 @@ export async function unpairCoupleAccounts(actorUid: string) {
 }
 
 /* ============================================================================
+   DAILY (24H), WEEKLY (7D) & MONTHLY (1M) CHALLENGES + SEASONAL LEADERBOARD
+   ============================================================================ */
+
+export async function syncAndEvaluatePlayerChallenges(uid: string) {
+  if (!uid) {
+    return {
+      activeChallenges: [],
+      challengeHistory: [],
+      periodWindows: {
+        daily: getChallengePeriodWindow('daily'),
+        weekly: getChallengePeriodWindow('weekly'),
+        monthly: getChallengePeriodWindow('monthly'),
+      },
+    };
+  }
+
+  const now = new Date();
+  const periodWindows = {
+    daily: getChallengePeriodWindow('daily', now),
+    weekly: getChallengePeriodWindow('weekly', now),
+    monthly: getChallengePeriodWindow('monthly', now),
+  };
+
+  const userRecords = await db
+    .select()
+    .from(gameRecords)
+    .where(eq(gameRecords.userUid, uid))
+    .orderBy(desc(gameRecords.createdAt));
+
+  let existingRows = await db
+    .select()
+    .from(dailyChallenges)
+    .where(eq(dailyChallenges.userUid, uid))
+    .orderBy(desc(dailyChallenges.updatedAt));
+
+  const activeChallengesOut = [];
+
+  for (const ch of ARCADE_CHALLENGE_CATALOG) {
+    const winInfo = periodWindows[ch.periodType];
+    const startMs = new Date(winInfo.startsAtIso).getTime();
+    const endMs = new Date(winInfo.endsAtIso).getTime();
+
+    // Filter verified gameRecords within this challenge's active period window
+    const periodRecords = userRecords.filter((r) => {
+      const ts = r.createdAt ? new Date(r.createdAt).getTime() : 0;
+      return ts >= startMs && ts < endMs;
+    });
+
+    let verifiedCount = 0;
+    if (ch.metricType === 'specific_games') {
+      const allowed = ch.eligibleGameIds || [ch.gameId];
+      verifiedCount = periodRecords.filter((r) => allowed.includes(r.gameId)).length;
+    } else if (ch.metricType === 'any_matches_played') {
+      verifiedCount = periodRecords.length;
+    } else if (ch.metricType === 'any_wins') {
+      verifiedCount = periodRecords.filter(
+        (r) => r.result === 'win' || r.result === 'completed'
+      ).length;
+    } else if (ch.metricType === 'single_matches') {
+      verifiedCount = periodRecords.filter((r) => r.mode === 'single').length;
+    } else if (ch.metricType === 'multiplayer_1v1_matches') {
+      verifiedCount = periodRecords.filter((r) => r.mode === '1v1').length;
+    } else if (ch.metricType === 'multiplayer_2v2_matches') {
+      verifiedCount = periodRecords.filter(
+        (r) => r.mode === '2v2' || r.mode === '2v2_couple'
+      ).length;
+    } else if (ch.metricType === 'multiplayer_2v2_wins') {
+      verifiedCount = periodRecords.filter(
+        (r) =>
+          (r.mode === '2v2' || r.mode === '2v2_couple') &&
+          (r.result === 'win' || r.result === 'completed')
+      ).length;
+    } else if (ch.metricType === 'high_score_200') {
+      verifiedCount = periodRecords.filter((r) => (r.score || 0) >= 200).length;
+    }
+
+    let currentRow = existingRows.find(
+      (r) => r.challengeKey === ch.key && r.periodKey === winInfo.periodKey
+    );
+
+    if (!currentRow) {
+      const initialProgress = Math.min(ch.target, verifiedCount);
+      const isCompleted = initialProgress >= ch.target ? 1 : 0;
+      const inserted = await db
+        .insert(dailyChallenges)
+        .values({
+          userUid: uid,
+          challengeKey: ch.key,
+          periodType: ch.periodType,
+          periodKey: winInfo.periodKey,
+          progress: initialProgress,
+          target: ch.target,
+          completed: isCompleted,
+          claimed: 0,
+          xpAwarded: 0,
+          updatedAt: now,
+        })
+        .returning();
+      currentRow = inserted[0];
+      existingRows = [currentRow, ...existingRows];
+    } else {
+      const nextProgress = Math.min(
+        ch.target,
+        Math.max(currentRow.progress || 0, verifiedCount)
+      );
+      const nextCompleted = nextProgress >= ch.target ? 1 : currentRow.completed || 0;
+      if (
+        nextProgress !== currentRow.progress ||
+        nextCompleted !== currentRow.completed
+      ) {
+        const updated = await db
+          .update(dailyChallenges)
+          .set({
+            progress: nextProgress,
+            target: ch.target,
+            completed: nextCompleted,
+            updatedAt: now,
+          })
+          .where(eq(dailyChallenges.id, currentRow.id))
+          .returning();
+        currentRow = updated[0] || currentRow;
+      }
+    }
+
+    activeChallengesOut.push({
+      ...ch,
+      id: currentRow.id,
+      dbId: currentRow.id,
+      challengeKey: ch.key,
+      periodKey: winInfo.periodKey,
+      progress: currentRow.progress,
+      target: ch.target,
+      completed: Boolean(currentRow.claimed),
+      objectiveCompleted: Boolean(currentRow.completed || currentRow.progress >= ch.target),
+      claimed: Boolean(currentRow.claimed),
+      xpAwarded: currentRow.xpAwarded || 0,
+      claimedAt: currentRow.claimedAt ? new Date(currentRow.claimedAt).toISOString() : null,
+      startsAtIso: winInfo.startsAtIso,
+      endsAtIso: winInfo.endsAtIso,
+      expiresAtIso: winInfo.endsAtIso,
+      remainingMs: winInfo.remainingMs,
+      remainingLabel: winInfo.remainingLabel,
+      scheduleLabel: winInfo.scheduleLabel,
+    });
+  }
+
+  const catalogByKey = new Map(ARCADE_CHALLENGE_CATALOG.map((c) => [c.key, c]));
+  const challengeHistory = existingRows
+    .filter((r) => r.completed === 1 || r.claimed === 1)
+    .slice(0, 40)
+    .map((r) => {
+      const def = catalogByKey.get(r.challengeKey);
+      return {
+        id: r.id,
+        challengeKey: r.challengeKey,
+        title: def?.title || r.challengeKey,
+        periodType: (r.periodType || def?.periodType || 'daily') as 'daily' | 'weekly' | 'monthly',
+        difficulty: def?.difficulty || 'Easy',
+        periodKey: r.periodKey || 'legacy',
+        progress: r.progress,
+        target: r.target,
+        completed: Boolean(r.completed),
+        claimed: Boolean(r.claimed),
+        xpAwarded: r.xpAwarded || def?.xpReward || 25,
+        claimedAt: r.claimedAt || r.updatedAt,
+      };
+    });
+
+  return {
+    activeChallenges: activeChallengesOut,
+    challengeHistory,
+    periodWindows,
+  };
+}
+
+export async function recordPetCareChallengeIncrement(uid: string) {
+  if (!uid) return;
+  const now = new Date();
+  const dailyWin = getChallengePeriodWindow('daily', now);
+  const rows = await db
+    .select()
+    .from(dailyChallenges)
+    .where(eq(dailyChallenges.userUid, uid));
+  const petRow = rows.find(
+    (r) => r.challengeKey === 'daily-pet-care' && r.periodKey === dailyWin.periodKey
+  );
+  if (!petRow) {
+    await db.insert(dailyChallenges).values({
+      userUid: uid,
+      challengeKey: 'daily-pet-care',
+      periodType: 'daily',
+      periodKey: dailyWin.periodKey,
+      progress: 1,
+      target: 3,
+      completed: 0,
+      claimed: 0,
+      xpAwarded: 0,
+      updatedAt: now,
+    });
+  } else if (petRow.progress < petRow.target) {
+    const nextProg = Math.min(petRow.target, petRow.progress + 1);
+    await db
+      .update(dailyChallenges)
+      .set({
+        progress: nextProg,
+        completed: nextProg >= petRow.target ? 1 : petRow.completed,
+        updatedAt: now,
+      })
+      .where(eq(dailyChallenges.id, petRow.id));
+  }
+}
+
+export async function claimChallengeReward(uid: string, challengeKey: string) {
+  try {
+    const def = ARCADE_CHALLENGE_CATALOG.find((c) => c.key === challengeKey);
+    if (!def) {
+      throw new Error('Challenge definition not found.');
+    }
+
+    await syncAndEvaluatePlayerChallenges(uid);
+    const winInfo = getChallengePeriodWindow(def.periodType);
+
+    const rows = await db
+      .select()
+      .from(dailyChallenges)
+      .where(eq(dailyChallenges.userUid, uid));
+
+    const targetRow = rows.find(
+      (r) => r.challengeKey === challengeKey && r.periodKey === winInfo.periodKey
+    );
+
+    if (!targetRow || (targetRow.progress < def.target && !targetRow.completed)) {
+      throw new Error(
+        `Challenge "${def.title}" is not yet complete (${targetRow?.progress || 0}/${def.target}). Complete the objective before claiming.`
+      );
+    }
+
+    if (targetRow.claimed === 1) {
+      throw new Error(
+        `You have already claimed the reward for "${def.title}" in the current ${def.periodType} period (${winInfo.periodKey}).`
+      );
+    }
+
+    const userRows = await db.select().from(users).where(eq(users.uid, uid));
+    if (!userRows.length) {
+      throw new Error('Player account not found.');
+    }
+    const user = userRows[0];
+
+    const now = new Date();
+    await db
+      .update(dailyChallenges)
+      .set({
+        completed: 1,
+        claimed: 1,
+        xpAwarded: def.xpReward,
+        claimedAt: now,
+        updatedAt: now,
+      })
+      .where(eq(dailyChallenges.id, targetRow.id));
+
+    // Strictly award XP only (0 Coins) to preserve 2v2 coin economy rules
+    const nextXp = user.xp + def.xpReward;
+    const { level: nextLevel } = calculateLevelFromXp(nextXp);
+
+    const updatedUserRows = await db
+      .update(users)
+      .set({
+        xp: nextXp,
+        level: nextLevel,
+        lastSeenAt: now,
+      })
+      .where(eq(users.uid, uid))
+      .returning();
+
+    const synced = await syncAndEvaluatePlayerChallenges(uid);
+
+    return {
+      profile: sanitizeUserRow(updatedUserRows[0]),
+      xpAwarded: def.xpReward,
+      challengeKey: def.key,
+      periodKey: winInfo.periodKey,
+      ...synced,
+    };
+  } catch (error) {
+    console.error('Database claimChallengeReward failed:', error);
+    const msg = error instanceof Error ? error.message : 'Failed to claim challenge reward.';
+    throw new Error(msg, { cause: error });
+  }
+}
+
+export function parseSeasonalBracketConfig(rawJson: string | undefined | null): SeasonalBracketConfig {
+  try {
+    const parsed = JSON.parse(rawJson || '{}');
+    return {
+      seasonDurationDays: Number(parsed.seasonDurationDays || DEFAULT_SEASONAL_BRACKET_CONFIG.seasonDurationDays),
+      rank4BaseCoins: Number(parsed.rank4BaseCoins || DEFAULT_SEASONAL_BRACKET_CONFIG.rank4BaseCoins),
+      minEligibleCoins: Number(parsed.minEligibleCoins || DEFAULT_SEASONAL_BRACKET_CONFIG.minEligibleCoins),
+      curveExponent: Number(parsed.curveExponent || DEFAULT_SEASONAL_BRACKET_CONFIG.curveExponent),
+    };
+  } catch {
+    return { ...DEFAULT_SEASONAL_BRACKET_CONFIG };
+  }
+}
+
+export async function ensureActiveSeasonAndCheckRollover() {
+  const allSeasons = await db
+    .select()
+    .from(seasons)
+    .orderBy(desc(seasons.seasonNumber));
+
+  const now = new Date();
+  let activeSeason = allSeasons.find((s) => s.status === 'active') || null;
+
+  if (!activeSeason) {
+    const nextSeasonNumber = (allSeasons[0]?.seasonNumber || 0) + 1;
+    const year = now.getUTCFullYear();
+    const month = now.getUTCMonth();
+    const startsAt =
+      nextSeasonNumber === 1
+        ? new Date(Date.UTC(year, month, 1, 0, 0, 0, 0))
+        : now;
+    const endsAt =
+      nextSeasonNumber === 1
+        ? new Date(Date.UTC(year, month + 1, 1, 0, 0, 0, 0))
+        : new Date(now.getTime() + DEFAULT_SEASONAL_BRACKET_CONFIG.seasonDurationDays * 86400000);
+
+    const inserted = await db
+      .insert(seasons)
+      .values({
+        seasonNumber: nextSeasonNumber,
+        title: `Season ${nextSeasonNumber} · Starlight Sketchbook Cup`,
+        status: 'active',
+        startsAt,
+        endsAt,
+        bracketConfigJson: JSON.stringify(DEFAULT_SEASONAL_BRACKET_CONFIG),
+        isTransitioning: false,
+      })
+      .returning();
+    activeSeason = inserted[0];
+  }
+
+  // Automatic season-end check: if the active season's endsAt has passed, execute rollover atomically
+  if (
+    activeSeason &&
+    activeSeason.status === 'active' &&
+    !activeSeason.isTransitioning &&
+    now.getTime() >= new Date(activeSeason.endsAt).getTime()
+  ) {
+    const rolled = await executeSeasonEndRollover(activeSeason.id);
+    if (rolled?.newSeason) {
+      activeSeason = rolled.newSeason;
+    }
+  }
+
+  return activeSeason;
+}
+
+export async function executeSeasonEndRollover(seasonId: number) {
+  const seasonRows = await db.select().from(seasons).where(eq(seasons.id, seasonId));
+  if (!seasonRows.length) {
+    throw new Error('Season record not found.');
+  }
+  const targetSeason = seasonRows[0];
+  if (targetSeason.status !== 'active' || targetSeason.isTransitioning) {
+    return null;
+  }
+
+  // Acquire atomic transition lock
+  await db
+    .update(seasons)
+    .set({ isTransitioning: true })
+    .where(eq(seasons.id, targetSeason.id));
+
+  try {
+    const config = parseSeasonalBracketConfig(targetSeason.bracketConfigJson);
+    const allUsers = await db.select().from(users);
+    const userByUid = new Map(allUsers.map((u) => [u.uid, u]));
+
+    const allActiveCouples = await db
+      .select()
+      .from(couplePairings)
+      .where(eq(couplePairings.status, 'active'))
+      .orderBy(desc(couplePairings.coupleTrophies), desc(couplePairings.coupleWins));
+
+    // Eligible couples have > 0 active seasonal trophies
+    const eligibleCouples = allActiveCouples.filter((c) => (c.coupleTrophies || 0) > 0);
+    const bracket = computeDynamicSeasonalBracket(
+      eligibleCouples.map((c) => ({
+        id: c.id,
+        coupleName: c.coupleName || `Couple #${c.pairingCode}`,
+        coupleTrophies: c.coupleTrophies || 0,
+      })),
+      config
+    );
+
+    const existingStandings = await db
+      .select()
+      .from(seasonStandings)
+      .where(eq(seasonStandings.seasonId, targetSeason.id));
+    const existingKeys = new Set(existingStandings.map((s) => s.rewardKey));
+
+    const top1Skin = ARCADE_SKINS.find((s) => s.seasonExclusiveRank === 1)!;
+    const top2Skin = ARCADE_SKINS.find((s) => s.seasonExclusiveRank === 2)!;
+    const top3Skin = ARCADE_SKINS.find((s) => s.seasonExclusiveRank === 3)!;
+
+    const savedStandings = [];
+
+    for (let idx = 0; idx < eligibleCouples.length; idx++) {
+      const couple = eligibleCouples[idx];
+      const rank = idx + 1;
+      const rewardKey = `season-${targetSeason.seasonNumber}-couple-${couple.id}`;
+      if (existingKeys.has(rewardKey)) continue;
+
+      let skinRewardId = '';
+      let skinRarity = '';
+      let coinReward = 0;
+
+      if (rank === 1) {
+        skinRewardId = top1Skin.id;
+        skinRarity = top1Skin.rarity;
+      } else if (rank === 2) {
+        skinRewardId = top2Skin.id;
+        skinRarity = top2Skin.rarity;
+      } else if (rank === 3) {
+        skinRewardId = top3Skin.id;
+        skinRarity = top3Skin.rarity;
+      } else {
+        coinReward = bracket.perRankCoinMap[rank] || 0;
+      }
+
+      const reqUser = userByUid.get(couple.requesterUid);
+      const partUser = couple.partnerUid ? userByUid.get(couple.partnerUid) : undefined;
+
+      const insertedStanding = await db
+        .insert(seasonStandings)
+        .values({
+          seasonId: targetSeason.id,
+          seasonNumber: targetSeason.seasonNumber,
+          rank,
+          coupleId: couple.id,
+          coupleName:
+            couple.coupleName ||
+            `${reqUser?.username || 'Partner 1'} & ${partUser?.username || 'Partner 2'}`,
+          requesterUid: couple.requesterUid,
+          requesterUsername: reqUser?.username || 'Partner 1',
+          partnerUid: couple.partnerUid || '',
+          partnerUsername: partUser?.username || 'Partner 2',
+          finalTrophies: couple.coupleTrophies || 0,
+          coupleWins: couple.coupleWins || 0,
+          coupleLosses: couple.coupleLosses || 0,
+          coupleDraws: couple.coupleDraws || 0,
+          skinRewardId,
+          skinRarity,
+          coinReward,
+          rewardKey,
+        })
+        .returning();
+
+      savedStandings.push(insertedStanding[0]);
+
+      // Distribute seasonal reward to both partners idempotently
+      for (const partnerUid of [couple.requesterUid, couple.partnerUid]) {
+        if (!partnerUid) continue;
+        const freshRows = await db.select().from(users).where(eq(users.uid, partnerUid));
+        if (!freshRows.length) continue;
+        const pUser = freshRows[0];
+
+        if (skinRewardId) {
+          let unlockedList: string[] = [];
+          try {
+            unlockedList = JSON.parse(pUser.unlockedItems || '[]');
+          } catch {
+            unlockedList = [];
+          }
+          const seasonBadgeCode = `season-${targetSeason.seasonNumber}-rank-${rank}-${skinRewardId}`;
+          const nextUnlocked = Array.from(
+            new Set([...unlockedList, skinRewardId, seasonBadgeCode])
+          );
+          const nextEquipped =
+            !pUser.equippedSkin || pUser.equippedSkin === 'skin-classic-notebook'
+              ? skinRewardId
+              : pUser.equippedSkin;
+
+          await db
+            .update(users)
+            .set({
+              unlockedItems: JSON.stringify(nextUnlocked),
+              equippedSkin: nextEquipped,
+            })
+            .where(eq(users.uid, partnerUid));
+        }
+
+        if (coinReward > 0) {
+          const nextCoins = (pUser.coins || 0) + coinReward;
+          await db
+            .update(users)
+            .set({
+              coins: nextCoins,
+            })
+            .where(eq(users.uid, partnerUid));
+
+          await db.insert(coinTransactions).values({
+            userUid: partnerUid,
+            coupleId: couple.id,
+            amount: coinReward,
+            balanceAfter: nextCoins,
+            txType: 'seasonal_leaderboard_reward',
+            referenceId: `${rewardKey}-${partnerUid}`,
+            description: `Season ${targetSeason.seasonNumber} Rank #${rank} Couple Leaderboard Reward (${couple.coupleName})`,
+          });
+        }
+      }
+
+      if (skinRewardId) {
+        await db
+          .update(couplePairings)
+          .set({
+            equippedCoupleSkin: skinRewardId,
+            updatedAt: new Date(),
+          })
+          .where(eq(couplePairings.id, couple.id));
+      }
+    }
+
+    // Reset EVERY active couple's seasonal coupleTrophies to 0 while preserving highestTrophies and lifetime stats
+    for (const c of allActiveCouples) {
+      await db
+        .update(couplePairings)
+        .set({
+          highestTrophies: Math.max(c.highestTrophies || 0, c.coupleTrophies || 0),
+          coupleTrophies: 0,
+          updatedAt: new Date(),
+        })
+        .where(eq(couplePairings.id, c.id));
+    }
+
+    const now = new Date();
+    await db
+      .update(seasons)
+      .set({
+        status: 'completed',
+        isTransitioning: false,
+        completedAt: now,
+      })
+      .where(eq(seasons.id, targetSeason.id));
+
+    const nextSeasonNumber = targetSeason.seasonNumber + 1;
+    const seasonThemes = [
+      'Starlight Sketchbook Cup',
+      'Clockwork Constellation Cup',
+      'Moonlit Lantern Regatta',
+      'Velvet Observatory Championship',
+    ];
+    const nextTitle = `Season ${nextSeasonNumber} · ${
+      seasonThemes[(nextSeasonNumber - 1) % seasonThemes.length]
+    }`;
+    const nextEndsAt = new Date(
+      now.getTime() + Math.max(1, config.seasonDurationDays) * 86400000
+    );
+
+    const newSeasonRows = await db
+      .insert(seasons)
+      .values({
+        seasonNumber: nextSeasonNumber,
+        title: nextTitle,
+        status: 'active',
+        startsAt: now,
+        endsAt: nextEndsAt,
+        bracketConfigJson: JSON.stringify(config),
+        isTransitioning: false,
+      })
+      .returning();
+
+    return {
+      completedSeason: targetSeason,
+      newSeason: newSeasonRows[0],
+      standingsSaved: savedStandings.length,
+    };
+  } catch (error) {
+    await db
+      .update(seasons)
+      .set({ isTransitioning: false })
+      .where(eq(seasons.id, targetSeason.id));
+    throw error;
+  }
+}
+
+export async function updateSeasonalBracketConfig(
+  actorUid: string,
+  updates: Partial<SeasonalBracketConfig>
+) {
+  const activeSeason = await ensureActiveSeasonAndCheckRollover();
+  if (!activeSeason) {
+    throw new Error('No active season found.');
+  }
+  const currentConfig = parseSeasonalBracketConfig(activeSeason.bracketConfigJson);
+  const nextConfig: SeasonalBracketConfig = {
+    seasonDurationDays: Math.max(
+      1,
+      Math.min(90, Number(updates.seasonDurationDays ?? currentConfig.seasonDurationDays))
+    ),
+    rank4BaseCoins: Math.max(
+      50,
+      Math.min(5000, Number(updates.rank4BaseCoins ?? currentConfig.rank4BaseCoins))
+    ),
+    minEligibleCoins: Math.max(
+      10,
+      Math.min(2000, Number(updates.minEligibleCoins ?? currentConfig.minEligibleCoins))
+    ),
+    curveExponent: Math.max(
+      0.5,
+      Math.min(3, Number(updates.curveExponent ?? currentConfig.curveExponent))
+    ),
+  };
+  if (nextConfig.minEligibleCoins > nextConfig.rank4BaseCoins) {
+    nextConfig.minEligibleCoins = nextConfig.rank4BaseCoins;
+  }
+
+  const updated = await db
+    .update(seasons)
+    .set({
+      bracketConfigJson: JSON.stringify(nextConfig),
+    })
+    .where(eq(seasons.id, activeSeason.id))
+    .returning();
+
+  return {
+    season: updated[0],
+    bracketConfig: nextConfig,
+  };
+}
+
+export async function concludeActiveSeasonNow(actorUid: string) {
+  const activeSeason = await ensureActiveSeasonAndCheckRollover();
+  if (!activeSeason) {
+    throw new Error('No active season to conclude.');
+  }
+  const result = await executeSeasonEndRollover(activeSeason.id);
+  return result;
+}
+
+/* ============================================================================
    BOOTSTRAP & LEADERBOARD DATA (STRICT ZERO-MOCK + COUPLE TROPHY LEADERBOARD)
    ============================================================================ */
 
 export async function getArcadeBootstrapData(activeUid?: string) {
   try {
+    // 1. Ensure active competitive season exists & automatically process rollover if season timer expired
+    const activeSeason = await ensureActiveSeasonAndCheckRollover();
+    const bracketConfig = parseSeasonalBracketConfig(activeSeason?.bracketConfigJson);
+
     const allUserRows = await db.select().from(users).orderBy(desc(users.xp));
     const sanitizedPlayers = allUserRows.map(sanitizeUserRow);
     const userByUid = new Map(sanitizedPlayers.map((p) => [p.uid, p]));
@@ -1148,7 +1897,7 @@ export async function getArcadeBootstrapData(activeUid?: string) {
     const sevenDaysMs = 7 * 24 * 60 * 60 * 1000;
     const thirtyDaysMs = 30 * 24 * 60 * 60 * 1000;
 
-    // Enrich couples with both partners' usernames, avatars, and period trophy deltas
+    // Enrich couples with both partners' usernames, avatars, equipped skins, and period trophy deltas
     const enrichedCouplesLeaderboard = activeCouplesRaw.map((c) => {
       const partnerA = userByUid.get(c.requesterUid) || null;
       const partnerB = c.partnerUid ? userByUid.get(c.partnerUid) || null : null;
@@ -1176,12 +1925,56 @@ export async function getArcadeBootstrapData(activeUid?: string) {
 
       return {
         ...c,
+        equippedCoupleSkin: c.equippedCoupleSkin || 'skin-classic-notebook',
         requesterProfile: partnerA,
         partnerProfile: partnerB,
         weeklyTrophies: weeklyTrophies || c.coupleTrophies,
         monthlyTrophies: monthlyTrophies || c.coupleTrophies,
       };
     });
+
+    // Compute live Dynamic Seasonal Bracket based on actual eligible couples (coupleTrophies > 0)
+    const eligibleSeasonalCouples = enrichedCouplesLeaderboard
+      .filter((c) => (c.coupleTrophies || 0) > 0)
+      .map((c) => ({
+        id: c.id,
+        coupleName:
+          c.coupleName ||
+          `${c.requesterProfile?.username || 'Partner 1'} & ${c.partnerProfile?.username || 'Partner 2'}`,
+        coupleTrophies: c.coupleTrophies || 0,
+      }));
+
+    const dynamicBracket = computeDynamicSeasonalBracket(
+      eligibleSeasonalCouples,
+      bracketConfig
+    );
+
+    const allSeasons = await db
+      .select()
+      .from(seasons)
+      .orderBy(desc(seasons.seasonNumber))
+      .limit(12);
+
+    const pastStandings = await db
+      .select()
+      .from(seasonStandings)
+      .orderBy(desc(seasonStandings.seasonNumber), seasonStandings.rank)
+      .limit(100);
+
+    const seasonEndsAtMs = activeSeason?.endsAt
+      ? new Date(activeSeason.endsAt).getTime()
+      : nowMs + 30 * 86400000;
+    const seasonRemainingMs = Math.max(0, seasonEndsAtMs - nowMs);
+    const totalSec = Math.floor(seasonRemainingMs / 1000);
+    const sDays = Math.floor(totalSec / 86400);
+    const sHours = Math.floor((totalSec % 86400) / 3600);
+    const sMins = Math.floor((totalSec % 3600) / 60);
+    const seasonRemainingLabel =
+      sDays > 0
+        ? `${sDays}d ${sHours}h ${sMins}m`
+        : sHours > 0
+        ? `${sHours}h ${sMins}m`
+        : `${sMins}m`;
 
     const activeRooms = await db
       .select()
@@ -1213,12 +2006,17 @@ export async function getArcadeBootstrapData(activeUid?: string) {
         )
       : [];
 
-    const challengeRows = activeUid
-      ? await db
-          .select()
-          .from(dailyChallenges)
-          .where(eq(dailyChallenges.userUid, activeUid))
-      : [];
+    const challengeBundle = activeUid
+      ? await syncAndEvaluatePlayerChallenges(activeUid)
+      : {
+          activeChallenges: [],
+          challengeHistory: [],
+          periodWindows: {
+            daily: getChallengePeriodWindow('daily'),
+            weekly: getChallengePeriodWindow('weekly'),
+            monthly: getChallengePeriodWindow('monthly'),
+          },
+        };
 
     const userCoinLedger = activeUid
       ? await db
@@ -1261,7 +2059,22 @@ export async function getArcadeBootstrapData(activeUid?: string) {
       records: recentRecords.slice(0, 50),
       rooms: activeRooms,
       personalizedContent: scopedCustomItems,
-      challenges: challengeRows,
+      challenges: challengeBundle.activeChallenges,
+      challengeHistory: challengeBundle.challengeHistory,
+      challengePeriodWindows: challengeBundle.periodWindows,
+      seasonState: {
+        activeSeason: activeSeason
+          ? {
+              ...activeSeason,
+              remainingMs: seasonRemainingMs,
+              remainingLabel: seasonRemainingLabel,
+              bracketConfig,
+            }
+          : null,
+        dynamicBracket,
+        pastSeasons: allSeasons.filter((s) => s.status === 'completed'),
+        pastStandings,
+      },
       coupleContext: coupleCtx,
       coinTransactions: userCoinLedger,
       incomingInvitations,
@@ -2003,6 +2816,12 @@ export async function recordGameMatchResult(input: {
         .where(eq(couplePairings.id, c.id));
     }
 
+    // Automatically evaluate Daily, Weekly, and Monthly challenge progress for the player (and partner if multiplayer)
+    await syncAndEvaluatePlayerChallenges(input.userUid);
+    if (partnerProfile?.uid) {
+      await syncAndEvaluatePlayerChallenges(partnerProfile.uid);
+    }
+
     return {
       record: inserted[0],
       user: updatedUser ? sanitizeUserRow(updatedUser) : null,
@@ -2024,6 +2843,7 @@ export async function updatePlayerProfileFields(
   updates: {
     avatar?: string;
     theme?: string;
+    equippedSkin?: string;
     xp?: number;
     favoriteGames?: string[];
     unlockedItems?: string[];
@@ -2042,12 +2862,30 @@ export async function updatePlayerProfileFields(
       requestedXp > current.xp ? Math.min(current.xp + 25, requestedXp) : current.xp;
     const { level } = calculateLevelFromXp(safeXp);
 
+    let nextEquippedSkin = current.equippedSkin || 'skin-classic-notebook';
+    if (updates.equippedSkin) {
+      const unlockedList: string[] = (() => {
+        try {
+          return JSON.parse(current.unlockedItems || '[]');
+        } catch {
+          return [];
+        }
+      })();
+      if (
+        updates.equippedSkin === 'skin-classic-notebook' ||
+        unlockedList.includes(updates.equippedSkin)
+      ) {
+        nextEquippedSkin = updates.equippedSkin;
+      }
+    }
+
     // Note: `coins` and `username` are strictly omitted here so clients cannot modify coins or bypass Rename Cards.
     const rows = await db
       .update(users)
       .set({
         avatar: updates.avatar ?? current.avatar,
         theme: updates.theme ?? current.theme,
+        equippedSkin: nextEquippedSkin,
         xp: safeXp,
         level,
         favoriteGames: updates.favoriteGames
@@ -2063,6 +2901,10 @@ export async function updatePlayerProfileFields(
       })
       .where(eq(users.uid, uid))
       .returning();
+
+    if (updates.petState) {
+      await recordPetCareChallengeIncrement(uid);
+    }
 
     return sanitizeUserRow(rows[0]);
   } catch (error) {
@@ -2748,9 +3590,16 @@ export async function searchUsersAndCouplesForInvite(input: {
   inviteType: '1v1' | '2v2';
 }) {
   try {
-    const cleanQuery = (input.query || '').trim().toLowerCase();
+    const cleanQuery = (input.query || '')
+      .trim()
+      .replace(/^@+/, '')
+      .toLowerCase();
+
     const allUsers = await db.select().from(users).orderBy(desc(users.lastSeenAt));
-    const sanitizedUsers = allUsers.map(sanitizeUserRow);
+    // Only include registered accounts that have completed unique arcade username setup
+    const sanitizedUsers = allUsers
+      .map(sanitizeUserRow)
+      .filter((u) => u.usernameSetupCompleted && u.username.trim().length >= 3);
     const userMap = new Map(sanitizedUsers.map((u) => [u.uid, u]));
 
     const activeCouples = await db
@@ -2765,32 +3614,96 @@ export async function searchUsersAndCouplesForInvite(input: {
       if (c.partnerUid) coupleByUserUid.set(c.partnerUid, c);
     }
 
+    const actorCouple = coupleByUserUid.get(input.actorUid);
+    const actorPartnerUid = actorCouple
+      ? actorCouple.requesterUid === input.actorUid
+        ? actorCouple.partnerUid
+        : actorCouple.requesterUid
+      : '';
+
+    // Check pending invitations sent by this actor or actor's couple to prevent duplicates
+    const pendingInvites = await db
+      .select()
+      .from(gameInvitations)
+      .where(eq(gameInvitations.status, 'pending'));
+
+    const pending1v1ByTargetUid = new Map<string, typeof gameInvitations.$inferSelect>();
+    const pending2v2ByTargetCoupleId = new Map<number, typeof gameInvitations.$inferSelect>();
+    for (const inv of pendingInvites) {
+      if (inv.inviteType === '1v1' && inv.senderUid === input.actorUid) {
+        pending1v1ByTargetUid.set(inv.targetUid, inv);
+      }
+      if (
+        inv.inviteType === '2v2' &&
+        (inv.senderUid === input.actorUid ||
+          (actorCouple && inv.senderCoupleId === actorCouple.id))
+      ) {
+        pending2v2ByTargetCoupleId.set(inv.targetCoupleId, inv);
+      }
+    }
+
+    const meUser = userMap.get(input.actorUid);
+    const selfMatched = Boolean(
+      cleanQuery &&
+        meUser &&
+        meUser.username.toLowerCase().includes(cleanQuery)
+    );
+
     if (input.inviteType === '1v1') {
       const matchedPlayers = sanitizedUsers
         .filter((u) => {
           if (u.uid === input.actorUid) return false;
           if (!cleanQuery) return true;
+          // Strictly search the user's unique arcade username (case-insensitive partial match), never email or Google display name
           return u.username.toLowerCase().includes(cleanQuery);
         })
-        .slice(0, 12)
+        .sort((a, b) => {
+          const aLower = a.username.toLowerCase();
+          const bLower = b.username.toLowerCase();
+          if (cleanQuery) {
+            const aExact = aLower === cleanQuery ? 1 : 0;
+            const bExact = bLower === cleanQuery ? 1 : 0;
+            if (bExact !== aExact) return bExact - aExact;
+            const aStarts = aLower.startsWith(cleanQuery) ? 1 : 0;
+            const bStarts = bLower.startsWith(cleanQuery) ? 1 : 0;
+            if (bStarts !== aStarts) return bStarts - aStarts;
+          }
+          const aPartner = a.uid === actorPartnerUid ? 1 : 0;
+          const bPartner = b.uid === actorPartnerUid ? 1 : 0;
+          if (bPartner !== aPartner) return bPartner - aPartner;
+          const aOnline = a.isOnline ? 1 : 0;
+          const bOnline = b.isOnline ? 1 : 0;
+          if (bOnline !== aOnline) return bOnline - aOnline;
+          return aLower.localeCompare(bLower);
+        })
+        .slice(0, 20)
         .map((u) => {
           const c = coupleByUserUid.get(u.uid);
+          const pendingInv = pending1v1ByTargetUid.get(u.uid);
           return {
             uid: u.uid,
             username: u.username,
             avatar: u.avatar,
+            equippedSkin: u.equippedSkin || 'skin-classic-notebook',
             level: u.level,
             isOnline: u.isOnline,
+            presenceStatus: u.presenceStatus || (u.isOnline ? 'online' : 'offline'),
+            isPairedPartner: u.uid === actorPartnerUid,
             hasActiveCouple: Boolean(c),
             coupleName: c?.coupleName || '',
             coupleTrophies: c?.coupleTrophies || 0,
+            alreadyInvited: Boolean(pendingInv),
+            pendingRoomCode: pendingInv?.roomCode || '',
           };
         });
 
-      return { players: matchedPlayers, couples: [] };
+      return {
+        players: matchedPlayers,
+        couples: [],
+        selfMatchedUsername: selfMatched && meUser ? meUser.username : null,
+      };
     }
 
-    const actorCouple = coupleByUserUid.get(input.actorUid);
     const matchedCouples = activeCouples
       .filter((c) => {
         if (actorCouple && c.id === actorCouple.id) return false;
@@ -2804,22 +3717,30 @@ export async function searchUsersAndCouplesForInvite(input: {
           pB.username.toLowerCase().includes(cleanQuery)
         );
       })
-      .slice(0, 12)
+      .slice(0, 20)
       .map((c) => {
         const pA = userMap.get(c.requesterUid)!;
         const pB = userMap.get(c.partnerUid)!;
+        const pendingInv = pending2v2ByTargetCoupleId.get(c.id);
         return {
           coupleId: c.id,
           coupleName: c.coupleName || `${pA.username} & ${pB.username}`,
           coupleTitle: c.coupleTitle || 'Newborn Duo',
+          equippedCoupleSkin: c.equippedCoupleSkin || 'skin-classic-notebook',
           coupleTrophies: c.coupleTrophies || 0,
           bothOnline: Boolean(pA.isOnline && pB.isOnline),
+          alreadyInvited: Boolean(pendingInv),
+          pendingRoomCode: pendingInv?.roomCode || '',
           partnerA: { uid: pA.uid, username: pA.username, avatar: pA.avatar, isOnline: pA.isOnline },
           partnerB: { uid: pB.uid, username: pB.username, avatar: pB.avatar, isOnline: pB.isOnline },
         };
       });
 
-    return { players: [], couples: matchedCouples };
+    return {
+      players: [],
+      couples: matchedCouples,
+      selfMatchedUsername: selfMatched && meUser ? meUser.username : null,
+    };
   } catch (error) {
     console.error('Database searchUsersAndCouplesForInvite failed:', error);
     throw new Error('Failed to search usernames.', { cause: error });
@@ -2850,17 +3771,22 @@ export async function sendGameInvitationByUsername(input: {
     const senderCouple = senderCoupleCtx.activeCouple;
 
     if (input.inviteType === '1v1') {
-      const cleanTargetName = (input.targetUsername || '').trim().toLowerCase();
+      const cleanTargetName = (input.targetUsername || '')
+        .trim()
+        .replace(/^@+/, '')
+        .toLowerCase();
       if (!cleanTargetName) {
         throw new Error('Please enter a player username to invite.');
       }
 
       const allUsers = await db.select().from(users);
       const targetRow = allUsers.find(
-        (u) => u.username.trim().toLowerCase() === cleanTargetName
+        (u) =>
+          u.usernameSetupCompleted &&
+          u.username.trim().toLowerCase() === cleanTargetName
       );
       if (!targetRow) {
-        throw new Error(`No registered player found with username "${input.targetUsername}".`);
+        throw new Error(`No registered player found with username "@${input.targetUsername}".`);
       }
       if (targetRow.uid === sender.uid) {
         throw new Error('You cannot send a 1v1 invitation to yourself.');
@@ -2869,7 +3795,24 @@ export async function sendGameInvitationByUsername(input: {
       const targetCoupleCtx = await getCoupleContextForUser(targetRow.uid);
       if (!targetCoupleCtx.activeCouple || targetCoupleCtx.activeCouple.status !== 'active') {
         throw new Error(
-          `Player "${targetRow.username}" does not have an active Couple Pairing yet. Both players in 1v1 must be paired with a partner.`
+          `Player "@${targetRow.username}" does not have an active Couple Pairing yet. Both players in 1v1 must be paired with a partner.`
+        );
+      }
+
+      // Prevent duplicate pending 1v1 invitations
+      const existingPending = await db
+        .select()
+        .from(gameInvitations)
+        .where(
+          and(
+            eq(gameInvitations.senderUid, sender.uid),
+            eq(gameInvitations.targetUid, targetRow.uid),
+            eq(gameInvitations.status, 'pending')
+          )
+        );
+      if (existingPending.length > 0) {
+        throw new Error(
+          `You already have a pending 1v1 invitation sent to @${targetRow.username} (Room #${existingPending[0].roomCode}).`
         );
       }
 
@@ -2918,7 +3861,7 @@ export async function sendGameInvitationByUsername(input: {
       : undefined;
 
     if (!targetCouple && input.targetUsername) {
-      const q = input.targetUsername.trim().toLowerCase();
+      const q = input.targetUsername.trim().replace(/^@+/, '').toLowerCase();
       targetCouple = activeCouples.find((c) => {
         const pA = userByUid.get(c.requesterUid);
         const pB = userByUid.get(c.partnerUid);
@@ -2935,6 +3878,23 @@ export async function sendGameInvitationByUsername(input: {
     }
     if (targetCouple.id === senderCouple.id) {
       throw new Error('You cannot send a 2v2 couple challenge to your own couple.');
+    }
+
+    // Prevent duplicate pending 2v2 invitations between the same couples
+    const existingPending2v2 = await db
+      .select()
+      .from(gameInvitations)
+      .where(
+        and(
+          eq(gameInvitations.senderCoupleId, senderCouple.id),
+          eq(gameInvitations.targetCoupleId, targetCouple.id),
+          eq(gameInvitations.status, 'pending')
+        )
+      );
+    if (existingPending2v2.length > 0) {
+      throw new Error(
+        `Your couple already has a pending 2v2 invitation sent to ${targetCouple.coupleName} (Room #${existingPending2v2[0].roomCode}).`
+      );
     }
 
     const targetPartnerA = userByUid.get(targetCouple.requesterUid);

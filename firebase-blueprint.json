@@ -33,6 +33,12 @@
           "minLength": 1,
           "maxLength": 64
         },
+        "equippedSkin": {
+          "type": "string",
+          "description": "Equipped 5-rarity cosmetic skin identifier.",
+          "minLength": 1,
+          "maxLength": 64
+        },
         "xp": {
           "type": "integer",
           "description": "Total experience points earned."
@@ -185,6 +191,11 @@
         "coupleBanner": {
           "type": "string",
           "description": "Equipped couple banner.",
+          "maxLength": 64
+        },
+        "equippedCoupleSkin": {
+          "type": "string",
+          "description": "Equipped couple skin identifier.",
           "maxLength": 64
         },
         "coupleTrophies": {

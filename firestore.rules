@@ -56,6 +56,7 @@ service cloud.firestore {
           'usernameSetupCompleted',
           'renameCards',
           'avatar',
+          'equippedSkin',
           'xp',
           'level',
           'coins',
@@ -75,6 +76,7 @@ service cloud.firestore {
         data.usernameSetupCompleted is bool &&
         (!('renameCards' in data) || (data.renameCards is number && data.renameCards >= 0 && data.renameCards <= 1000)) &&
         data.avatar is string && data.avatar.size() >= 1 && data.avatar.size() <= 64 &&
+        (!('equippedSkin' in data) || (data.equippedSkin is string && data.equippedSkin.size() >= 1 && data.equippedSkin.size() <= 64)) &&
         data.xp is number && data.xp >= 0 &&
         data.level is number && data.level >= 1 &&
         data.coins is number && data.coins >= 0 &&
@@ -128,6 +130,7 @@ service cloud.firestore {
           'coupleName',
           'coupleTitle',
           'coupleBanner',
+          'equippedCoupleSkin',
           'coupleTrophies',
           'highestTrophies',
           'coupleWins',
@@ -145,6 +148,7 @@ service cloud.firestore {
         data.coupleName is string && data.coupleName.size() <= 80 &&
         data.coupleTitle is string && data.coupleTitle.size() <= 64 &&
         data.coupleBanner is string && data.coupleBanner.size() <= 64 &&
+        (!('equippedCoupleSkin' in data) || (data.equippedCoupleSkin is string && data.equippedCoupleSkin.size() <= 64)) &&
         data.coupleTrophies is number && data.coupleTrophies >= 0 &&
         data.highestTrophies is number && data.highestTrophies >= 0 &&
         data.coupleWins is number && data.coupleWins >= 0 &&
@@ -259,6 +263,7 @@ service cloud.firestore {
             'usernameSetupCompleted',
             'renameCards',
             'avatar',
+            'equippedSkin',
             'theme',
             'presenceStatus',
             'activeRoomCode',
@@ -282,6 +287,7 @@ service cloud.firestore {
             'usernameSetupCompleted',
             'renameCards',
             'avatar',
+            'equippedSkin',
             'xp',
             'level',
             'coins',
@@ -375,6 +381,7 @@ service cloud.firestore {
               'coupleName',
               'coupleTitle',
               'coupleBanner',
+              'equippedCoupleSkin',
               'coupleTrophies',
               'highestTrophies',
               'coupleWins',

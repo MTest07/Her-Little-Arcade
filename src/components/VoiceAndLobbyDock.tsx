@@ -21,7 +21,7 @@ import {
   CheckCircle2,
   Search,
 } from 'lucide-react';
-import { MULTIPLAYER_GAMES } from '@/src/lib/arcade-data';
+import { MULTIPLAYER_GAMES, getSkinById } from '@/src/lib/arcade-data';
 import { EnrichedCouplePairing } from './CouplePairingPanel';
 import { ArcadeCircularLoader, ArcadeInlineSpinner } from './ArcadeLoader';
 import { soundFX } from '@/src/lib/sound';
@@ -154,6 +154,7 @@ interface VoiceAndLobbyDockProps {
   activeRoom: MultiplayerRoomState | null;
   incomingInvitations?: GameInvitationItem[];
   requestedLobbyTab?: 'matchmake' | 'invite' | 'create' | 'join' | null;
+  preferredMode?: '1v1' | '2v2';
   onLobbyTabChange?: (tab: 'matchmake' | 'invite' | 'create' | 'join') => void;
   onRefreshInvitations?: () => void;
   onUpdateRoom: (nextRoom: MultiplayerRoomState) => void;
@@ -204,6 +205,7 @@ export function VoiceAndLobbyDock({
   activeRoom,
   incomingInvitations = [],
   requestedLobbyTab,
+  preferredMode,
   onLobbyTabChange,
   onRefreshInvitations,
   onUpdateRoom,
@@ -228,29 +230,51 @@ export function VoiceAndLobbyDock({
   );
   const selectedGameDef =
     MULTIPLAYER_GAMES.find((g) => g.id === selectedGameId) || MULTIPLAYER_GAMES[0];
-  const [selectedMode, setSelectedMode] = useState<'1v1' | '2v2'>('2v2');
+  const [selectedMode, setSelectedMode] = useState<'1v1' | '2v2'>(
+    preferredMode || '1v1'
+  );
   const [roundSetting, setRoundSetting] = useState<string>('Standard Match (Best of 3)');
   const [includePartnerInRoom, setIncludePartnerInRoom] = useState<boolean>(true);
 
+  useEffect(() => {
+    if (!preferredMode) return;
+    const timer = setTimeout(() => {
+      setSelectedMode(preferredMode);
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [preferredMode]);
+
   // Username-Based Invitations state (1v1 Player Invite & 2v2 Couple Invite)
   const [inviteSearchQuery, setInviteSearchQuery] = useState('');
+  const [isSearchingInviteTargets, setIsSearchingInviteTargets] = useState(false);
+  const [hasSearchedInviteTargets, setHasSearchedInviteTargets] = useState(false);
+  const [inviteSearchError, setInviteSearchError] = useState<string | null>(null);
+  const [selfMatchedUsername, setSelfMatchedUsername] = useState<string | null>(null);
   const [inviteSearchResults, setInviteSearchResults] = useState<{
     players: Array<{
       uid: string;
       username: string;
       avatar: string;
+      equippedSkin?: string;
       level: number;
+      presenceStatus?: string;
       isOnline: boolean;
       hasActiveCouple: boolean;
+      coupleId?: number;
       coupleName: string;
       coupleTrophies: number;
+      alreadyInvited?: boolean;
+      pendingRoomCode?: string;
     }>;
     couples: Array<{
       coupleId: number;
       coupleName: string;
       coupleTitle: string;
       coupleTrophies: number;
+      equippedCoupleSkin?: string;
       bothOnline: boolean;
+      alreadyInvited?: boolean;
+      pendingRoomCode?: string;
       partnerA: { uid: string; username: string; avatar: string; isOnline: boolean };
       partnerB: { uid: string; username: string; avatar: string; isOnline: boolean };
     }>;
@@ -442,34 +466,80 @@ export function VoiceAndLobbyDock({
     const q = queryOverride !== undefined ? queryOverride : inviteSearchQuery;
     const effectiveInviteType: '1v1' | '2v2' =
       modeOverride || (selectedGameDef.supports2v2 ? selectedMode : '1v1');
-    setLoadingRoomAction(true);
-    setRoomErrorMsg(null);
+    setIsSearchingInviteTargets(true);
+    setInviteSearchError(null);
     try {
-      const res = await fetch('/api/arcade', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${sessionToken}`,
-        },
-        body: JSON.stringify({
-          action: 'search_invite_targets',
-          query: q,
-          inviteType: effectiveInviteType,
-        }),
-      });
-      const data = await res.json();
-      if (res.ok) {
+      let data: {
+        players?: typeof inviteSearchResults.players;
+        couples?: typeof inviteSearchResults.couples;
+        selfMatchedUsername?: string | null;
+        error?: string;
+      } | null = null;
+
+      if (sessionToken) {
+        const res = await fetch('/api/arcade', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${sessionToken}`,
+          },
+          body: JSON.stringify({
+            action: 'search_invite_targets',
+            query: q,
+            inviteType: effectiveInviteType,
+          }),
+        });
+        const parsed = await res.json();
+        if (res.ok) {
+          data = parsed;
+        }
+      }
+
+      if (!data && currentUser.uid) {
+        const fallbackRes = await fetch(
+          `/api/arcade?searchUsername=${encodeURIComponent(q)}&inviteType=${encodeURIComponent(
+            effectiveInviteType
+          )}&uid=${encodeURIComponent(currentUser.uid)}`,
+          {
+            headers: sessionToken ? { Authorization: `Bearer ${sessionToken}` } : undefined,
+          }
+        );
+        const fallbackParsed = await fallbackRes.json();
+        if (!fallbackRes.ok) {
+          throw new Error(fallbackParsed.error || 'Could not search registered usernames.');
+        }
+        data = fallbackParsed;
+      }
+
+      if (data) {
         setInviteSearchResults({
           players: data.players || [],
           couples: data.couples || [],
         });
+        setSelfMatchedUsername(data.selfMatchedUsername || null);
+        setHasSearchedInviteTargets(true);
       }
-    } catch {
-      // ignore
+    } catch (err: unknown) {
+      setInviteSearchError(
+        err instanceof Error ? err.message : 'Unable to search usernames right now.'
+      );
     } finally {
-      setLoadingRoomAction(false);
+      setIsSearchingInviteTargets(false);
     }
   }
+
+  // Debounced username search when on the Invite tab
+  useEffect(() => {
+    if (lobbyTab !== 'invite' || !currentUser.uid) return;
+    const effectiveInviteType: '1v1' | '2v2' = selectedGameDef.supports2v2
+      ? selectedMode
+      : '1v1';
+    const timer = setTimeout(() => {
+      handleSearchInviteTargets(inviteSearchQuery, effectiveInviteType);
+    }, 250);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lobbyTab, inviteSearchQuery, selectedMode, selectedGameDef.supports2v2, currentUser.uid]);
 
   async function handleSendUsernameInvitation(opts: {
     inviteType: '1v1' | '2v2';
@@ -482,6 +552,15 @@ export function VoiceAndLobbyDock({
       setRoomErrorMsg(
         `Couple pairing is mandatory before sending a ${opts.inviteType.toUpperCase()} invitation.`
       );
+      soundFX.playError();
+      return;
+    }
+    if (
+      opts.inviteType === '1v1' &&
+      opts.targetUsername &&
+      opts.targetUsername.trim().toLowerCase() === currentUser.username.trim().toLowerCase()
+    ) {
+      setRoomErrorMsg('You cannot invite yourself to a 1v1 match.');
       soundFX.playError();
       return;
     }
@@ -516,6 +595,7 @@ export function VoiceAndLobbyDock({
       );
       soundFX.playSuccess();
       onRefreshInvitations?.();
+      await handleSearchInviteTargets(inviteSearchQuery, opts.inviteType);
     } catch (err: unknown) {
       setRoomErrorMsg(err instanceof Error ? err.message : 'Failed to send invitation.');
       soundFX.playError();
@@ -1068,7 +1148,8 @@ export function VoiceAndLobbyDock({
             onClick={() => {
               setLobbyTab('invite');
               setRoomErrorMsg(null);
-              handleSearchInviteTargets('');
+              const modeToSearch = selectedGameDef.supports2v2 ? selectedMode : '1v1';
+              handleSearchInviteTargets(inviteSearchQuery, modeToSearch);
             }}
             className={`flex items-center justify-center gap-1 rounded-lg py-2 text-[11px] font-bold transition-colors whitespace-nowrap ${
               lobbyTab === 'invite'
@@ -1479,8 +1560,8 @@ export function VoiceAndLobbyDock({
             <div>
               <label htmlFor="invite-username-search" className="block font-medium text-stone-300">
                 {selectedMode === '2v2' && selectedGameDef.supports2v2
-                  ? 'Search Couple Name or Partner Username'
-                  : 'Search Player by Unique Username'}
+                  ? 'Add Using Username or Couple Name (2v2)'
+                  : 'Add Using Username (Search Registered Arcade Username)'}
               </label>
               <div className="mt-1 flex gap-1.5">
                 <input
@@ -1488,102 +1569,218 @@ export function VoiceAndLobbyDock({
                   type="text"
                   value={inviteSearchQuery}
                   onChange={(e) => setInviteSearchQuery(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      handleSearchInviteTargets(
+                        inviteSearchQuery,
+                        selectedGameDef.supports2v2 ? selectedMode : '1v1'
+                      );
+                    }
+                  }}
                   placeholder={
                     selectedMode === '2v2' && selectedGameDef.supports2v2
-                      ? 'Type couple or partner username...'
-                      : 'Type exact or partial username...'
+                      ? 'Type partner @username or couple name...'
+                      : 'Enter @username (partial or exact, case-insensitive)...'
                   }
                   className="w-full rounded-lg border border-stone-800 bg-stone-900 px-2.5 py-1.5 text-xs text-stone-100 focus:border-amber-500 focus:outline-none"
                 />
+                {inviteSearchQuery && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setInviteSearchQuery('');
+                      handleSearchInviteTargets(
+                        '',
+                        selectedGameDef.supports2v2 ? selectedMode : '1v1'
+                      );
+                    }}
+                    className="rounded-lg border border-stone-700 bg-stone-900 px-2 py-1.5 text-[11px] text-stone-400 hover:text-stone-200"
+                  >
+                    Clear
+                  </button>
+                )}
                 <button
                   type="button"
-                  disabled={loadingRoomAction}
-                  onClick={() => handleSearchInviteTargets()}
-                  className="rounded-lg bg-stone-800 px-3 py-1.5 text-xs font-bold text-stone-100 hover:bg-stone-700"
+                  disabled={isSearchingInviteTargets || loadingRoomAction}
+                  onClick={() =>
+                    handleSearchInviteTargets(
+                      inviteSearchQuery,
+                      selectedGameDef.supports2v2 ? selectedMode : '1v1'
+                    )
+                  }
+                  className="flex items-center gap-1 rounded-lg bg-amber-500 px-3 py-1.5 text-xs font-bold text-stone-950 hover:bg-amber-400 disabled:opacity-50"
                 >
-                  Search
+                  {isSearchingInviteTargets ? (
+                    <ArcadeInlineSpinner className="h-3.5 w-3.5" />
+                  ) : (
+                    <Search className="h-3.5 w-3.5" />
+                  )}
+                  <span>Search</span>
                 </button>
+              </div>
+              <div className="mt-1 text-[10px] text-stone-400">
+                Searches unique arcade usernames only (partial &amp; case-insensitive). Email addresses and Google names are never exposed.
               </div>
             </div>
 
-            <div className="max-h-44 space-y-1.5 overflow-y-auto pt-1">
-              {(selectedMode === '1v1' || !selectedGameDef.supports2v2) &&
-                inviteSearchResults.players.map((pl) => (
-                  <div
-                    key={pl.uid}
-                    className="flex items-center justify-between rounded-lg border border-stone-800 bg-stone-900 px-2.5 py-2"
-                  >
-                    <div>
-                      <div className="font-bold text-stone-100">
-                        {getAvatarEmoji(pl.avatar)} @{pl.username}{' '}
-                        <span
-                          className={`text-[10px] ${
-                            pl.isOnline ? 'text-emerald-400' : 'text-stone-500'
-                          }`}
+            {selfMatchedUsername && (
+              <div className="flex items-center gap-1.5 rounded-lg border border-amber-500/40 bg-amber-500/10 px-2.5 py-2 text-[11px] text-amber-200">
+                <AlertCircle className="h-3.5 w-3.5 shrink-0 text-amber-400" />
+                <span>
+                  <strong>@{selfMatchedUsername}</strong> is your own account — you cannot send a game invitation to yourself.
+                </span>
+              </div>
+            )}
+
+            {inviteSearchError && (
+              <div className="flex items-center gap-1.5 rounded-lg border border-rose-500/40 bg-rose-500/10 px-2.5 py-2 text-[11px] text-rose-200">
+                <AlertCircle className="h-3.5 w-3.5 shrink-0 text-rose-400" />
+                <span>{inviteSearchError}</span>
+              </div>
+            )}
+
+            <div className="max-h-56 space-y-1.5 overflow-y-auto pt-1">
+              {isSearchingInviteTargets && (
+                <div className="flex items-center justify-center gap-2 rounded-lg border border-stone-800 bg-stone-900/60 py-4 text-[11px] text-stone-300">
+                  <ArcadeInlineSpinner className="h-4 w-4 text-amber-400" />
+                  <span>Searching registered arcade usernames...</span>
+                </div>
+              )}
+
+              {!isSearchingInviteTargets &&
+                (selectedMode === '1v1' || !selectedGameDef.supports2v2) &&
+                inviteSearchResults.players.map((pl) => {
+                  const skinDef = getSkinById(pl.equippedSkin);
+                  return (
+                    <div
+                      key={pl.uid}
+                      className="flex items-center justify-between gap-2 rounded-lg border border-stone-800 bg-stone-900 px-2.5 py-2"
+                    >
+                      <div className="min-w-0 flex-1">
+                        <div className="flex flex-wrap items-center gap-1.5 font-bold text-stone-100">
+                          <span>{getAvatarEmoji(pl.avatar)}</span>
+                          <span className="truncate">@{pl.username}</span>
+                          <span className="rounded bg-stone-800 px-1.5 py-0.5 font-mono text-[9px] text-stone-300">
+                            Lv.{pl.level}
+                          </span>
+                          {skinDef && (
+                            <span
+                              className={`rounded border px-1.5 py-0.5 text-[9px] font-bold ${skinDef.badgeClass}`}
+                            >
+                              {skinDef.icon} {skinDef.name}
+                            </span>
+                          )}
+                          <span
+                            className={`text-[10px] ${
+                              pl.isOnline ? 'text-emerald-400' : 'text-stone-500'
+                            }`}
+                          >
+                            · {pl.isOnline ? 'Online' : 'Offline'}
+                          </span>
+                        </div>
+                        <div className="mt-0.5 text-[10px] text-stone-400">
+                          {pl.hasActiveCouple
+                            ? `Paired (${pl.coupleName}) · Eligible for 1v1`
+                            : 'Unpaired (Must complete couple pairing before 1v1)'}
+                        </div>
+                      </div>
+                      {pl.alreadyInvited ? (
+                        <span className="shrink-0 rounded-lg border border-amber-500/40 bg-amber-500/15 px-2.5 py-1 font-mono text-[10px] font-bold text-amber-300">
+                          Pending #{pl.pendingRoomCode}
+                        </span>
+                      ) : (
+                        <button
+                          type="button"
+                          disabled={loadingRoomAction || !activeCouple || !pl.hasActiveCouple}
+                          onClick={() =>
+                            handleSendUsernameInvitation({
+                              inviteType: '1v1',
+                              targetUsername: pl.username,
+                            })
+                          }
+                          title={
+                            !activeCouple
+                              ? 'Pair with your partner first to send 1v1 invitations'
+                              : !pl.hasActiveCouple
+                              ? 'This player has not paired with a partner yet'
+                              : `Invite @${pl.username} to 1v1 ${selectedGameDef.title}`
+                          }
+                          className="shrink-0 rounded-lg bg-amber-500 px-2.5 py-1 text-[11px] font-bold text-stone-950 hover:bg-amber-400 disabled:opacity-40"
                         >
-                          · {pl.isOnline ? 'Online' : 'Offline'}
-                        </span>
-                      </div>
-                      <div className="text-[10px] text-stone-400">
-                        {pl.hasActiveCouple
-                          ? `Paired (${pl.coupleName})`
-                          : 'Unpaired (Cannot play 1v1 yet)'}
-                      </div>
+                          Invite 1v1
+                        </button>
+                      )}
                     </div>
-                    <button
-                      type="button"
-                      disabled={loadingRoomAction || !activeCouple || !pl.hasActiveCouple}
-                      onClick={() =>
-                        handleSendUsernameInvitation({
-                          inviteType: '1v1',
-                          targetUsername: pl.username,
-                        })
-                      }
-                      className="rounded-lg bg-amber-500 px-2.5 py-1 text-[11px] font-bold text-stone-950 hover:bg-amber-400 disabled:opacity-40"
-                    >
-                      Invite 1v1
-                    </button>
-                  </div>
-                ))}
+                  );
+                })}
 
-              {selectedMode === '2v2' &&
+              {!isSearchingInviteTargets &&
+                selectedMode === '2v2' &&
                 selectedGameDef.supports2v2 &&
-                inviteSearchResults.couples.map((cp) => (
-                  <div
-                    key={cp.coupleId}
-                    className="flex items-center justify-between rounded-lg border border-stone-800 bg-stone-900 px-2.5 py-2"
-                  >
-                    <div>
-                      <div className="font-bold text-stone-100">
-                        ♥ {cp.coupleName} · 🏆 {cp.coupleTrophies}
-                      </div>
-                      <div className="text-[10px] text-stone-400">
-                        @{cp.partnerA.username} &amp; @{cp.partnerB.username} ·{' '}
-                        <span className={cp.bothOnline ? 'text-emerald-400' : 'text-amber-300'}>
-                          {cp.bothOnline ? 'Both Online' : 'Partial Online'}
-                        </span>
-                      </div>
-                    </div>
-                    <button
-                      type="button"
-                      disabled={loadingRoomAction || !activeCouple}
-                      onClick={() =>
-                        handleSendUsernameInvitation({
-                          inviteType: '2v2',
-                          targetCoupleId: cp.coupleId,
-                        })
-                      }
-                      className="rounded-lg bg-rose-500 px-2.5 py-1 text-[11px] font-bold text-stone-950 hover:bg-rose-400 disabled:opacity-40"
+                inviteSearchResults.couples.map((cp) => {
+                  const cpSkin = getSkinById(cp.equippedCoupleSkin);
+                  return (
+                    <div
+                      key={cp.coupleId}
+                      className="flex items-center justify-between gap-2 rounded-lg border border-stone-800 bg-stone-900 px-2.5 py-2"
                     >
-                      Invite 2v2
-                    </button>
-                  </div>
-                ))}
+                      <div className="min-w-0 flex-1">
+                        <div className="flex flex-wrap items-center gap-1.5 font-bold text-stone-100">
+                          <span>♥ {cp.coupleName}</span>
+                          <span className="font-mono text-[10px] text-amber-300">
+                            🏆 {cp.coupleTrophies}
+                          </span>
+                          {cpSkin && (
+                            <span
+                              className={`rounded border px-1.5 py-0.5 text-[9px] font-bold ${cpSkin.badgeClass}`}
+                            >
+                              {cpSkin.icon} {cpSkin.name}
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-[10px] text-stone-400">
+                          @{cp.partnerA.username} &amp; @{cp.partnerB.username} ·{' '}
+                          <span className={cp.bothOnline ? 'text-emerald-400' : 'text-amber-300'}>
+                            {cp.bothOnline ? 'Both Online' : 'Partial Online'}
+                          </span>
+                        </div>
+                      </div>
+                      {cp.alreadyInvited ? (
+                        <span className="shrink-0 rounded-lg border border-rose-500/40 bg-rose-500/15 px-2.5 py-1 font-mono text-[10px] font-bold text-rose-200">
+                          Pending #{cp.pendingRoomCode}
+                        </span>
+                      ) : (
+                        <button
+                          type="button"
+                          disabled={loadingRoomAction || !activeCouple}
+                          onClick={() =>
+                            handleSendUsernameInvitation({
+                              inviteType: '2v2',
+                              targetCoupleId: cp.coupleId,
+                            })
+                          }
+                          className="shrink-0 rounded-lg bg-rose-500 px-2.5 py-1 text-[11px] font-bold text-stone-950 hover:bg-rose-400 disabled:opacity-40"
+                        >
+                          Invite 2v2
+                        </button>
+                      )}
+                    </div>
+                  );
+                })}
 
-              {inviteSearchResults.players.length === 0 &&
-                inviteSearchResults.couples.length === 0 && (
-                  <div className="py-2 text-center text-[11px] text-stone-500">
-                    Click Search to list registered players or active couples.
+              {!isSearchingInviteTargets &&
+                ((selectedMode === '1v1' || !selectedGameDef.supports2v2)
+                  ? inviteSearchResults.players.length === 0
+                  : inviteSearchResults.couples.length === 0) && (
+                  <div className="rounded-lg border border-stone-800/80 bg-stone-900/40 px-3 py-3 text-center text-[11px] text-stone-400">
+                    {hasSearchedInviteTargets && inviteSearchQuery.trim()
+                      ? `No registered ${
+                          selectedMode === '2v2' && selectedGameDef.supports2v2
+                            ? 'couples'
+                            : 'players'
+                        } found matching "@${inviteSearchQuery.trim()}". Check the spelling or try a partial username.`
+                      : 'No other registered players found yet. Type a username above to search the database.'}
                   </div>
                 )}
             </div>

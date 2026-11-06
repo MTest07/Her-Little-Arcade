@@ -12,6 +12,10 @@ import {
   completeInitialUsernameSetup,
   redeemRenameCardForUsername,
   purchaseRewardShopItem,
+  equipOrUnequipSkin,
+  claimChallengeReward,
+  updateSeasonalBracketConfig,
+  concludeActiveSeasonNow,
   getCoupleContextForUser,
   createCouplePairingInvite,
   inspectCouplePairingInvite,
@@ -78,6 +82,17 @@ export async function GET(req: NextRequest) {
     if (checkUsername !== null) {
       const check = await checkUsernameAvailability(checkUsername, actorUid);
       return NextResponse.json(check);
+    }
+
+    const searchUsername = searchParams.get('searchUsername');
+    if (searchUsername !== null && actorUid) {
+      const inviteType = searchParams.get('inviteType') === '2v2' ? '2v2' : '1v1';
+      const results = await searchUsersAndCouplesForInvite({
+        actorUid,
+        query: searchUsername,
+        inviteType,
+      });
+      return NextResponse.json(results);
     }
 
     if (inspectRoomCode) {
@@ -199,7 +214,39 @@ export async function POST(req: NextRequest) {
         identity.uid,
         String(body.itemId || '')
       );
-      return NextResponse.json({ profile });
+      return NextResponse.json({ profile, user: profile });
+    }
+
+    if (action === 'equip_skin') {
+      const profile = await equipOrUnequipSkin(
+        identity.uid,
+        String(body.skinId || 'skin-classic-notebook'),
+        Boolean(body.applyToCouple)
+      );
+      const coupleContext = await getCoupleContextForUser(identity.uid);
+      return NextResponse.json({ profile, coupleContext });
+    }
+
+    if (action === 'claim_challenge') {
+      const out = await claimChallengeReward(
+        identity.uid,
+        String(body.challengeKey || '')
+      );
+      return NextResponse.json(out);
+    }
+
+    if (action === 'update_season_bracket') {
+      const out = await updateSeasonalBracketConfig(
+        identity.uid,
+        body.config || {}
+      );
+      return NextResponse.json(out);
+    }
+
+    if (action === 'conclude_season_now') {
+      const out = await concludeActiveSeasonNow(identity.uid);
+      const bootstrap = await getArcadeBootstrapData(identity.uid);
+      return NextResponse.json({ rollover: out, ...bootstrap });
     }
 
     if (action === 'claim_trophy_milestone') {

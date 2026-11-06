@@ -25,6 +25,7 @@ import {
 import { PlayerProfile } from './AuthModal';
 import { EnrichedCouplePairing } from './CouplePairingPanel';
 import { ArcadeInlineSpinner } from './ArcadeLoader';
+import { getSkinById } from '@/src/lib/arcade-data';
 import { soundFX } from '@/src/lib/sound';
 
 export type ArcadeNavSection =
@@ -748,6 +749,20 @@ export function ArcadeSidebar({
                     <span aria-hidden="true">·</span>
                     <span>{currentUser.xp} XP</span>
                   </div>
+
+                  {/* Equipped Skin Emblem & Rarity Note */}
+                  {(() => {
+                    const eqSkin = getSkinById(currentUser.equippedSkin);
+                    return (
+                      <div className="mt-1 flex items-center gap-1 truncate text-[10px] font-semibold text-[var(--dp-color-annotation)]">
+                        <span>{eqSkin.emblem}</span>
+                        <span className="truncate">{eqSkin.name}</span>
+                        <span className="font-mono text-[9px] uppercase text-[var(--dp-color-accent)]">
+                          [{eqSkin.rarity}]
+                        </span>
+                      </div>
+                    );
+                  })()}
 
                   {/* Hand-sketched XP progress track */}
                   <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full border border-[var(--dp-color-line)] bg-[var(--dp-color-ground)]">

@@ -363,14 +363,319 @@ export const CHESS_TIME_PRESETS: ChessTimePreset[] = [
   { id: 'unlimited', label: 'Unlimited · Casual', category: 'Casual', minutes: 0, extraSeconds: 0, incrementSeconds: 0 },
 ];
 
+export type SkinRarity = 'Legendary' | 'Epic' | 'Rare' | 'Uncommon' | 'Common';
+
+export const SKIN_RARITY_ORDER: SkinRarity[] = [
+  'Legendary',
+  'Epic',
+  'Rare',
+  'Uncommon',
+  'Common',
+];
+
+export const SKIN_RARITY_META: Record<
+  SkinRarity,
+  {
+    rank: number;
+    label: string;
+    tierNote: string;
+    badgeBg: string;
+    badgeText: string;
+    badgeBorder: string;
+    badgeClass: string;
+    borderClass: string;
+    rankOrder: number;
+    accentHex: string;
+  }
+> = {
+  Legendary: {
+    rank: 1,
+    rankOrder: 1,
+    label: 'Legendary',
+    tierNote: 'Highest Rarity · Tier I',
+    badgeBg: 'bg-amber-500/20',
+    badgeText: 'text-amber-200',
+    badgeBorder: 'border-amber-400/70',
+    badgeClass: 'border-amber-400/70 bg-amber-500/20 text-amber-200',
+    borderClass: 'border-amber-400/70',
+    accentHex: '#F59E0B',
+  },
+  Epic: {
+    rank: 2,
+    rankOrder: 2,
+    label: 'Epic',
+    tierNote: 'High Rarity · Tier II',
+    badgeBg: 'bg-fuchsia-500/20',
+    badgeText: 'text-fuchsia-200',
+    badgeBorder: 'border-fuchsia-400/70',
+    badgeClass: 'border-fuchsia-400/70 bg-fuchsia-500/20 text-fuchsia-200',
+    borderClass: 'border-fuchsia-400/70',
+    accentHex: '#D946EF',
+  },
+  Rare: {
+    rank: 3,
+    rankOrder: 3,
+    label: 'Rare',
+    tierNote: 'Medium Rarity · Tier III',
+    badgeBg: 'bg-sky-500/20',
+    badgeText: 'text-sky-200',
+    badgeBorder: 'border-sky-400/70',
+    badgeClass: 'border-sky-400/70 bg-sky-500/20 text-sky-200',
+    borderClass: 'border-sky-400/70',
+    accentHex: '#0EA5E9',
+  },
+  Uncommon: {
+    rank: 4,
+    rankOrder: 4,
+    label: 'Uncommon',
+    tierNote: 'Low Rarity · Tier IV',
+    badgeBg: 'bg-emerald-500/20',
+    badgeText: 'text-emerald-200',
+    badgeBorder: 'border-emerald-400/70',
+    badgeClass: 'border-emerald-400/70 bg-emerald-500/20 text-emerald-200',
+    borderClass: 'border-emerald-400/70',
+    accentHex: '#10B981',
+  },
+  Common: {
+    rank: 5,
+    rankOrder: 5,
+    label: 'Common',
+    tierNote: 'Basic Rarity · Tier V',
+    badgeBg: 'bg-stone-500/20',
+    badgeText: 'text-stone-200',
+    badgeBorder: 'border-stone-500/60',
+    badgeClass: 'border-stone-500/60 bg-stone-500/20 text-stone-200',
+    borderClass: 'border-stone-500/60',
+    accentHex: '#A8A29E',
+  },
+};
+
+export interface ArcadeSkinDef {
+  id: string;
+  name: string;
+  rarity: SkinRarity;
+  rarityOrder: number;
+  description: string;
+  emblem: string;
+  icon?: string;
+  scope: 'individual_and_couple' | 'couple_crest';
+  acquisitionSource: 'starter' | 'shop' | 'seasonal_exclusive';
+  seasonExclusiveRank?: 1 | 2 | 3;
+  seasonalRank?: 1 | 2 | 3;
+  costCoins: number;
+  previewCode: string;
+  bannerGradient: string;
+  frameClass: string;
+  tagColorClass: string;
+  badgeClass?: string;
+  patternMotif: string;
+}
+
+export const ARCADE_SKINS: ArcadeSkinDef[] = [
+  // === SEASONAL TOP-3 EXCLUSIVE REWARD SKINS (Awarded at Season End to Top 3 Couples) ===
+  {
+    id: 'skin-season-sovereign-eclipse',
+    name: 'Sovereign Eclipse Crown',
+    rarity: 'Legendary',
+    rarityOrder: 1,
+    description:
+      'Exclusive 1st Place Seasonal Championship Skin. Gilded celestial astrolabe frame with twin solar-eclipse halos and crimson-gold foil.',
+    emblem: '👑✨',
+    scope: 'individual_and_couple',
+    acquisitionSource: 'seasonal_exclusive',
+    seasonExclusiveRank: 1,
+    costCoins: 0,
+    previewCode: 'skin-season-sovereign-eclipse',
+    bannerGradient: 'from-amber-500/35 via-rose-500/25 to-yellow-500/30',
+    frameClass: 'border-amber-400 shadow-[0_0_24px_rgba(245,158,11,0.28)]',
+    tagColorClass: 'text-amber-200 border-amber-400/60 bg-amber-500/20',
+    patternMotif: 'Solar Astrolabe & Twin Gilded Halos',
+  },
+  {
+    id: 'skin-season-celestial-waltz',
+    name: 'Astral Nocturne Serenade',
+    rarity: 'Epic',
+    rarityOrder: 2,
+    description:
+      'Exclusive 2nd Place Seasonal Championship Skin. Velvet constellation tapestry with silver-violet starlight ribbons.',
+    emblem: '🦢🌙',
+    scope: 'individual_and_couple',
+    acquisitionSource: 'seasonal_exclusive',
+    seasonExclusiveRank: 2,
+    costCoins: 0,
+    previewCode: 'skin-season-celestial-waltz',
+    bannerGradient: 'from-fuchsia-500/30 via-purple-500/25 to-indigo-500/30',
+    frameClass: 'border-fuchsia-400 shadow-[0_0_20px_rgba(217,70,239,0.24)]',
+    tagColorClass: 'text-fuchsia-200 border-fuchsia-400/60 bg-fuchsia-500/20',
+    patternMotif: 'Velvet Starlight & Silver Swans',
+  },
+  {
+    id: 'skin-season-paper-lantern-harmony',
+    name: 'Festival Lantern Regalia',
+    rarity: 'Rare',
+    rarityOrder: 3,
+    description:
+      'Exclusive 3rd Place Seasonal Championship Skin. Azure river lanterns drifting across warm twilight ink wash.',
+    emblem: '🏮🌊',
+    scope: 'individual_and_couple',
+    acquisitionSource: 'seasonal_exclusive',
+    seasonExclusiveRank: 3,
+    costCoins: 0,
+    previewCode: 'skin-season-paper-lantern-harmony',
+    bannerGradient: 'from-sky-500/30 via-teal-500/20 to-amber-500/25',
+    frameClass: 'border-sky-400 shadow-[0_0_16px_rgba(14,165,233,0.22)]',
+    tagColorClass: 'text-sky-200 border-sky-400/60 bg-sky-500/20',
+    patternMotif: 'Drifting River Lanterns & Ink Wash',
+  },
+
+  // === SHOP & STARTER SKINS ACROSS ALL 5 RARITY LEVELS ===
+  {
+    id: 'skin-imperial-clockwork-heart',
+    name: 'Clockwork Sanctuary Grandmaster',
+    rarity: 'Legendary',
+    rarityOrder: 1,
+    description:
+      'Masterwork brass escapement gears and ruby filigree that illuminates your profile, sidebar badge, and arena header.',
+    emblem: '⚙️💎',
+    scope: 'individual_and_couple',
+    acquisitionSource: 'shop',
+    costCoins: 650,
+    previewCode: 'skin-imperial-clockwork-heart',
+    bannerGradient: 'from-amber-500/30 via-orange-500/20 to-rose-500/25',
+    frameClass: 'border-amber-400/90 shadow-[0_0_20px_rgba(245,158,11,0.22)]',
+    tagColorClass: 'text-amber-200 border-amber-400/60 bg-amber-500/20',
+    patternMotif: 'Precision Brass Escapement & Ruby Filigree',
+  },
+  {
+    id: 'skin-sakura-moonlit-pavilion',
+    name: 'Moonlit Sakura Pavilion',
+    rarity: 'Epic',
+    rarityOrder: 2,
+    description:
+      'Hand-painted evening cherry blossoms with plum-blossom lacquer trim and floating petal accents.',
+    emblem: '🌸🌙',
+    scope: 'individual_and_couple',
+    acquisitionSource: 'shop',
+    costCoins: 420,
+    previewCode: 'skin-sakura-moonlit-pavilion',
+    bannerGradient: 'from-rose-500/30 via-fuchsia-500/20 to-amber-500/20',
+    frameClass: 'border-fuchsia-400/80 shadow-[0_0_16px_rgba(217,70,239,0.18)]',
+    tagColorClass: 'text-fuchsia-200 border-fuchsia-400/60 bg-fuchsia-500/20',
+    patternMotif: 'Evening Sakura Petals & Lacquer Trim',
+  },
+  {
+    id: 'skin-starlight-observatory',
+    name: 'Starlight Cartographer',
+    rarity: 'Rare',
+    rarityOrder: 3,
+    description:
+      'Deep sapphire celestial chart etched with brass compass lines and northern-star coordinates.',
+    emblem: '🧭✨',
+    scope: 'individual_and_couple',
+    acquisitionSource: 'shop',
+    costCoins: 260,
+    previewCode: 'skin-starlight-observatory',
+    bannerGradient: 'from-sky-500/25 via-indigo-500/20 to-teal-500/20',
+    frameClass: 'border-sky-400/80',
+    tagColorClass: 'text-sky-200 border-sky-400/60 bg-sky-500/20',
+    patternMotif: 'Sapphire Celestial Chart & Compass Rose',
+  },
+  {
+    id: 'skin-matcha-botanical-press',
+    name: 'Pressed Clover Herbarium',
+    rarity: 'Uncommon',
+    rarityOrder: 4,
+    description:
+      'Cozy botanical notebook margin with pressed four-leaf clovers, sage linen tape, and warm sepia ink.',
+    emblem: '🍀🌿',
+    scope: 'individual_and_couple',
+    acquisitionSource: 'shop',
+    costCoins: 140,
+    previewCode: 'skin-matcha-botanical-press',
+    bannerGradient: 'from-emerald-500/25 via-teal-500/15 to-stone-800/40',
+    frameClass: 'border-emerald-400/75',
+    tagColorClass: 'text-emerald-200 border-emerald-400/60 bg-emerald-500/20',
+    patternMotif: 'Pressed Clover Leaf & Linen Tape',
+  },
+  {
+    id: 'skin-berry-milk-postmark',
+    name: 'Strawberry Postmark Stamp',
+    rarity: 'Uncommon',
+    rarityOrder: 4,
+    description:
+      'Playful airmail postmark border with strawberry wax seal and warm cream stationery stripes.',
+    emblem: '🍓✉️',
+    scope: 'individual_and_couple',
+    acquisitionSource: 'shop',
+    costCoins: 120,
+    previewCode: 'skin-berry-milk-postmark',
+    bannerGradient: 'from-rose-500/20 via-amber-500/15 to-stone-800/40',
+    frameClass: 'border-emerald-400/70',
+    tagColorClass: 'text-emerald-200 border-emerald-400/60 bg-emerald-500/20',
+    patternMotif: 'Airmail Postmark & Berry Wax Seal',
+  },
+  {
+    id: 'skin-classic-notebook',
+    name: 'Warm Sketchbook Margin',
+    rarity: 'Common',
+    rarityOrder: 5,
+    description:
+      'Default archival working-sheet margin with graphite pencil rule lines and masking tape corners.',
+    emblem: '📓✏️',
+    scope: 'individual_and_couple',
+    acquisitionSource: 'starter',
+    costCoins: 0,
+    previewCode: 'skin-classic-notebook',
+    bannerGradient: 'from-stone-700/30 via-stone-800/30 to-stone-900/40',
+    frameClass: 'border-stone-600',
+    tagColorClass: 'text-stone-200 border-stone-500/60 bg-stone-500/20',
+    patternMotif: 'Archival Grid & Graphite Pencil Rule',
+  },
+  {
+    id: 'skin-cozy-parchment-cord',
+    name: 'Twine & Kraft Keepsake',
+    rarity: 'Common',
+    rarityOrder: 5,
+    description:
+      'Simple kraft-paper parcel trim tied with baker’s twine and a neat handwritten label.',
+    emblem: '🏷️🧵',
+    scope: 'individual_and_couple',
+    acquisitionSource: 'shop',
+    costCoins: 60,
+    previewCode: 'skin-cozy-parchment-cord',
+    bannerGradient: 'from-amber-700/20 via-stone-800/30 to-stone-900/40',
+    frameClass: 'border-stone-500',
+    tagColorClass: 'text-stone-200 border-stone-500/60 bg-stone-500/20',
+    patternMotif: 'Kraft Parcel & Baker’s Twine',
+  },
+];
+
+export function getSkinById(skinId: string | undefined | null): ArcadeSkinDef & {
+  icon: string;
+  badgeClass: string;
+  seasonalRank?: 1 | 2 | 3;
+} {
+  const found =
+    (skinId
+      ? ARCADE_SKINS.find((s) => s.id === skinId || s.previewCode === skinId)
+      : undefined) || ARCADE_SKINS.find((s) => s.id === 'skin-classic-notebook')!;
+  return {
+    ...found,
+    icon: found.icon || found.emblem,
+    badgeClass: found.badgeClass || found.tagColorClass,
+    seasonalRank: found.seasonalRank ?? found.seasonExclusiveRank,
+  };
+}
+
 export interface RewardShopItem {
   id: string;
   name: string;
-  category: 'utility' | 'avatar' | 'pet' | 'decoration' | 'theme';
+  category: 'utility' | 'skin' | 'avatar' | 'pet' | 'decoration' | 'theme';
   costCoins: number;
   description: string;
   previewCode: string;
   consumable?: boolean;
+  rarity?: SkinRarity;
 }
 
 export const RENAME_CARD_COST_COINS = 10000;
@@ -385,6 +690,16 @@ export const REWARD_SHOP_ITEMS: RewardShopItem[] = [
     previewCode: 'rename-card',
     consumable: true,
   },
+  // Purchasable & starter skins exposed in unified shop catalog
+  ...ARCADE_SKINS.filter((s) => s.acquisitionSource !== 'seasonal_exclusive').map((s) => ({
+    id: s.id,
+    name: `${s.name} (${s.rarity} Skin)`,
+    category: 'skin' as const,
+    costCoins: s.costCoins,
+    description: s.description,
+    previewCode: s.previewCode,
+    rarity: s.rarity,
+  })),
   { id: 'avatar-kitsune', name: 'Kitsune Fox Avatar', category: 'avatar', costCoins: 0, description: 'Warm cream kitsune spirit portrait.', previewCode: 'kitsune' },
   { id: 'avatar-star-cat', name: 'Astral Cat Avatar', category: 'avatar', costCoins: 0, description: 'Constellation-gazing midnight kitten.', previewCode: 'star-cat' },
   { id: 'avatar-bunny', name: 'Matcha Bunny Avatar', category: 'avatar', costCoins: 120, description: 'Soft lop-eared bunny with clover leaf.', previewCode: 'bunny' },
@@ -511,52 +826,499 @@ export const ACHIEVEMENTS: AchievementDef[] = [
   { id: 'cozy-wavelength', title: 'On the Same Wavelength', description: 'Connect to optional Voice Chat in a multiplayer room.', xpBonus: 25, coinBonus: 0, conditionType: 'voice_joined', target: 1 },
 ];
 
-export interface DailyChallengeTemplate {
+/* ============================================================================
+   DAILY (EASY · 24H), WEEKLY (MEDIUM · 7D) & MONTHLY (HARD · 1M) CHALLENGES
+   ============================================================================ */
+
+export type ChallengePeriodType = 'daily' | 'weekly' | 'monthly';
+export type ChallengeDifficulty = 'Easy' | 'Medium' | 'Hard';
+export type ChallengeMetricType =
+  | 'specific_games'
+  | 'pet_care'
+  | 'any_matches_played'
+  | 'any_wins'
+  | 'single_matches'
+  | 'multiplayer_1v1_matches'
+  | 'multiplayer_2v2_matches'
+  | 'multiplayer_2v2_wins'
+  | 'high_score_200';
+
+export interface ArcadeChallengeDef {
   key: string;
+  periodType: ChallengePeriodType;
+  difficulty: ChallengeDifficulty;
+  durationLabel: string;
   title: string;
   gameId: string;
+  eligibleGameIds?: string[];
+  metricType: ChallengeMetricType;
   description: string;
+  objectiveLabel: string;
   target: number;
   xpReward: number;
-  coinReward: number;
+  coinReward: 0; // Strictly 0 Coins — Challenges never bypass 2v2 coin economy rules
 }
 
-export const DAILY_CHALLENGE_TEMPLATES: DailyChallengeTemplate[] = [
+export const ARCADE_CHALLENGE_CATALOG: ArcadeChallengeDef[] = [
+  // === DAILY CHALLENGES (Easy · 24 Hours) ===
   {
     key: 'daily-chess-blitz',
+    periodType: 'daily',
+    difficulty: 'Easy',
+    durationLabel: '24 hours',
     title: 'Twilight Chess Duel',
     gameId: 'chess',
+    eligibleGameIds: ['chess'],
+    metricType: 'specific_games',
     description: 'Play 1 match of Chess (any preset or custom increment time control).',
+    objectiveLabel: 'Complete 1 Chess match',
     target: 1,
     xpReward: 30,
     coinReward: 0,
   },
   {
     key: 'daily-pet-care',
+    periodType: 'daily',
+    difficulty: 'Easy',
+    durationLabel: '24 hours',
     title: 'Mochi Morning Routine',
     gameId: 'virtual-pet',
-    description: 'Feed, play with, or rest your Virtual Pet 3 times.',
+    eligibleGameIds: ['virtual-pet'],
+    metricType: 'pet_care',
+    description: 'Feed, play with, or rest your Virtual Pet companion 3 times today.',
+    objectiveLabel: 'Care for Mochi 3 times',
     target: 3,
-    xpReward: 20,
+    xpReward: 25,
     coinReward: 0,
   },
   {
     key: 'daily-memory-match',
+    periodType: 'daily',
+    difficulty: 'Easy',
+    durationLabel: '24 hours',
     title: 'Shared Keepsake Flip',
     gameId: 'memory-match',
+    eligibleGameIds: ['memory-match', '2048-puzzle'],
+    metricType: 'specific_games',
     description: 'Clear a board in Memory Match or 2048 Puzzle.',
+    objectiveLabel: 'Finish 1 Memory Match or 2048 game',
     target: 1,
     xpReward: 25,
     coinReward: 0,
   },
   {
     key: 'daily-coop-team',
+    periodType: 'daily',
+    difficulty: 'Easy',
+    durationLabel: '24 hours',
     title: 'Co-Op Kitchen & Maze',
     gameId: 'cooking-together',
-    description: 'Complete 1 round of Cooking Together, Escape the Maze, or Treasure Hunt.',
+    eligibleGameIds: ['cooking-together', 'escape-the-maze', 'treasure-hunt', 'couple-puzzle'],
+    metricType: 'specific_games',
+    description: 'Complete 1 round of Cooking Together, Escape the Maze, Couple Puzzle, or Treasure Hunt.',
+    objectiveLabel: 'Complete 1 Co-Op match',
     target: 1,
     xpReward: 35,
     coinReward: 0,
   },
+
+  // === WEEKLY CHALLENGES (Medium · 7 Days) ===
+  {
+    key: 'weekly-strategy-tactician',
+    periodType: 'weekly',
+    difficulty: 'Medium',
+    durationLabel: '7 days',
+    title: 'Clockwork Board Tactician',
+    gameId: 'chess',
+    eligibleGameIds: ['chess', 'connect-four', 'battleship', 'tic-tac-toe'],
+    metricType: 'specific_games',
+    description: 'Complete 4 head-to-head board or strategy duels across Chess, Connect Four, Battleship, or Tic-Tac-Toe this week.',
+    objectiveLabel: 'Play 4 strategy board duels',
+    target: 4,
+    xpReward: 110,
+    coinReward: 0,
+  },
+  {
+    key: 'weekly-2v2-couple-contender',
+    periodType: 'weekly',
+    difficulty: 'Medium',
+    durationLabel: '7 days',
+    title: 'Paired Couple Contenders',
+    gameId: 'quiz-battle',
+    metricType: 'multiplayer_2v2_matches',
+    description: 'Complete 3 ranked 2v2 Couple Mode matches with your paired partner during the current week.',
+    objectiveLabel: 'Complete 3 ranked 2v2 matches',
+    target: 3,
+    xpReward: 135,
+    coinReward: 0,
+  },
+  {
+    key: 'weekly-solo-sanctuary-tour',
+    periodType: 'weekly',
+    difficulty: 'Medium',
+    durationLabel: '7 days',
+    title: 'Solo Sanctuary Explorer',
+    gameId: '2048-puzzle',
+    metricType: 'single_matches',
+    description: 'Finish 5 Single-Player games across 2048, Sudoku, Snake, Brick Breaker, Flappy Bird, or Memory Match.',
+    objectiveLabel: 'Complete 5 Single-Player games',
+    target: 5,
+    xpReward: 95,
+    coinReward: 0,
+  },
+  {
+    key: 'weekly-victory-streak',
+    periodType: 'weekly',
+    difficulty: 'Medium',
+    durationLabel: '7 days',
+    title: 'Sketchbook Winner’s Circle',
+    gameId: 'word-duel',
+    metricType: 'any_wins',
+    description: 'Earn 5 verified game victories or completed board clears across any arcade mode this week.',
+    objectiveLabel: 'Record 5 victories this week',
+    target: 5,
+    xpReward: 120,
+    coinReward: 0,
+  },
+
+  // === MONTHLY CHALLENGES (Hard · 1 Month) ===
+  {
+    key: 'monthly-arcade-veteran',
+    periodType: 'monthly',
+    difficulty: 'Hard',
+    durationLabel: '1 month',
+    title: 'Grand Notebook Marathon',
+    gameId: 'chess',
+    metricType: 'any_matches_played',
+    description: 'Complete 15 verified arcade games across Single-Player, 1v1 Duels, and 2v2 Couple Mode within the calendar month.',
+    objectiveLabel: 'Complete 15 total games this month',
+    target: 15,
+    xpReward: 340,
+    coinReward: 0,
+  },
+  {
+    key: 'monthly-2v2-championship-drive',
+    periodType: 'monthly',
+    difficulty: 'Hard',
+    durationLabel: '1 month',
+    title: '2v2 Couple Championship Drive',
+    gameId: 'quiz-battle',
+    metricType: 'multiplayer_2v2_wins',
+    description: 'Win 8 ranked 2v2 Couple Mode matches with your partner across the monthly campaign.',
+    objectiveLabel: 'Win 8 ranked 2v2 Couple matches',
+    target: 8,
+    xpReward: 420,
+    coinReward: 0,
+  },
+  {
+    key: 'monthly-1v1-duelist-mastery',
+    periodType: 'monthly',
+    difficulty: 'Hard',
+    durationLabel: '1 month',
+    title: 'Master of 1v1 Duels',
+    gameId: 'connect-four',
+    metricType: 'multiplayer_1v1_matches',
+    description: 'Play 10 head-to-head 1v1 Multiplayer matches against your paired partner or invited rivals this month.',
+    objectiveLabel: 'Complete 10 1v1 Multiplayer matches',
+    target: 10,
+    xpReward: 320,
+    coinReward: 0,
+  },
+  {
+    key: 'monthly-high-score-alchemist',
+    periodType: 'monthly',
+    difficulty: 'Hard',
+    durationLabel: '1 month',
+    title: 'High-Score Alchemist',
+    gameId: '2048-puzzle',
+    metricType: 'high_score_200',
+    description: 'Achieve a score of 200+ points in 8 completed games across the arcade this month.',
+    objectiveLabel: 'Score 200+ in 8 games this month',
+    target: 8,
+    xpReward: 380,
+    coinReward: 0,
+  },
 ];
+
+export const DAILY_CHALLENGE_TEMPLATES = ARCADE_CHALLENGE_CATALOG.filter(
+  (c) => c.periodType === 'daily'
+);
+
+export interface ChallengePeriodWindow {
+  periodType: ChallengePeriodType;
+  periodKey: string;
+  startsAtIso: string;
+  endsAtIso: string;
+  remainingMs: number;
+  remainingLabel: string;
+  scheduleLabel: string;
+}
+
+export function getChallengePeriodWindow(
+  periodType: ChallengePeriodType,
+  nowDate: Date = new Date()
+): ChallengePeriodWindow {
+  const nowMs = nowDate.getTime();
+  const year = nowDate.getUTCFullYear();
+  const month = nowDate.getUTCMonth();
+  const date = nowDate.getUTCDate();
+
+  let startsAt: Date;
+  let endsAt: Date;
+  let periodKey: string;
+  let scheduleLabel: string;
+
+  if (periodType === 'daily') {
+    startsAt = new Date(Date.UTC(year, month, date, 0, 0, 0, 0));
+    endsAt = new Date(Date.UTC(year, month, date + 1, 0, 0, 0, 0));
+    const yStr = String(year);
+    const mStr = String(month + 1).padStart(2, '0');
+    const dStr = String(date).padStart(2, '0');
+    periodKey = `daily:${yStr}-${mStr}-${dStr}`;
+    scheduleLabel = 'Resets every 24h at 00:00 UTC';
+  } else if (periodType === 'weekly') {
+    // Monday-anchored 7-day UTC week
+    const dayOfWeek = nowDate.getUTCDay(); // 0 (Sun) .. 6 (Sat)
+    const diffToMonday = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
+    startsAt = new Date(Date.UTC(year, month, date + diffToMonday, 0, 0, 0, 0));
+    endsAt = new Date(startsAt.getTime() + 7 * 24 * 60 * 60 * 1000);
+    const sYear = startsAt.getUTCFullYear();
+    const sMonth = String(startsAt.getUTCMonth() + 1).padStart(2, '0');
+    const sDay = String(startsAt.getUTCDate()).padStart(2, '0');
+    periodKey = `weekly:${sYear}-${sMonth}-${sDay}`;
+    scheduleLabel = 'Resets every Monday at 00:00 UTC (7-Day Cycle)';
+  } else {
+    startsAt = new Date(Date.UTC(year, month, 1, 0, 0, 0, 0));
+    endsAt = new Date(Date.UTC(year, month + 1, 1, 0, 0, 0, 0));
+    const yStr = String(year);
+    const mStr = String(month + 1).padStart(2, '0');
+    periodKey = `monthly:${yStr}-${mStr}`;
+    scheduleLabel = 'Resets on the 1st of every month at 00:00 UTC';
+  }
+
+  const remainingMs = Math.max(0, endsAt.getTime() - nowMs);
+  const totalMinutes = Math.floor(remainingMs / 60000);
+  const days = Math.floor(totalMinutes / (60 * 24));
+  const hours = Math.floor((totalMinutes % (60 * 24)) / 60);
+  const mins = totalMinutes % 60;
+
+  const remainingLabel =
+    days > 0
+      ? `${days}d ${hours}h remaining`
+      : hours > 0
+      ? `${hours}h ${mins}m remaining`
+      : `${mins}m remaining`;
+
+  return {
+    periodType,
+    periodKey,
+    startsAtIso: startsAt.toISOString(),
+    endsAtIso: endsAt.toISOString(),
+    remainingMs,
+    remainingLabel,
+    scheduleLabel,
+  };
+}
+
+/* ============================================================================
+   SEASONAL LEADERBOARD & DYNAMIC 4TH+ COIN REWARD BRACKET ENGINE
+   ============================================================================ */
+
+export interface SeasonalBracketConfig {
+  seasonDurationDays: number;
+  rank4BaseCoins: number;
+  minEligibleCoins: number;
+  curveExponent: number;
+}
+
+export const DEFAULT_SEASONAL_BRACKET_CONFIG: SeasonalBracketConfig = {
+  seasonDurationDays: 30,
+  rank4BaseCoins: 500,
+  minEligibleCoins: 75,
+  curveExponent: 1.25,
+};
+
+export interface SeasonalTopSkinBracketRow {
+  rank: 1 | 2 | 3;
+  rankLabel: string;
+  skinId: string;
+  skinName: string;
+  rarity: SkinRarity;
+  emblem: string;
+  populated: boolean;
+  coupleName?: string;
+  coupleTrophies?: number;
+}
+
+export interface SeasonalCoinBracketRow {
+  tierIndex: number;
+  rankStart: number;
+  rankEnd: number;
+  rankRangeLabel: string;
+  tierTitle: string;
+  coinsPerPartner: number;
+  couplesInTier: number;
+}
+
+export function computeRankCoinRewardFor4thPlus(
+  rank: number,
+  totalEligibleCouples: number,
+  config: SeasonalBracketConfig = DEFAULT_SEASONAL_BRACKET_CONFIG
+): number {
+  if (rank < 4 || totalEligibleCouples < 4 || rank > totalEligibleCouples) {
+    return 0;
+  }
+  const maxCoins = Math.max(50, Math.round(config.rank4BaseCoins));
+  const minCoins = Math.max(10, Math.min(maxCoins, Math.round(config.minEligibleCoins)));
+  const remainingCount = totalEligibleCouples - 3; // ranks 4..N
+  if (remainingCount <= 1) {
+    return maxCoins;
+  }
+  const relativeIndex = rank - 4; // 0 for rank 4, remainingCount - 1 for rank N
+  const normalizedProgress = relativeIndex / (remainingCount - 1); // 0 .. 1
+  const exponent = Math.max(0.5, Math.min(3, config.curveExponent || 1.25));
+  const rawCoins =
+    minCoins + (maxCoins - minCoins) * Math.pow(1 - normalizedProgress, exponent);
+  // Round to nearest 5 coins for clean arcade payouts while keeping monotonic order
+  return Math.max(minCoins, Math.round(rawCoins / 5) * 5);
+}
+
+export function computeDynamicSeasonalBracket(
+  eligibleCouples: {
+    id: number;
+    coupleName: string;
+    coupleTrophies: number;
+  }[],
+  config: SeasonalBracketConfig = DEFAULT_SEASONAL_BRACKET_CONFIG
+): {
+  eligibleCount: number;
+  top3SkinRows: SeasonalTopSkinBracketRow[];
+  coinBracketRows: SeasonalCoinBracketRow[];
+  perRankCoinMap: Record<number, number>;
+} {
+  const eligibleCount = eligibleCouples.length;
+  const s1 = ARCADE_SKINS.find((s) => s.seasonExclusiveRank === 1)!;
+  const s2 = ARCADE_SKINS.find((s) => s.seasonExclusiveRank === 2)!;
+  const s3 = ARCADE_SKINS.find((s) => s.seasonExclusiveRank === 3)!;
+
+  const top3SkinRows: SeasonalTopSkinBracketRow[] = [
+    {
+      rank: 1,
+      rankLabel: '1st Place Couple',
+      skinId: s1.id,
+      skinName: s1.name,
+      rarity: s1.rarity,
+      emblem: s1.emblem,
+      populated: eligibleCount >= 1,
+      coupleName: eligibleCouples[0]?.coupleName,
+      coupleTrophies: eligibleCouples[0]?.coupleTrophies,
+    },
+    {
+      rank: 2,
+      rankLabel: '2nd Place Couple',
+      skinId: s2.id,
+      skinName: s2.name,
+      rarity: s2.rarity,
+      emblem: s2.emblem,
+      populated: eligibleCount >= 2,
+      coupleName: eligibleCouples[1]?.coupleName,
+      coupleTrophies: eligibleCouples[1]?.coupleTrophies,
+    },
+    {
+      rank: 3,
+      rankLabel: '3rd Place Couple',
+      skinId: s3.id,
+      skinName: s3.name,
+      rarity: s3.rarity,
+      emblem: s3.emblem,
+      populated: eligibleCount >= 3,
+      coupleName: eligibleCouples[2]?.coupleName,
+      coupleTrophies: eligibleCouples[2]?.coupleTrophies,
+    },
+  ];
+
+  const perRankCoinMap: Record<number, number> = {};
+  const coinBracketRows: SeasonalCoinBracketRow[] = [];
+
+  if (eligibleCount < 4) {
+    return {
+      eligibleCount,
+      top3SkinRows,
+      coinBracketRows: [],
+      perRankCoinMap,
+    };
+  }
+
+  for (let r = 4; r <= eligibleCount; r++) {
+    perRankCoinMap[r] = computeRankCoinRewardFor4thPlus(r, eligibleCount, config);
+  }
+
+  const remainingCouplesCount = eligibleCount - 3;
+
+  // If 4..8 couples total, show exact individual or compact rank brackets without any empty ranks
+  if (remainingCouplesCount <= 4) {
+    const tierNames = [
+      '4th Place Contender',
+      '5th Place Contender',
+      '6th Place Contender',
+      '7th Place Contender',
+    ];
+    for (let r = 4; r <= eligibleCount; r++) {
+      coinBracketRows.push({
+        tierIndex: r - 3,
+        rankStart: r,
+        rankEnd: r,
+        rankRangeLabel: `#${r}`,
+        tierTitle: tierNames[r - 4] || `Rank #${r} Contender`,
+        coinsPerPartner: perRankCoinMap[r],
+        couplesInTier: 1,
+      });
+    }
+  } else {
+    // Dynamically partition 4..N into up to 4 proportional tiers (Upper Crest, Silver Division, Bronze Division, Season Finishers)
+    const tierDefinitions = [
+      { title: 'Upper Crest Bracket (Top 25% of 4th+)', share: 0.25 },
+      { title: 'Silver Division Bracket (Next 25% of 4th+)', share: 0.25 },
+      { title: 'Bronze Division Bracket (Next 25% of 4th+)', share: 0.25 },
+      { title: 'Season Finisher Bracket (Final 25% of 4th+)', share: 0.25 },
+    ];
+
+    let cursor = 4;
+    for (let i = 0; i < tierDefinitions.length; i++) {
+      if (cursor > eligibleCount) break;
+      const isLast = i === tierDefinitions.length - 1;
+      const countForTier = isLast
+        ? eligibleCount - cursor + 1
+        : Math.max(1, Math.round(remainingCouplesCount * tierDefinitions[i].share));
+      const rankStart = cursor;
+      const rankEnd = Math.min(eligibleCount, cursor + countForTier - 1);
+      const tierCoins = perRankCoinMap[rankStart];
+
+      // Normalize all ranks inside this grouped bracket to receive the tier's coin payout so the table and payout match 100%
+      for (let r = rankStart; r <= rankEnd; r++) {
+        perRankCoinMap[r] = tierCoins;
+      }
+
+      coinBracketRows.push({
+        tierIndex: i + 1,
+        rankStart,
+        rankEnd,
+        rankRangeLabel: rankStart === rankEnd ? `#${rankStart}` : `#${rankStart} – #${rankEnd}`,
+        tierTitle: tierDefinitions[i].title,
+        coinsPerPartner: tierCoins,
+        couplesInTier: rankEnd - rankStart + 1,
+      });
+
+      cursor = rankEnd + 1;
+    }
+  }
+
+  return {
+    eligibleCount,
+    top3SkinRows,
+    coinBracketRows,
+    perRankCoinMap,
+  };
+}
+
 

@@ -40,6 +40,7 @@ export interface PlayerProfile {
   losses: number;
   draws: number;
   theme: string;
+  equippedSkin: string;
   favoriteGames: string[];
   unlockedItems: string[];
   petState: {
@@ -61,6 +62,16 @@ export function normalizePlayerProfile(raw: Record<string, unknown>): PlayerProf
   const setupDone = Boolean(
     raw.usernameSetupCompleted !== false && rawUsername.length >= 3
   );
+  const unlockedList: string[] = safeParseJson(raw.unlockedItems, [
+    'avatar-kitsune',
+    'avatar-star-cat',
+    'theme-twilight-cocoa',
+    'pet-bell-collar',
+    'skin-classic-notebook',
+  ]);
+  if (!unlockedList.includes('skin-classic-notebook')) {
+    unlockedList.push('skin-classic-notebook');
+  }
   return {
     uid: String(raw.uid || ''),
     email: String(raw.email || ''),
@@ -77,13 +88,9 @@ export function normalizePlayerProfile(raw: Record<string, unknown>): PlayerProf
     losses: Number(raw.losses ?? 0),
     draws: Number(raw.draws ?? 0),
     theme: String(raw.theme || 'twilight-cocoa'),
+    equippedSkin: String(raw.equippedSkin || 'skin-classic-notebook'),
     favoriteGames: safeParseJson(raw.favoriteGames, []),
-    unlockedItems: safeParseJson(raw.unlockedItems, [
-      'avatar-kitsune',
-      'avatar-star-cat',
-      'theme-twilight-cocoa',
-      'pet-bell-collar',
-    ]),
+    unlockedItems: unlockedList,
     petState: safeParseJson(raw.petState, {
       name: 'Mochi',
       hunger: 85,

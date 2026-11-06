@@ -3,6 +3,7 @@
 import React, { useState } from 'react';
 import { PlayerProfile } from './AuthModal';
 import { ArcadeCircularLoader, ArcadeInlineSpinner } from './ArcadeLoader';
+import { getSkinById } from '@/src/lib/arcade-data';
 import { soundFX } from '@/src/lib/sound';
 import {
   HeartHandshake,
@@ -31,6 +32,7 @@ export interface EnrichedCouplePairing {
   coupleBio: string;
   coupleBanner: string;
   coupleTitle?: string;
+  equippedCoupleSkin?: string;
   coupleTrophies?: number;
   highestTrophies?: number;
   claimedTrophyMilestones?: string;
@@ -401,6 +403,24 @@ export function CouplePairingPanel({
                       <span>Anniversary / Together Since: {activeCouple.anniversaryDate}</span>
                     </div>
                   )}
+                  {(() => {
+                    const cSkin = getSkinById(
+                      activeCouple.equippedCoupleSkin || currentUser.equippedSkin
+                    );
+                    return (
+                      <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+                        <span
+                          className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-0.5 font-semibold ${cSkin.tagColorClass}`}
+                        >
+                          <span>{cSkin.emblem}</span>
+                          <span>Equipped Skin: {cSkin.name}</span>
+                          <span className="font-mono text-[10px] uppercase opacity-90">
+                            · {cSkin.rarity}
+                          </span>
+                        </span>
+                      </div>
+                    );
+                  })()}
                 </div>
               </div>
 

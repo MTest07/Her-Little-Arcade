@@ -37,7 +37,16 @@ const STORE_FILE_PATH = path.join('/tmp', 'her-little-arcade-db-v2.json');
 
 function reviveRowDates(row: Record<string, unknown>): Record<string, unknown> {
   const copy: Record<string, unknown> = { ...row };
-  for (const key of ['createdAt', 'updatedAt', 'lastSeenAt', 'heartbeatAt']) {
+  for (const key of [
+    'createdAt',
+    'updatedAt',
+    'lastSeenAt',
+    'heartbeatAt',
+    'startsAt',
+    'endsAt',
+    'completedAt',
+    'claimedAt',
+  ]) {
     if (typeof copy[key] === 'string') {
       const parsed = new Date(copy[key] as string);
       if (!Number.isNaN(parsed.getTime())) {

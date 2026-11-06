@@ -91,6 +91,7 @@ export async function syncPlayerProfileToFirestore(profile: {
   usernameSetupCompleted: boolean;
   renameCards?: number;
   avatar: string;
+  equippedSkin?: string;
   xp: number;
   level: number;
   coins: number;
@@ -118,6 +119,7 @@ export async function syncPlayerProfileToFirestore(profile: {
     .replace(/[^a-zA-Z0-9_-]/g, '')
     .slice(0, 20);
   const cleanAvatar = (profile.avatar || 'kitsune').slice(0, 64);
+  const cleanSkin = (profile.equippedSkin || 'skin-classic-notebook').slice(0, 64);
   const cleanTheme = (profile.theme || 'twilight-cocoa').slice(0, 64);
   const cleanPresence = ['online', 'in_queue', 'in_match', 'offline'].includes(
     profile.presenceStatus || ''
@@ -131,6 +133,7 @@ export async function syncPlayerProfileToFirestore(profile: {
     usernameSetupCompleted: Boolean(profile.usernameSetupCompleted),
     renameCards: Math.max(0, Math.min(1000, Math.floor(profile.renameCards || 0))),
     avatar: cleanAvatar,
+    equippedSkin: cleanSkin,
     xp: Math.max(0, Math.floor(profile.xp || 0)),
     level: Math.max(1, Math.floor(profile.level || 1)),
     coins: Math.max(0, Math.floor(profile.coins || 0)),

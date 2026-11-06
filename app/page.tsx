@@ -12,11 +12,13 @@ import {
   RENAME_CARD_COST_COINS,
   TROPHY_ROAD_MILESTONES,
   ACHIEVEMENTS,
-  DAILY_CHALLENGE_TEMPLATES,
   HERO_BANNER_IMAGE,
   VIRTUAL_PET_IMAGE,
   KEEPSAKE_PICNIC_IMAGE,
   ArcadeGameDef,
+  ArcadeSkinDef,
+  SeasonalBracketConfig,
+  getSkinById,
 } from '@/src/lib/arcade-data';
 import { calculateLevelFromXp } from '@/src/lib/game-rules';
 import {
@@ -46,6 +48,15 @@ import {
   ArcadeInlineSpinner,
   DEFAULT_LOADING_MESSAGES,
 } from '@/src/components/ArcadeLoader';
+import {
+  ChallengesVaultPanel,
+  SeasonalLeaderboardAndBracketPanel,
+  SkinsBoutiqueAndVaultPanel,
+  ActiveChallengeRecord,
+  ChallengeHistoryRecord,
+  ChallengePeriodWindows,
+  SeasonDataState,
+} from '@/src/components/SeasonalAndChallengePanels';
 import { soundFX } from '@/src/lib/sound';
 import {
   Users,
@@ -130,6 +141,11 @@ export default function HerLittleArcadePage() {
   const [personalizedItems, setPersonalizedItems] = useState<PersonalizedItemRecord[]>([]);
   const [incomingInvitations, setIncomingInvitations] = useState<IncomingInvitationRecord[]>([]);
   const [coinTransactions, setCoinTransactions] = useState<CoinTransactionRecord[]>([]);
+  const [challenges, setChallenges] = useState<ActiveChallengeRecord[]>([]);
+  const [challengeHistory, setChallengeHistory] = useState<ChallengeHistoryRecord[]>([]);
+  const [challengePeriodWindows, setChallengePeriodWindows] =
+    useState<ChallengePeriodWindows | null>(null);
+  const [seasonState, setSeasonState] = useState<SeasonDataState | null>(null);
 
   // Real Multiplayer Room State (Null until user creates or joins a validated room)
   const [activeRoom, setActiveRoom] = useState<MultiplayerRoomState | null>(null);
@@ -149,7 +165,8 @@ export default function HerLittleArcadePage() {
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [leaderboardTab, setLeaderboardTab] = useState<'couples' | 'trophy-road'>('couples');
   const [coupleLeaderboardPeriod, setCoupleLeaderboardPeriod] = useState<'global' | 'weekly' | 'monthly'>('global');
-  const [claimedChallenges, setClaimedChallenges] = useState<string[]>([]);
+  const [claimingChallengeKey, setClaimingChallengeKey] = useState<string | null>(null);
+  const [isUpdatingSeason, setIsUpdatingSeason] = useState<boolean>(false);
   const [voiceJoinedOnce, setVoiceJoinedOnce] = useState<boolean>(false);
   const [rewardStatusBanner, setRewardStatusBanner] = useState<string | null>(null);
 
@@ -326,6 +343,23 @@ export default function HerLittleArcadePage() {
       if (Array.isArray(data.coinTransactions)) {
         setCoinTransactions(data.coinTransactions);
       }
+
+      if (Array.isArray(data.challenges)) {
+        setChallenges(data.challenges);
+      }
+
+      if (Array.isArray(data.challengeHistory)) {
+        setChallengeHistory(data.challengeHistory);
+      }
+
+      if (data.challengePeriodWindows) {
+        setChallengePeriodWindows(data.challengePeriodWindows);
+      }
+
+      if (data.seasonState) {
+        setSeasonState(data.seasonState);
+      }
+
       hasBootstrappedOnceRef.current = true;
     } catch {
       // Non-fatal network error
@@ -615,6 +649,160 @@ export default function HerLittleArcadePage() {
     }
   }
 
+  async function handleClaimChallenge(challengeKey: string) {
+    if (!currentUser || !sessionToken) return;
+    setClaimingChallengeKey(challengeKey);
+    try {
+      const res = await fetch('/api/arcade', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${sessionToken}`,
+        },
+        body: JSON.stringify({
+          action: 'claim_challenge',
+          challengeKey,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setRewardStatusBanner(data.error || 'Could not claim challenge reward.');
+        soundFX.playError();
+        return;
+      }
+      if (data.user) {
+        setCurrentUser(normalizePlayerProfile(data.user));
+      }
+      if (Array.isArray(data.challenges)) {
+        setChallenges(data.challenges);
+      }
+      if (Array.isArray(data.challengeHistory)) {
+        setChallengeHistory(data.challengeHistory);
+      }
+      soundFX.playSuccess();
+      loadBootstrapData(currentUser.uid);
+    } catch {
+      soundFX.playError();
+    } finally {
+      setClaimingChallengeKey(null);
+    }
+  }
+
+  async function handleEquipSkin(skinId: string, applyToCouple: boolean) {
+    if (!currentUser || !sessionToken) return;
+    setRewardStatusBanner(null);
+    setPendingShopItemId(skinId);
+    try {
+      const res = await fetch('/api/arcade', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${sessionToken}`,
+        },
+        body: JSON.stringify({
+          action: 'equip_skin',
+          skinId,
+          applyToCouple,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setRewardStatusBanner(data.error || 'Could not equip skin.');
+        soundFX.playError();
+        return;
+      }
+      if (data.user) {
+        setCurrentUser(normalizePlayerProfile(data.user));
+      }
+      if (data.coupleContext) {
+        setCoupleContext(data.coupleContext);
+      }
+      const skinDef = getSkinById(skinId);
+      setRewardStatusBanner(
+        `Equipped ${skinDef?.name || skinId}${
+          applyToCouple && coupleContext.activeCouple ? ' on your Player & Couple Profile!' : '!'
+        }`
+      );
+      soundFX.playSuccess();
+      loadBootstrapData(currentUser.uid);
+    } catch {
+      setRewardStatusBanner('Could not equip skin right now.');
+    } finally {
+      setPendingShopItemId(null);
+    }
+  }
+
+  async function handlePurchaseSkin(skin: ArcadeSkinDef) {
+    await handleBuyOrEquipShopItem(skin.id, skin.costCoins, 'skin', skin.id);
+  }
+
+  async function handleUpdateSeasonBracket(configUpdates: Partial<SeasonalBracketConfig>) {
+    if (!currentUser || !sessionToken) return;
+    setIsUpdatingSeason(true);
+    setRewardStatusBanner(null);
+    try {
+      const res = await fetch('/api/arcade', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${sessionToken}`,
+        },
+        body: JSON.stringify({
+          action: 'update_season_bracket',
+          ...configUpdates,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setRewardStatusBanner(data.error || 'Could not update seasonal bracket.');
+        soundFX.playError();
+        return;
+      }
+      setRewardStatusBanner(
+        'Updated Dynamic Seasonal Coin Reward Bracket & Season configuration!'
+      );
+      soundFX.playSuccess();
+      await loadBootstrapData(currentUser.uid);
+    } catch {
+      setRewardStatusBanner('Failed to update seasonal bracket.');
+    } finally {
+      setIsUpdatingSeason(false);
+    }
+  }
+
+  async function handleConcludeSeasonNow() {
+    if (!currentUser || !sessionToken) return;
+    setIsUpdatingSeason(true);
+    setRewardStatusBanner(null);
+    try {
+      const res = await fetch('/api/arcade', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${sessionToken}`,
+        },
+        body: JSON.stringify({
+          action: 'conclude_season_now',
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setRewardStatusBanner(data.error || 'Could not conclude season.');
+        soundFX.playError();
+        return;
+      }
+      setRewardStatusBanner(
+        `Season Rollover Complete! Final standings saved, Top 3 Exclusive Skins & 4th+ Dynamic Bracket Coins distributed, and active couple trophies reset to 0 for the new season!`
+      );
+      soundFX.playSuccess();
+      await loadBootstrapData(currentUser.uid);
+    } catch {
+      setRewardStatusBanner('Failed to conclude season.');
+    } finally {
+      setIsUpdatingSeason(false);
+    }
+  }
+
   async function handleAddPersonalizedContent(e: React.FormEvent) {
     e.preventDefault();
     if (!currentUser || !sessionToken || !customTitle.trim()) return;
@@ -837,6 +1025,38 @@ export default function HerLittleArcadePage() {
                     : 'xl:col-span-12'
                 }
               >
+                {/* Equipped Player & Couple Skin Banner in Active Game Arena */}
+                {(() => {
+                  const playerSkin = getSkinById(currentUser.equippedSkin);
+                  const coupleSkin = getSkinById(activeCouple?.equippedCoupleSkin);
+                  if (!playerSkin && !coupleSkin) return null;
+                  return (
+                    <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-stone-800 bg-stone-900/90 px-3.5 py-2 text-xs">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="font-bold text-stone-200">
+                          @{currentUser.username}
+                        </span>
+                        {playerSkin && (
+                          <span
+                            className={`rounded border px-2 py-0.5 text-[10px] font-bold ${playerSkin.badgeClass}`}
+                          >
+                            {playerSkin.icon} {playerSkin.name} ({playerSkin.rarity})
+                          </span>
+                        )}
+                      </div>
+                      {activeCouple && coupleSkin && (
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-stone-400">♥ {activeCouple.coupleName}:</span>
+                          <span
+                            className={`rounded border px-2 py-0.5 text-[10px] font-bold ${coupleSkin.badgeClass}`}
+                          >
+                            {coupleSkin.icon} {coupleSkin.name}
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
                 {gameLoadingTarget ? (
                   <ArcadeCircularLoader
                     active={true}
@@ -979,6 +1199,7 @@ export default function HerLittleArcadePage() {
                     activeCouple={activeCouple}
                     activeRoom={activeRoom}
                     incomingInvitations={incomingInvitations}
+                    preferredMode={selectedMultiplayerMode}
                     onRefreshInvitations={() => loadBootstrapData(currentUser.uid)}
                     onUpdateRoom={handlePersistRoom}
                     onStartRoomGame={(room) => {
@@ -1228,76 +1449,19 @@ export default function HerLittleArcadePage() {
                       </div>
                     </section>
 
-                    {/* Daily Challenges */}
-                    <section className="space-y-4 lg:col-span-5">
-                      <div className="flex items-center justify-between">
-                        <h2 className="text-lg font-bold text-stone-100">Daily Challenges</h2>
-                        <span className="flex items-center gap-1 font-mono text-xs text-rose-300 tabular-nums">
-                          <Flame className="h-3.5 w-3.5" />
-                          <span>Streak: {currentUser.streak}d</span>
-                        </span>
-                      </div>
-
-                      <div className="space-y-4 pt-1">
-                        {DAILY_CHALLENGE_TEMPLATES.map((ch) => {
-                          const isClaimed = claimedChallenges.includes(ch.key);
-                          const hasCompletedGame = myGameRecords.some(
-                            (r) => r.gameId === ch.gameId
-                          );
-                          return (
-                            <div
-                              key={ch.key}
-                              className="flex items-center justify-between gap-3 py-1.5"
-                            >
-                              <div className="min-w-0 flex-1">
-                                <div className="text-xs font-bold text-stone-100">
-                                  {ch.title}
-                                </div>
-                                <p className="mt-0.5 text-xs text-stone-400">
-                                  {ch.description}
-                                </p>
-                                <div className="mt-1 font-mono text-[11px] text-amber-300 tabular-nums">
-                                  +{ch.xpReward} XP · 0 Coins (2v2 Exclusive)
-                                </div>
-                              </div>
-
-                              <div className="flex flex-col gap-1.5 shrink-0">
-                                <button
-                                  type="button"
-                                  onClick={() => handleLaunchGame(ch.gameId)}
-                                  className="rounded-lg border border-stone-700 bg-stone-950 px-3 py-1.5 text-xs font-semibold text-stone-200 hover:border-amber-500/60 whitespace-nowrap"
-                                >
-                                  Play
-                                </button>
-                                {!isClaimed && hasCompletedGame ? (
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      setClaimedChallenges([...claimedChallenges, ch.key]);
-                                      handleUpdateProfile({
-                                        xp: currentUser.xp + ch.xpReward,
-                                      });
-                                      soundFX.playSuccess();
-                                    }}
-                                    className="rounded-lg border border-teal-500/40 bg-teal-500/20 px-3 py-1 text-[11px] font-semibold text-teal-200 hover:bg-teal-500/30 whitespace-nowrap"
-                                  >
-                                    Claim Bonus
-                                  </button>
-                                ) : isClaimed ? (
-                                  <span className="text-center text-[11px] font-medium text-emerald-400">
-                                    Claimed
-                                  </span>
-                                ) : (
-                                  <span className="text-center text-[10px] text-stone-500">
-                                    Play to unlock
-                                  </span>
-                                )}
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </section>
+                    {/* Daily, Weekly & Monthly Challenges */}
+                    <div className="lg:col-span-5">
+                      <ChallengesVaultPanel
+                        challenges={challenges}
+                        challengeHistory={challengeHistory}
+                        periodWindows={challengePeriodWindows}
+                        streak={currentUser.streak}
+                        claimingKey={claimingChallengeKey}
+                        compact={true}
+                        onPlayGame={(gId) => handleLaunchGame(gId)}
+                        onClaimChallenge={handleClaimChallenge}
+                      />
+                    </div>
                   </div>
                 </div>
               )}
@@ -1374,7 +1538,10 @@ export default function HerLittleArcadePage() {
                         </button>
                         <button
                           type="button"
-                          onClick={() => setMultiplayerFilter('1v1')}
+                          onClick={() => {
+                            setMultiplayerFilter('1v1');
+                            setSelectedMultiplayerMode('1v1');
+                          }}
                           className={`rounded-xl px-3 py-1.5 text-xs font-bold transition-colors ${
                             multiplayerFilter === '1v1'
                               ? 'bg-amber-500 text-stone-950'
@@ -1385,7 +1552,10 @@ export default function HerLittleArcadePage() {
                         </button>
                         <button
                           type="button"
-                          onClick={() => setMultiplayerFilter('2v2')}
+                          onClick={() => {
+                            setMultiplayerFilter('2v2');
+                            setSelectedMultiplayerMode('2v2');
+                          }}
                           className={`rounded-xl px-3 py-1.5 text-xs font-bold transition-colors ${
                             multiplayerFilter === '2v2'
                               ? 'bg-rose-500 text-stone-950'
@@ -1864,11 +2034,19 @@ export default function HerLittleArcadePage() {
 
                     {/* VIEW C: COUPLE LEADERBOARD (2V2 ONLY) */}
                     {multiplayerFilter === 'couple-leaderboard' && (
-                      <div className="space-y-4">
+                      <div className="space-y-5">
+                        <SeasonalLeaderboardAndBracketPanel
+                          seasonState={seasonState}
+                          activeCouple={activeCouple}
+                          isUpdatingSeason={isUpdatingSeason}
+                          onUpdateBracketConfig={handleUpdateSeasonBracket}
+                          onConcludeSeasonNow={handleConcludeSeasonNow}
+                        />
+
                         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-stone-800 pb-3 text-xs">
                           <div>
                             <div className="font-bold text-stone-100">
-                              2v2 Couple Leaderboard (Ranked Exclusively by 2v2 Couple Trophies)
+                              2v2 Couple Leaderboard (Ranked Exclusively by Active Season 2v2 Trophies)
                             </div>
                             <p className="mt-0.5 text-stone-400">
                               1v1 and single-player scores are never included. Win: +30 🏆 · Draw: +6 🏆 · Loss: -15 🏆
@@ -1878,7 +2056,7 @@ export default function HerLittleArcadePage() {
                           <div className="flex items-center gap-1 rounded-xl border border-stone-800 bg-stone-950 p-1">
                             {(
                               [
-                                { id: 'global', label: 'Global' },
+                                { id: 'global', label: 'Seasonal' },
                                 { id: 'weekly', label: 'Weekly' },
                                 { id: 'monthly', label: 'Monthly' },
                               ] as const
@@ -1909,14 +2087,14 @@ export default function HerLittleArcadePage() {
                               <thead className="border-b border-stone-800 bg-stone-950 text-stone-400">
                                 <tr>
                                   <th className="px-4 py-3">Rank</th>
-                                  <th className="px-4 py-3">Couple Name</th>
+                                  <th className="px-4 py-3">Couple Name &amp; Skin</th>
                                   <th className="px-4 py-3">Both Partners (Avatars &amp; Usernames)</th>
                                   <th className="px-4 py-3 text-right">
                                     {coupleLeaderboardPeriod === 'weekly'
                                       ? 'Weekly 2v2 Trophies'
                                       : coupleLeaderboardPeriod === 'monthly'
                                       ? 'Monthly 2v2 Trophies'
-                                      : 'Total 2v2 Trophies'}
+                                      : 'Seasonal 2v2 Trophies'}
                                   </th>
                                   <th className="px-4 py-3 text-right">2v2 Record</th>
                                 </tr>
@@ -1947,6 +2125,7 @@ export default function HerLittleArcadePage() {
                                         ? (c.monthlyTrophies ?? c.coupleTrophies ?? 0)
                                         : (c.coupleTrophies ?? 0);
                                     const isMyCouple = activeCouple?.id === c.id;
+                                    const cpSkin = getSkinById(c.equippedCoupleSkin);
                                     return (
                                       <tr
                                         key={c.id}
@@ -1958,8 +2137,15 @@ export default function HerLittleArcadePage() {
                                           #{idx + 1}
                                         </td>
                                         <td className="px-4 py-3 font-sans">
-                                          <div className="font-bold text-stone-100">
-                                            {c.coupleName || `Couple #${c.pairingCode}`}{' '}
+                                          <div className="flex flex-wrap items-center gap-1.5 font-bold text-stone-100">
+                                            <span>{c.coupleName || `Couple #${c.pairingCode}`}</span>
+                                            {cpSkin && (
+                                              <span
+                                                className={`rounded border px-1.5 py-0.5 text-[9px] font-bold ${cpSkin.badgeClass}`}
+                                              >
+                                                {cpSkin.icon} {cpSkin.name}
+                                              </span>
+                                            )}
                                             {isMyCouple && (
                                               <span className="text-[11px] text-amber-300">
                                                 (Your Couple)
@@ -2001,6 +2187,9 @@ export default function HerLittleArcadePage() {
                       activeRoom={activeRoom}
                       incomingInvitations={incomingInvitations}
                       requestedLobbyTab={requestedDockTab}
+                      preferredMode={
+                        multiplayerFilter === '2v2' ? '2v2' : selectedMultiplayerMode
+                      }
                       onLobbyTabChange={(tab) => setRequestedDockTab(tab)}
                       onRefreshInvitations={() => loadBootstrapData(currentUser.uid)}
                       onUpdateRoom={handlePersistRoom}
@@ -2023,6 +2212,18 @@ export default function HerLittleArcadePage() {
                   ============================================================ */}
               {(activeSection === 'achievements' || activeSection === 'our-games') && (
                 <div className="space-y-8">
+                  {/* Daily, Weekly & Monthly Challenges Full Vault */}
+                  <ChallengesVaultPanel
+                    challenges={challenges}
+                    challengeHistory={challengeHistory}
+                    periodWindows={challengePeriodWindows}
+                    streak={currentUser.streak}
+                    claimingKey={claimingChallengeKey}
+                    compact={false}
+                    onPlayGame={(gId) => handleLaunchGame(gId)}
+                    onClaimChallenge={handleClaimChallenge}
+                  />
+
                   {/* Individual & Couple Achievements Section */}
                   <section className="space-y-4">
                     <div className="flex flex-wrap items-center justify-between gap-4 border-b border-stone-800 pb-4">
@@ -2420,25 +2621,33 @@ export default function HerLittleArcadePage() {
                     </div>
                   )}
 
-                  {/* TAB 1: Couple Leaderboard (Global / Weekly / Monthly Ranked by Couple Trophies) */}
+                  {/* TAB 1: Couple Leaderboard (Seasonal / Weekly / Monthly Ranked by Couple Trophies) */}
                   {leaderboardTab === 'couples' && (
-                    <div className="space-y-4">
+                    <div className="space-y-5">
+                      <SeasonalLeaderboardAndBracketPanel
+                        seasonState={seasonState}
+                        activeCouple={activeCouple}
+                        isUpdatingSeason={isUpdatingSeason}
+                        onUpdateBracketConfig={handleUpdateSeasonBracket}
+                        onConcludeSeasonNow={handleConcludeSeasonNow}
+                      />
+
                       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-stone-800 pb-3 text-xs">
                         <div>
                           <div className="font-bold text-stone-100">
-                            2v2 Couple Trophy Standings (Ranked by Shared Couple Trophies)
+                            2v2 Couple Trophy Standings (Ranked by Active Season Shared Couple Trophies)
                           </div>
                           <p className="mt-0.5 text-stone-400">
                             2v2 Victory: <strong className="text-emerald-300">+30 🏆</strong> · 2v2 Draw:{' '}
                             <strong className="text-amber-300">+6 🏆</strong> · 2v2 Loss:{' '}
-                            <strong className="text-rose-300">-15 🏆</strong> (Minimum 0 🏆)
+                            <strong className="text-rose-300">-15 🏆</strong> (Minimum 0 🏆 · Resets to 0 at Season End)
                           </p>
                         </div>
 
                         <div className="flex items-center gap-1 rounded-xl border border-stone-800 bg-stone-950 p-1">
                           {(
                             [
-                              { id: 'global', label: 'Global All-Time' },
+                              { id: 'global', label: 'Current Season' },
                               { id: 'weekly', label: 'Weekly' },
                               { id: 'monthly', label: 'Monthly' },
                             ] as const
@@ -2473,17 +2682,17 @@ export default function HerLittleArcadePage() {
                           <table className="w-full text-left text-xs">
                             <thead className="border-b border-stone-800 bg-stone-950 text-stone-400">
                               <tr>
-                                <th className="px-4 py-3">Couple Rank</th>
-                                <th className="px-4 py-3">Couple Name &amp; Title</th>
+                                <th className="px-4 py-3">Season Rank</th>
+                                <th className="px-4 py-3">Couple Name, Skin &amp; Title</th>
                                 <th className="px-4 py-3">Paired Partners</th>
                                 <th className="px-4 py-3 text-right">
                                   {coupleLeaderboardPeriod === 'weekly'
                                     ? 'Weekly Trophies'
                                     : coupleLeaderboardPeriod === 'monthly'
                                     ? 'Monthly Trophies'
-                                    : 'Total Couple Trophies'}
+                                    : 'Seasonal Couple Trophies'}
                                 </th>
-                                <th className="px-4 py-3 text-right">2v2 Matches</th>
+                                <th className="px-4 py-3 text-right">Peak 🏆</th>
                                 <th className="px-4 py-3 text-right">2v2 W-L-D</th>
                               </tr>
                             </thead>
@@ -2512,9 +2721,8 @@ export default function HerLittleArcadePage() {
                                       : coupleLeaderboardPeriod === 'monthly'
                                       ? (c.monthlyTrophies ?? c.coupleTrophies ?? 0)
                                       : (c.coupleTrophies ?? 0);
-                                  const matchesCount =
-                                    c.coupleWins + c.coupleLosses + c.coupleDraws;
                                   const isMyCouple = activeCouple?.id === c.id;
+                                  const cpSkin = getSkinById(c.equippedCoupleSkin);
                                   return (
                                     <tr
                                       key={c.id}
@@ -2526,8 +2734,15 @@ export default function HerLittleArcadePage() {
                                         #{idx + 1}
                                       </td>
                                       <td className="px-4 py-3 font-sans">
-                                        <div className="font-bold text-stone-100">
-                                          {c.coupleName || `Couple #${c.pairingCode}`}{' '}
+                                        <div className="flex flex-wrap items-center gap-1.5 font-bold text-stone-100">
+                                          <span>{c.coupleName || `Couple #${c.pairingCode}`}</span>
+                                          {cpSkin && (
+                                            <span
+                                              className={`rounded border px-1.5 py-0.5 text-[9px] font-bold ${cpSkin.badgeClass}`}
+                                            >
+                                              {cpSkin.icon} {cpSkin.name}
+                                            </span>
+                                          )}
                                           {isMyCouple && (
                                             <span className="text-[11px] text-amber-300">
                                               (Your Couple)
@@ -2547,8 +2762,8 @@ export default function HerLittleArcadePage() {
                                       <td className="px-4 py-3 text-right font-bold text-amber-300">
                                         🏆 {displayedTrophies}
                                       </td>
-                                      <td className="px-4 py-3 text-right text-stone-300">
-                                        {matchesCount}
+                                      <td className="px-4 py-3 text-right text-stone-400">
+                                        {c.highestTrophies ?? displayedTrophies}
                                       </td>
                                       <td className="px-4 py-3 text-right text-emerald-300">
                                         {c.coupleWins}W - {c.coupleLosses}L - {c.coupleDraws}D
@@ -2753,13 +2968,22 @@ export default function HerLittleArcadePage() {
                     </div>
                   </section>
 
+                  {/* 5-Rarity Equippable Skins Vault & Live Preview */}
+                  <SkinsBoutiqueAndVaultPanel
+                    currentUser={currentUser}
+                    activeCouple={activeCouple}
+                    pendingSkinActionId={pendingShopItemId}
+                    onPurchaseSkin={handlePurchaseSkin}
+                    onEquipSkin={handleEquipSkin}
+                  />
+
                   {/* Cosmetic Unlockables Boutique */}
                   <section className="space-y-4">
                     <h2 className="text-base font-bold text-stone-100">
-                      Cosmetic &amp; Utility Unlockables
+                      Avatars, Themes, Pet Accessories &amp; Utility Unlockables
                     </h2>
                     <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                      {REWARD_SHOP_ITEMS.map((item) => {
+                      {REWARD_SHOP_ITEMS.filter((item) => item.category !== 'skin').map((item) => {
                         const isRename = item.id === 'rename-card';
                         const isOwned =
                           !isRename &&
@@ -2989,8 +3213,22 @@ export default function HerLittleArcadePage() {
                             {currentUser.petState.stage})
                           </div>
                           <div className="text-stone-400">
-                            Equipped: {currentUser.petState.accessory}
+                            Equipped Accessory: {currentUser.petState.accessory}
                           </div>
+                          {(() => {
+                            const equippedSkinDef = getSkinById(currentUser.equippedSkin);
+                            if (!equippedSkinDef) return null;
+                            return (
+                              <div className="pt-0.5">
+                                <span
+                                  className={`inline-block rounded border px-2 py-0.5 text-[10px] font-bold ${equippedSkinDef.badgeClass}`}
+                                >
+                                  {equippedSkinDef.icon} Skin: {equippedSkinDef.name} (
+                                  {equippedSkinDef.rarity})
+                                </span>
+                              </div>
+                            );
+                          })()}
                           <div className="font-mono text-amber-300 tabular-nums">
                             Joy {currentUser.petState.happiness}% · Energy{' '}
                             {currentUser.petState.energy}%
