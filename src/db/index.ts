@@ -1,8 +1,7 @@
 import fs from 'fs';
 import path from 'path';
-import { drizzle } from 'drizzle-orm/node-postgres';
+import type { drizzle } from 'drizzle-orm/node-postgres';
 import { getTableColumns, getTableName } from 'drizzle-orm';
-import { Pool } from 'pg';
 import * as schema from './schema.ts';
 
 interface PersistentStoreData {
@@ -11,27 +10,8 @@ interface PersistentStoreData {
 }
 
 declare global {
-  var _postgresPool: Pool | undefined;
   var _arcadePersistentStore: PersistentStoreData | undefined;
 }
-
-export const createPool = () => {
-  if (!global._postgresPool) {
-    global._postgresPool = new Pool({
-      host: process.env.SQL_HOST,
-      user: process.env.SQL_USER,
-      password: process.env.SQL_PASSWORD,
-      database: process.env.SQL_DB_NAME,
-      max: 10,
-      connectionTimeoutMillis: 15000,
-    });
-
-    global._postgresPool.on('error', (err) => {
-      console.error('Unexpected error on idle SQL pool client:', err);
-    });
-  }
-  return global._postgresPool;
-};
 
 const STORE_FILE_PATH = path.join('/tmp', 'her-little-arcade-db-v2.json');
 
@@ -475,8 +455,6 @@ function createPersistentDrizzleAdapter() {
   };
 }
 
-export const db = (
-  process.env.SQL_HOST
-    ? drizzle(createPool(), { schema })
-    : createPersistentDrizzleAdapter()
-) as unknown as ReturnType<typeof drizzle<typeof schema>>;
+export const db = createPersistentDrizzleAdapter() as unknown as ReturnType<
+  typeof drizzle<typeof schema>
+>;
