@@ -22,6 +22,17 @@ export const users = pgTable('users', {
   draws: integer('draws').notNull().default(0),
   theme: text('theme').notNull().default('twilight-cocoa'),
   equippedSkin: text('equipped_skin').notNull().default('skin-classic-notebook'),
+  customPhotoUrl: text('custom_photo_url').notNull().default(''),
+  equippedBanner: text('equipped_banner').notNull().default('banner-warm-sketchbook'),
+  unlockedBannersJson: text('unlocked_banners_json')
+    .notNull()
+    .default('["banner-warm-sketchbook"]'),
+  chestInventoryJson: text('chest_inventory_json')
+    .notNull()
+    .default('{"Common":0,"Uncommon":0,"Rare":0,"Epic":0,"Legendary":0}'),
+  keyInventoryJson: text('key_inventory_json')
+    .notNull()
+    .default('{"Common":0,"Uncommon":0,"Rare":0,"Epic":0,"Legendary":0}'),
   favoriteGames: text('favorite_games').notNull().default('[]'),
   unlockedItems: text('unlocked_items').notNull().default('["avatar-kitsune","avatar-star-cat","theme-twilight-cocoa","pet-bell-collar","skin-classic-notebook"]'),
   petState: text('pet_state').notNull().default('{"name":"Mochi","hunger":85,"happiness":90,"energy":90,"accessory":"bell-collar","stage":1}'),
@@ -81,16 +92,34 @@ export const rooms = pgTable('rooms', {
   roomCode: text('room_code').notNull().unique(),
   gameId: text('game_id').notNull(),
   mode: text('mode').notNull().default('1v1'), // '1v1' | '2v2'
+  visibility: text('visibility').notNull().default('public'), // 'public' | 'private'
+  joinPolicy: text('join_policy').notNull().default('immediate'), // 'immediate' | 'approval_required'
   maxPlayers: integer('max_players').notNull().default(2),
   hostUid: text('host_uid').notNull(),
   hostName: text('host_name').notNull(),
+  hostAvatar: text('host_avatar').notNull().default('kitsune'),
   status: text('status').notNull().default('lobby'), // 'lobby' | 'playing' | 'finished' | 'expired'
   settingsJson: text('settings_json').notNull().default('{}'),
   playersJson: text('players_json').notNull().default('[]'),
   teamsJson: text('teams_json').notNull().default('[]'),
+  pendingRequestsJson: text('pending_requests_json').notNull().default('[]'),
+  invitedUidsJson: text('invited_uids_json').notNull().default('[]'),
   gameStateJson: text('game_state_json').notNull().default('{}'),
   chatJson: text('chat_json').notNull().default('[]'),
   voiceParticipantsJson: text('voice_participants_json').notNull().default('[]'),
+  updatedAt: timestamp('updated_at').defaultNow(),
+  createdAt: timestamp('created_at').defaultNow(),
+});
+
+export const coupleTeamLobbies = pgTable('couple_team_lobbies', {
+  id: serial('id').primaryKey(),
+  coupleId: integer('couple_id').notNull().unique(),
+  gameId: text('game_id').notNull().default('quiz-battle'),
+  hostUid: text('host_uid').notNull(),
+  partnerUid: text('partner_uid').notNull(),
+  partnerInviteStatus: text('partner_invite_status').notNull().default('none'), // 'none' | 'pending' | 'accepted' | 'declined'
+  hostReady: boolean('host_ready').notNull().default(false),
+  partnerReady: boolean('partner_ready').notNull().default(false),
   updatedAt: timestamp('updated_at').defaultNow(),
   createdAt: timestamp('created_at').defaultNow(),
 });
@@ -116,6 +145,8 @@ export const dailyChallenges = pgTable('daily_challenges', {
   completed: integer('completed').notNull().default(0),
   claimed: integer('claimed').notNull().default(0),
   xpAwarded: integer('xp_awarded').notNull().default(0),
+  keyRewardTier: text('key_reward_tier').notNull().default('Common'),
+  keyAwardedCount: integer('key_awarded_count').notNull().default(0),
   claimedAt: timestamp('claimed_at'),
   updatedAt: timestamp('updated_at').defaultNow(),
 });
@@ -209,6 +240,20 @@ export const gameInvitations = pgTable('game_invitations', {
   createdAt: timestamp('created_at').defaultNow(),
 });
 
+export const chestOpenings = pgTable('chest_openings', {
+  id: serial('id').primaryKey(),
+  userUid: text('user_uid').notNull(),
+  chestTier: text('chest_tier').notNull(), // 'Common' | 'Uncommon' | 'Rare' | 'Epic' | 'Legendary'
+  openMethod: text('open_method').notNull(), // 'coins' | 'key' | 'inventory'
+  rewardCategory: text('reward_category').notNull(), // 'skin' | 'banner'
+  rewardId: text('reward_id').notNull(),
+  rewardName: text('reward_name').notNull(),
+  rewardRarity: text('reward_rarity').notNull(), // 'Common' | 'Uncommon' | 'Rare' | 'Epic' | 'Legendary'
+  wasDuplicate: boolean('was_duplicate').notNull().default(false),
+  duplicateCoinsAwarded: integer('duplicate_coins_awarded').notNull().default(0),
+  createdAt: timestamp('created_at').defaultNow(),
+});
+
 export const usersRelations = relations(users, ({ many }) => ({
   gameRecords: many(gameRecords),
 }));
@@ -219,6 +264,3 @@ export const gameRecordsRelations = relations(gameRecords, ({ one }) => ({
     references: [users.uid],
   }),
 }));
-
-
-

@@ -3,7 +3,12 @@
 import React, { useState } from 'react';
 import { PlayerProfile } from './AuthModal';
 import { ArcadeCircularLoader, ArcadeInlineSpinner } from './ArcadeLoader';
-import { getSkinById } from '@/src/lib/arcade-data';
+import {
+  AnimatedSkinnedAvatar,
+  ProfileBannerBackdrop,
+  ThreeLayerProfileHeader,
+} from './CosmeticAvatarAndBanner';
+import { ARCADE_BANNERS, getSkinById, getBannerById } from '@/src/lib/arcade-data';
 import { soundFX } from '@/src/lib/sound';
 import {
   HeartHandshake,
@@ -61,6 +66,8 @@ interface CouplePairingPanelProps {
   coupleContext: CoupleContextData;
   initialPairCodeFromUrl?: string;
   onCoupleContextChanged: (nextCtx: CoupleContextData) => void;
+  onOpenPhotoUpload?: () => void;
+  onOpenCosmeticsVault?: () => void;
 }
 
 function getAvatarEmoji(avatarCode?: string) {
@@ -76,6 +83,8 @@ export function CouplePairingPanel({
   coupleContext,
   initialPairCodeFromUrl = '',
   onCoupleContextChanged,
+  onOpenPhotoUpload,
+  onOpenCosmeticsVault,
 }: CouplePairingPanelProps) {
   const [enteredCode, setEnteredCode] = useState(initialPairCodeFromUrl);
   const [inspectedInvite, setInspectedInvite] = useState<{
@@ -283,7 +292,21 @@ export function CouplePairingPanel({
       : 'from-amber-950/70 via-stone-900 to-stone-950';
 
   return (
-    <section className="py-2 text-stone-100">
+    <section className="py-2 text-stone-100 space-y-5">
+      {/* Player's Own 3-Layer Profile Header (Banner + Uploaded Photo + Animated Skin Frame) */}
+      <ThreeLayerProfileHeader
+        username={currentUser.username}
+        titleOrSubtitle="Your Personal 3-Layer Arcade Identity (Banner + Uploaded Picture + Skin Frame)"
+        avatarId={currentUser.avatar}
+        customPhotoUrl={currentUser.customPhotoUrl}
+        equippedSkinId={currentUser.equippedSkin}
+        equippedBannerId={currentUser.equippedBanner || 'banner-sketchbook-grid'}
+        level={currentUser.level}
+        coins={currentUser.coins}
+        onOpenPhotoUpload={onOpenPhotoUpload}
+        onOpenCosmeticsVault={onOpenCosmeticsVault}
+      />
+
       <div className="flex flex-wrap items-center justify-between gap-4 border-b border-stone-800 pb-4">
         <div className="flex items-center gap-2.5">
           <HeartHandshake className="h-5 w-5 text-rose-400" />
@@ -360,25 +383,38 @@ export function CouplePairingPanel({
       {activeCouple ? (
         <div className="mt-5 space-y-5">
           {/* Shared Couple Banner Card */}
-          <div
-            className={`rounded-2xl border border-stone-800 bg-gradient-to-r ${bannerGradient} p-6`}
+          <ProfileBannerBackdrop
+            bannerId={
+              activeCouple.coupleBanner ||
+              currentUser.equippedBanner ||
+              'banner-sketchbook-grid'
+            }
+            className="p-6"
           >
             <div className="flex flex-col justify-between gap-6 lg:flex-row lg:items-center">
-              {/* Both Partners' Avatars & Names */}
+              {/* Both Partners' Avatars & Animated Skin Frames */}
               <div className="flex items-center gap-4">
-                <div className="flex items-center -space-x-3">
-                  <div
-                    title={activeCouple.requesterProfile?.username || 'Partner 1'}
-                    className="flex h-14 w-14 items-center justify-center rounded-2xl border-2 border-amber-400 bg-stone-950 text-2xl shadow-md"
-                  >
-                    {getAvatarEmoji(activeCouple.requesterProfile?.avatar)}
-                  </div>
-                  <div
-                    title={activeCouple.partnerProfile?.username || 'Partner 2'}
-                    className="flex h-14 w-14 items-center justify-center rounded-2xl border-2 border-rose-400 bg-stone-950 text-2xl shadow-md"
-                  >
-                    {getAvatarEmoji(activeCouple.partnerProfile?.avatar)}
-                  </div>
+                <div className="flex items-center -space-x-2">
+                  <AnimatedSkinnedAvatar
+                    avatarId={activeCouple.requesterProfile?.avatar}
+                    customPhotoUrl={activeCouple.requesterProfile?.customPhotoUrl}
+                    skinId={
+                      activeCouple.requesterProfile?.equippedSkin ||
+                      activeCouple.equippedCoupleSkin ||
+                      'skin-classic-notebook'
+                    }
+                    size="md"
+                  />
+                  <AnimatedSkinnedAvatar
+                    avatarId={activeCouple.partnerProfile?.avatar}
+                    customPhotoUrl={activeCouple.partnerProfile?.customPhotoUrl}
+                    skinId={
+                      activeCouple.partnerProfile?.equippedSkin ||
+                      activeCouple.equippedCoupleSkin ||
+                      'skin-classic-notebook'
+                    }
+                    size="md"
+                  />
                 </div>
 
                 <div>
@@ -407,16 +443,22 @@ export function CouplePairingPanel({
                     const cSkin = getSkinById(
                       activeCouple.equippedCoupleSkin || currentUser.equippedSkin
                     );
+                    const cBanner = getBannerById(
+                      activeCouple.coupleBanner || currentUser.equippedBanner
+                    );
                     return (
                       <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
                         <span
                           className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-0.5 font-semibold ${cSkin.tagColorClass}`}
                         >
                           <span>{cSkin.emblem}</span>
-                          <span>Equipped Skin: {cSkin.name}</span>
+                          <span>Couple Frame: {cSkin.name}</span>
                           <span className="font-mono text-[10px] uppercase opacity-90">
                             · {cSkin.rarity}
                           </span>
+                        </span>
+                        <span className="inline-flex items-center gap-1.5 rounded-lg border border-stone-700 bg-stone-950/90 px-2.5 py-0.5 font-mono text-[11px] text-stone-200">
+                          Banner: {cBanner.name} ({cBanner.rarity})
                         </span>
                       </div>
                     );
@@ -461,7 +503,7 @@ export function CouplePairingPanel({
                 </div>
               </div>
             </div>
-          </div>
+          </ProfileBannerBackdrop>
 
           {/* Individual Partner Breakdown */}
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
@@ -474,9 +516,12 @@ export function CouplePairingPanel({
                   className="flex items-center justify-between rounded-xl border border-stone-800 bg-stone-950 p-4 text-xs"
                 >
                   <div className="flex items-center gap-3">
-                    <div className="flex h-10 w-10 items-center justify-center rounded-xl border border-stone-700 bg-stone-900 text-lg">
-                      {getAvatarEmoji(partner.avatar)}
-                    </div>
+                    <AnimatedSkinnedAvatar
+                      avatarId={partner.avatar}
+                      customPhotoUrl={isMe ? currentUser.customPhotoUrl : partner.customPhotoUrl}
+                      skinId={isMe ? currentUser.equippedSkin : partner.equippedSkin}
+                      size="sm"
+                    />
                     <div>
                       <div className="font-bold text-stone-100">
                         {partner.username} {isMe ? '(You)' : `(Partner ${idx + 1})`}

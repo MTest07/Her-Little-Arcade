@@ -56,7 +56,9 @@ service cloud.firestore {
           'usernameSetupCompleted',
           'renameCards',
           'avatar',
+          'customPhotoUrl',
           'equippedSkin',
+          'equippedBanner',
           'xp',
           'level',
           'coins',
@@ -76,7 +78,9 @@ service cloud.firestore {
         data.usernameSetupCompleted is bool &&
         (!('renameCards' in data) || (data.renameCards is number && data.renameCards >= 0 && data.renameCards <= 1000)) &&
         data.avatar is string && data.avatar.size() >= 1 && data.avatar.size() <= 64 &&
+        (!('customPhotoUrl' in data) || (data.customPhotoUrl is string && data.customPhotoUrl.size() <= 524288)) &&
         (!('equippedSkin' in data) || (data.equippedSkin is string && data.equippedSkin.size() >= 1 && data.equippedSkin.size() <= 64)) &&
+        (!('equippedBanner' in data) || (data.equippedBanner is string && data.equippedBanner.size() >= 1 && data.equippedBanner.size() <= 64)) &&
         data.xp is number && data.xp >= 0 &&
         data.level is number && data.level >= 1 &&
         data.coins is number && data.coins >= 0 &&
@@ -219,6 +223,8 @@ service cloud.firestore {
           'maxPlayers',
           'hostUid',
           'hostName',
+          'visibility',
+          'joinPolicy',
           'status',
           'createdAt',
           'updatedAt'
@@ -231,6 +237,8 @@ service cloud.firestore {
         data.maxPlayers is number && data.maxPlayers in [2, 4] &&
         data.hostUid is string && data.hostUid.size() >= 1 && data.hostUid.size() <= 128 &&
         data.hostName is string && data.hostName.size() >= 1 && data.hostName.size() <= 20 &&
+        (!('visibility' in data) || (data.visibility is string && data.visibility.size() <= 16 && data.visibility in ['public', 'private'])) &&
+        (!('joinPolicy' in data) || (data.joinPolicy is string && data.joinPolicy.size() <= 24 && data.joinPolicy in ['immediate', 'approval_required'])) &&
         data.status is string && data.status.size() <= 16 &&
         data.status in ['lobby', 'playing', 'finished', 'expired'] &&
         data.createdAt is timestamp &&
@@ -263,7 +271,9 @@ service cloud.firestore {
             'usernameSetupCompleted',
             'renameCards',
             'avatar',
+            'customPhotoUrl',
             'equippedSkin',
+            'equippedBanner',
             'theme',
             'presenceStatus',
             'activeRoomCode',
@@ -287,7 +297,9 @@ service cloud.firestore {
             'usernameSetupCompleted',
             'renameCards',
             'avatar',
+            'customPhotoUrl',
             'equippedSkin',
+            'equippedBanner',
             'xp',
             'level',
             'coins',
@@ -418,10 +430,10 @@ service cloud.firestore {
     match /rooms/{roomCode} {
       allow get: if isSignedIn() &&
         isValidId(roomCode) &&
-        (resource == null || existing().hostUid == request.auth.uid);
+        (resource == null || existing().hostUid == request.auth.uid || existing().visibility == 'public');
 
       allow list: if isSignedIn() &&
-        existing().hostUid == request.auth.uid;
+        (existing().hostUid == request.auth.uid || existing().visibility == 'public');
 
       allow create: if isVerifiedUser() &&
         isValidId(roomCode) &&
@@ -442,7 +454,7 @@ service cloud.firestore {
         incoming().createdAt == existing().createdAt &&
         incoming().updatedAt == request.time &&
         existing().hostUid == request.auth.uid &&
-        incoming().diff(existing()).affectedKeys().hasOnly(['gameId', 'mode', 'status', 'updatedAt']) &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['gameId', 'mode', 'visibility', 'joinPolicy', 'status', 'updatedAt']) &&
         userExists(request.auth.uid);
 
       allow delete: if false;

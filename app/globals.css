@@ -140,7 +140,18 @@
   z-index: 10;
 }
 
-/* Cozy Sketchbook Sidebar Primitives */
+/* Cozy Sketchbook Sidebar Primitives — Zero Visible Scrollbars */
+.arcade-no-scrollbar {
+  scrollbar-width: none !important;
+  -ms-overflow-style: none !important;
+}
+
+.arcade-no-scrollbar::-webkit-scrollbar {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+}
+
 .arcade-sidebar-shell {
   background-color: var(--dp-color-scrap);
   background-image:
@@ -149,6 +160,21 @@
   background-size: 20px 20px, 100% 34px;
   border-right: 1.5px solid var(--dp-color-line);
   color: var(--dp-color-ink);
+  overflow-x: hidden !important;
+  scrollbar-width: none !important;
+  -ms-overflow-style: none !important;
+}
+
+.arcade-sidebar-shell::-webkit-scrollbar,
+.arcade-sidebar-shell *::-webkit-scrollbar {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+}
+
+.arcade-sidebar-shell * {
+  scrollbar-width: none !important;
+  -ms-overflow-style: none !important;
 }
 
 .dark .arcade-sidebar-shell {
@@ -161,6 +187,8 @@
   border-radius: var(--dp-radius-control);
   color: var(--dp-color-ink-muted);
   border: 1.5px solid transparent;
+  max-width: 100%;
+  box-sizing: border-box;
   transition:
     background-color 140ms ease,
     color 140ms ease,
@@ -192,6 +220,100 @@ body.sketch-sheet button {
 
 body.sketch-sheet button:not(:disabled):hover {
   transform: translate(-1px, -1px) rotate(-0.4deg);
+}
+
+/* Keep sidebar buttons strictly aligned within sidebar width to prevent horizontal overflow */
+body.sketch-sheet .arcade-sidebar-shell button:not(:disabled):hover {
+  transform: translateY(-1px);
+}
+
+/* ============================================================================
+   UNIQUE SKIN AVATAR FRAME KEYFRAME ANIMATIONS
+   ============================================================================ */
+
+@keyframes hla-orbit-cw {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+@keyframes hla-orbit-ccw {
+  0% { transform: rotate(360deg); }
+  100% { transform: rotate(0deg); }
+}
+
+@keyframes hla-corona-pulse {
+  0%, 100% { transform: scale(1); opacity: 0.85; }
+  50% { transform: scale(1.07); opacity: 1; }
+}
+
+@keyframes hla-lantern-sway {
+  0%, 100% { transform: rotate(-4deg) translateY(0px); }
+  50% { transform: rotate(4deg) translateY(-2px); }
+}
+
+@keyframes hla-petal-float {
+  0%, 100% { transform: translateY(0px) rotate(0deg); opacity: 0.9; }
+  50% { transform: translateY(-3px) rotate(12deg); opacity: 1; }
+}
+
+@keyframes hla-compass-sweep {
+  0%, 100% { transform: rotate(-28deg); }
+  50% { transform: rotate(32deg); }
+}
+
+@keyframes hla-wax-seal-pulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.08); }
+}
+
+@keyframes hla-twine-swing {
+  0%, 100% { transform: rotate(-3deg); }
+  50% { transform: rotate(3deg); }
+}
+
+.hla-anim-orbit-cw {
+  animation: hla-orbit-cw 11s linear infinite;
+  transform-origin: center;
+}
+
+.hla-anim-orbit-ccw {
+  animation: hla-orbit-ccw 14s linear infinite;
+  transform-origin: center;
+}
+
+.hla-anim-gear-step {
+  animation: hla-orbit-cw 8s steps(12, end) infinite;
+  transform-origin: center;
+}
+
+.hla-anim-corona-pulse {
+  animation: hla-corona-pulse 3.2s ease-in-out infinite;
+  transform-origin: center;
+}
+
+.hla-anim-lantern-sway {
+  animation: hla-lantern-sway 3.6s ease-in-out infinite;
+  transform-origin: center;
+}
+
+.hla-anim-petal-float {
+  animation: hla-petal-float 3s ease-in-out infinite;
+  transform-origin: center;
+}
+
+.hla-anim-compass-sweep {
+  animation: hla-compass-sweep 4.2s ease-in-out infinite;
+  transform-origin: center;
+}
+
+.hla-anim-wax-pulse {
+  animation: hla-wax-seal-pulse 2.6s ease-in-out infinite;
+  transform-origin: center;
+}
+
+.hla-anim-twine-swing {
+  animation: hla-twine-swing 3.8s ease-in-out infinite;
+  transform-origin: top center;
 }
 
 body.sketch-sheet button:not(:disabled):active {

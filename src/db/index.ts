@@ -242,17 +242,27 @@ function createPersistentDrizzleAdapter() {
       return {
         from(table: unknown) {
           const tableName = getTableName(table as Parameters<typeof getTableName>[0]);
-          const { sqlToJs } = getColumnMap(table);
+          const { sqlToJs, cols } = getColumnMap(table);
           let whereCond: unknown = null;
           let orderArgs: unknown[] = [];
           let limitCount: number | null = null;
+
+          const hydrateDefaults = (r: Record<string, unknown>): Record<string, unknown> => {
+            const hydrated: Record<string, unknown> = { ...r };
+            for (const [jsKey, colDef] of Object.entries(cols)) {
+              if (hydrated[jsKey] === undefined && colDef.hasDefault && colDef.default !== undefined) {
+                hydrated[jsKey] = colDef.default;
+              }
+            }
+            return hydrated;
+          };
 
           const execute = async () => {
             const store = getStore();
             const rows = store.tables[tableName] || [];
             let result = rows
-              .filter((r) => (whereCond ? evaluateCondition(r, whereCond, sqlToJs) : true))
-              .map((r) => ({ ...r }));
+              .map(hydrateDefaults)
+              .filter((r) => (whereCond ? evaluateCondition(r, whereCond, sqlToJs) : true));
 
             if (orderArgs.length > 0) {
               const specs = extractOrderSpecs(orderArgs, sqlToJs);
@@ -390,7 +400,7 @@ function createPersistentDrizzleAdapter() {
 
     update(table: unknown) {
       const tableName = getTableName(table as Parameters<typeof getTableName>[0]);
-      const { sqlToJs } = getColumnMap(table);
+      const { sqlToJs, cols } = getColumnMap(table);
 
       return {
         set(updates: Record<string, unknown>) {
@@ -415,7 +425,13 @@ function createPersistentDrizzleAdapter() {
             for (let i = 0; i < tableRows.length; i++) {
               const row = tableRows[i];
               if (!whereCond || evaluateCondition(row, whereCond, sqlToJs)) {
-                const nextRow = { ...row, ...cleanUpdates };
+                const hydrated: Record<string, unknown> = { ...row };
+                for (const [jsKey, colDef] of Object.entries(cols)) {
+                  if (hydrated[jsKey] === undefined && colDef.hasDefault && colDef.default !== undefined) {
+                    hydrated[jsKey] = colDef.default;
+                  }
+                }
+                const nextRow = { ...hydrated, ...cleanUpdates };
                 tableRows[i] = nextRow;
                 updatedRows.push({ ...nextRow });
               }

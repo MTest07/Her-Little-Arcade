@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   Mic,
   MicOff,
@@ -20,6 +20,10 @@ import {
   AlertCircle,
   CheckCircle2,
   Search,
+  Globe,
+  Lock,
+  ShieldCheck,
+  RefreshCw,
 } from 'lucide-react';
 import { MULTIPLAYER_GAMES, getSkinById } from '@/src/lib/arcade-data';
 import { EnrichedCouplePairing } from './CouplePairingPanel';
@@ -46,9 +50,21 @@ export interface RoomCoupleTeam {
   members: { uid: string; username: string; avatar: string }[];
 }
 
+export interface RoomPendingRequest {
+  uid: string;
+  username: string;
+  avatar: string;
+  coupleId?: number;
+  coupleName?: string;
+  partnerUid?: string;
+  partnerUsername?: string;
+  partnerAvatar?: string;
+  requestedAt: string;
+}
+
 export interface GameInvitationItem {
   id: number;
-  inviteType: '1v1' | '2v2';
+  inviteType: '1v1' | '2v2' | '2v2_partner_team' | string;
   senderUid: string;
   senderUsername: string;
   senderAvatar: string;
@@ -85,16 +101,42 @@ export interface MultiplayerRoomState {
   roomCode: string;
   gameId: string;
   mode: '1v1' | '2v2';
+  visibility?: 'public' | 'private';
+  joinPolicy?: 'immediate' | 'approval_required';
   maxPlayers: number;
   hostUid: string;
   hostName: string;
+  hostAvatar?: string;
   status: 'lobby' | 'playing' | 'finished' | 'expired';
   settings: Record<string, unknown>;
   players: RoomParticipant[];
   teams: RoomCoupleTeam[];
+  pendingRequests?: RoomPendingRequest[];
+  invitedUids?: string[];
   gameState: Record<string, unknown>;
   chat: RoomChatMessage[];
   voiceParticipants: VoiceParticipant[];
+}
+
+export type ActiveMultiplayerRoom = MultiplayerRoomState;
+
+export interface PublicRoomSummaryItem {
+  roomCode: string;
+  gameId: string;
+  gameName: string;
+  mode: '1v1' | '2v2';
+  visibility: 'public' | 'private';
+  joinPolicy: 'immediate' | 'approval_required';
+  hostUid: string;
+  hostName: string;
+  hostAvatar: string;
+  currentPlayers: number;
+  maxPlayers: number;
+  status: string;
+  pendingRequestAlreadySent?: boolean;
+  players: RoomParticipant[];
+  teams: RoomCoupleTeam[];
+  createdAt?: string;
 }
 
 interface RoomInspectionResult {
@@ -105,9 +147,12 @@ interface RoomInspectionResult {
     roomCode: string;
     gameId: string;
     mode: '1v1' | '2v2';
+    visibility?: 'public' | 'private';
+    joinPolicy?: 'immediate' | 'approval_required';
     maxPlayers: number;
     hostUid: string;
     hostName: string;
+    hostAvatar?: string;
     status: string;
     players: RoomParticipant[];
     teams: RoomCoupleTeam[];
@@ -165,6 +210,9 @@ interface VoiceAndLobbyDockProps {
 }
 
 function getAvatarEmoji(avatarCode?: string) {
+  if (avatarCode && avatarCode.length <= 4 && !/^[a-z-]+$/i.test(avatarCode)) {
+    return avatarCode;
+  }
   if (avatarCode === 'star-cat') return '🐱';
   if (avatarCode === 'bunny') return '🐰';
   if (avatarCode === 'otter') return '🦦';
@@ -176,13 +224,19 @@ export function parseRawDatabaseRoom(raw: Record<string, unknown>): MultiplayerR
     roomCode: String(raw.roomCode || ''),
     gameId: String(raw.gameId || 'chess'),
     mode: raw.mode === '2v2' ? '2v2' : '1v1',
+    visibility: raw.visibility === 'private' ? 'private' : 'public',
+    joinPolicy:
+      raw.joinPolicy === 'approval_required' ? 'approval_required' : 'immediate',
     maxPlayers: Number(raw.maxPlayers || (raw.mode === '2v2' ? 4 : 2)),
     hostUid: String(raw.hostUid || ''),
     hostName: String(raw.hostName || 'Host'),
+    hostAvatar: String(raw.hostAvatar || '🦊'),
     status: (raw.status as MultiplayerRoomState['status']) || 'lobby',
     settings: safeParse(raw.settingsJson, {}),
     players: safeParse(raw.playersJson, []),
     teams: safeParse(raw.teamsJson, []),
+    pendingRequests: safeParse(raw.pendingRequestsJson, []),
+    invitedUids: safeParse(raw.invitedUidsJson, []),
     gameState: safeParse(raw.gameStateJson, {}),
     chat: safeParse(raw.chatJson, []),
     voiceParticipants: safeParse(raw.voiceParticipantsJson, []),
@@ -235,6 +289,16 @@ export function VoiceAndLobbyDock({
   );
   const [roundSetting, setRoundSetting] = useState<string>('Standard Match (Best of 3)');
   const [includePartnerInRoom, setIncludePartnerInRoom] = useState<boolean>(true);
+  const [roomVisibility, setRoomVisibility] = useState<'public' | 'private'>('public');
+  const [roomJoinPolicy, setRoomJoinPolicy] = useState<'immediate' | 'approval_required'>(
+    'immediate'
+  );
+
+  // Public Room Browser state (under Join Group)
+  const [publicRooms, setPublicRooms] = useState<PublicRoomSummaryItem[]>([]);
+  const [loadingPublicRooms, setLoadingPublicRooms] = useState(false);
+  const [publicFilterGameId, setPublicFilterGameId] = useState<string>('all');
+  const [publicFilterMode, setPublicFilterMode] = useState<'all' | '1v1' | '2v2'>('all');
 
   useEffect(() => {
     if (!preferredMode) return;
@@ -291,6 +355,7 @@ export function VoiceAndLobbyDock({
   const [loadingRoomAction, setLoadingRoomAction] = useState(false);
   const [roomErrorMsg, setRoomErrorMsg] = useState<string | null>(null);
   const [roomStatusMsg, setRoomStatusMsg] = useState<string | null>(null);
+  const [respondingRequestUid, setRespondingRequestUid] = useState<string | null>(null);
 
   // Room Chat & Copy state
   const [chatInput, setChatInput] = useState('');
@@ -724,6 +789,40 @@ export function VoiceAndLobbyDock({
     }
   }
 
+  const fetchPublicRooms = useCallback(async () => {
+    setLoadingPublicRooms(true);
+    try {
+      const params = new URLSearchParams({
+        publicRooms: '1',
+        mode: publicFilterMode,
+      });
+      if (publicFilterGameId && publicFilterGameId !== 'all') {
+        params.set('gameId', publicFilterGameId);
+      }
+      if (currentUser.uid) {
+        params.set('uid', currentUser.uid);
+      }
+      const res = await fetch(`/api/arcade?${params.toString()}`);
+      if (res.ok) {
+        const data = await res.json();
+        setPublicRooms(Array.isArray(data.publicRooms) ? data.publicRooms : []);
+      }
+    } catch {
+      // ignore transient poll error
+    } finally {
+      setLoadingPublicRooms(false);
+    }
+  }, [publicFilterGameId, publicFilterMode, currentUser.uid]);
+
+  useEffect(() => {
+    if (lobbyTab !== 'join') return;
+    Promise.resolve().then(() => {
+      fetchPublicRooms();
+    });
+    const interval = setInterval(fetchPublicRooms, 5000);
+    return () => clearInterval(interval);
+  }, [lobbyTab, fetchPublicRooms]);
+
   async function handleCreateRoomSubmit() {
     setRoomErrorMsg(null);
     setRoomStatusMsg(null);
@@ -748,6 +847,8 @@ export function VoiceAndLobbyDock({
           action: 'create_room',
           gameId: selectedGameId,
           mode: effectiveMode,
+          visibility: roomVisibility,
+          joinPolicy: roomVisibility === 'public' ? roomJoinPolicy : 'immediate',
           settings: { format: roundSetting },
           includePairedPartner: includePartnerInRoom,
         }),
@@ -759,7 +860,9 @@ export function VoiceAndLobbyDock({
       const created = parseRawDatabaseRoom(data.room);
       onUpdateRoom(created);
       setRoomStatusMsg(
-        `Created Room #${created.roomCode} (${created.mode.toUpperCase()} Mode). Share the room number or start playing with your partner!`
+        `Created ${
+          created.visibility === 'private' ? 'Private' : 'Public'
+        } Room #${created.roomCode} (${created.mode.toUpperCase()} Mode). Share the room number or invite link!`
       );
       soundFX.playSuccess();
     } catch (err: unknown) {
@@ -774,7 +877,7 @@ export function VoiceAndLobbyDock({
     setRoomErrorMsg(null);
     setRoomStatusMsg(null);
     setInspectedRoom(null);
-    const clean = joinCodeInput.trim().toUpperCase();
+    const clean = joinCodeInput.trim().toUpperCase().replace(/^#+/, '');
     if (!clean) {
       setRoomErrorMsg('Please enter a room number to look up.');
       return;
@@ -802,7 +905,7 @@ export function VoiceAndLobbyDock({
     }
   }
 
-  async function handleConfirmJoinRoom(codeToJoin: string) {
+  async function handleConfirmJoinRoom(codeToJoin: string, viaDirectCode = true) {
     setRoomErrorMsg(null);
     setRoomStatusMsg(null);
     if (!activeCouple) {
@@ -824,22 +927,69 @@ export function VoiceAndLobbyDock({
           action: 'join_room',
           roomCode: codeToJoin,
           includePairedPartner: true,
+          viaDirectCodeOrInvite: viaDirectCode,
         }),
       });
       const data = await res.json();
       if (!res.ok || !data.room) {
         throw new Error(data.error || 'Failed to join room.');
       }
-      const joined = parseRawDatabaseRoom(data.room);
-      onUpdateRoom(joined);
-      setInspectedRoom(null);
-      setJoinCodeInput('');
-      setRoomStatusMsg(`Joined Room #${joined.roomCode}!`);
-      soundFX.playSuccess();
+      if (data.pendingApproval) {
+        setRoomStatusMsg(
+          data.pendingMessage ||
+            `Join request sent to host of Room #${codeToJoin}. Waiting for host approval!`
+        );
+        soundFX.playMove();
+        await fetchPublicRooms();
+      } else {
+        const joined = parseRawDatabaseRoom(data.room);
+        onUpdateRoom(joined);
+        setInspectedRoom(null);
+        setJoinCodeInput('');
+        setRoomStatusMsg(`Joined Room #${joined.roomCode}!`);
+        soundFX.playSuccess();
+      }
     } catch (err: unknown) {
       setRoomErrorMsg(err instanceof Error ? err.message : 'Could not join room.');
     } finally {
       setLoadingRoomAction(false);
+    }
+  }
+
+  async function handleRespondJoinRequest(requesterUid: string, approve: boolean) {
+    if (!activeRoom) return;
+    setRespondingRequestUid(requesterUid);
+    setRoomErrorMsg(null);
+    try {
+      const res = await fetch('/api/arcade', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${sessionToken}`,
+        },
+        body: JSON.stringify({
+          action: 'respond_join_request',
+          roomCode: activeRoom.roomCode,
+          requesterUid,
+          approve,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.room) {
+        throw new Error(data.error || 'Failed to process join request.');
+      }
+      const updated = parseRawDatabaseRoom(data.room);
+      onUpdateRoom(updated);
+      setRoomStatusMsg(
+        approve ? 'Approved player join request!' : 'Declined player join request.'
+      );
+      soundFX.playSuccess();
+    } catch (err: unknown) {
+      setRoomErrorMsg(
+        err instanceof Error ? err.message : 'Could not respond to join request.'
+      );
+    } finally {
+      setRespondingRequestUid(null);
     }
   }
 
@@ -1825,11 +1975,86 @@ export function VoiceAndLobbyDock({
               </div>
             </div>
 
+            {/* Room Visibility: Public vs Private */}
+            <div>
+              <span className="block font-medium text-stone-300">
+                2. Room Visibility (Public Browser vs. Private Code/Invite)
+              </span>
+              <div className="mt-1 grid grid-cols-2 gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => setRoomVisibility('public')}
+                  className={`flex items-center justify-center gap-1.5 rounded-lg border py-1.5 text-xs font-bold transition-colors ${
+                    roomVisibility === 'public'
+                      ? 'border-emerald-400 bg-emerald-500/20 text-emerald-200'
+                      : 'border-stone-800 bg-stone-900 text-stone-400'
+                  }`}
+                >
+                  <Globe className="h-3.5 w-3.5" />
+                  <span>Public Room</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setRoomVisibility('private')}
+                  className={`flex items-center justify-center gap-1.5 rounded-lg border py-1.5 text-xs font-bold transition-colors ${
+                    roomVisibility === 'private'
+                      ? 'border-indigo-400 bg-indigo-500/20 text-indigo-200'
+                      : 'border-stone-800 bg-stone-900 text-stone-400'
+                  }`}
+                >
+                  <Lock className="h-3.5 w-3.5" />
+                  <span>Private Room</span>
+                </button>
+              </div>
+
+              {roomVisibility === 'public' ? (
+                <div className="mt-2 rounded-lg border border-stone-800 bg-stone-900 p-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="flex items-center gap-1 text-[11px] font-semibold text-stone-200">
+                      <ShieldCheck className="h-3.5 w-3.5 text-emerald-400" />
+                      Public Browser Join Policy
+                    </span>
+                    <div className="flex gap-1">
+                      <button
+                        type="button"
+                        onClick={() => setRoomJoinPolicy('immediate')}
+                        className={`rounded px-2 py-0.5 text-[10px] font-bold ${
+                          roomJoinPolicy === 'immediate'
+                            ? 'bg-emerald-500 text-stone-950'
+                            : 'bg-stone-800 text-stone-400'
+                        }`}
+                      >
+                        Immediate Join
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setRoomJoinPolicy('approval_required')}
+                        className={`rounded px-2 py-0.5 text-[10px] font-bold ${
+                          roomJoinPolicy === 'approval_required'
+                            ? 'bg-amber-500 text-stone-950'
+                            : 'bg-stone-800 text-stone-400'
+                        }`}
+                      >
+                        Require Approval
+                      </button>
+                    </div>
+                  </div>
+                  <p className="mt-1 text-[10px] text-stone-400">
+                    Visible in the Public Room Browser. Players can also join with your room code.
+                  </p>
+                </div>
+              ) : (
+                <p className="mt-1.5 text-[10px] text-stone-400">
+                  Hidden from the Public Room Browser. Players can only join via your unique room code or direct invitation.
+                </p>
+              )}
+            </div>
+
             <div>
               <label htmlFor="create-room-game-select" className="block font-medium text-stone-300">
                 {selectedMode === '2v2'
-                  ? '2. Select 2v2 Couple Mode Game (10 Games)'
-                  : '2. Select 1v1 Mode Game (14 Games)'}
+                  ? '3. Select 2v2 Couple Mode Game (10 Games)'
+                  : '3. Select 1v1 Mode Game (14 Games)'}
               </label>
               <select
                 id="create-room-game-select"
@@ -1909,7 +2134,7 @@ export function VoiceAndLobbyDock({
 
             <div>
               <label htmlFor="create-room-settings" className="block font-medium text-stone-300">
-                3. Room Match Settings
+                4. Room Match Settings
               </label>
               <select
                 id="create-room-settings"
@@ -1949,7 +2174,7 @@ export function VoiceAndLobbyDock({
                   <span>
                     {!activeCouple
                       ? 'Pair with Partner Required'
-                      : 'Create Room & Generate Room Number'}
+                      : `Create ${roomVisibility === 'private' ? 'Private' : 'Public'} Room & Generate Code`}
                   </span>
                 </>
               )}
@@ -1957,12 +2182,12 @@ export function VoiceAndLobbyDock({
           </div>
         )}
 
-        {/* TAB 2: JOIN GROUP */}
+        {/* TAB 2: JOIN GROUP + BROWSE PUBLIC ROOMS */}
         {lobbyTab === 'join' && (
           <div className="mt-3 space-y-3 rounded-xl border border-stone-800 bg-stone-950 p-3 text-xs">
             <form onSubmit={handleInspectRoomByCode} className="space-y-2">
               <label htmlFor="join-room-code-input" className="block font-medium text-stone-300">
-                Enter Room Number to Validate &amp; Join
+                Enter Room Code to Validate &amp; Join (Public or Private)
               </label>
               <div className="flex gap-1.5">
                 <input
@@ -1994,9 +2219,14 @@ export function VoiceAndLobbyDock({
             {inspectedRoom && inspectedRoom.room && (
               <div className="space-y-2.5 rounded-xl border border-stone-700 bg-stone-900 p-3">
                 <div className="flex items-center justify-between">
-                  <span className="font-mono text-sm font-bold text-amber-300">
-                    Room #{inspectedRoom.room.roomCode}
-                  </span>
+                  <div className="flex items-center gap-1.5">
+                    <span className="font-mono text-sm font-bold text-amber-300">
+                      Room #{inspectedRoom.room.roomCode}
+                    </span>
+                    <span className="rounded bg-stone-800 px-1.5 py-0.5 text-[10px] font-bold uppercase text-stone-300">
+                      {inspectedRoom.room.visibility === 'private' ? 'Private' : 'Public'}
+                    </span>
+                  </div>
                   <span className="font-mono text-[11px] text-teal-300">
                     {inspectedRoom.room.mode.toUpperCase()} · {inspectedRoom.room.players.length}/
                     {inspectedRoom.room.maxPlayers} Slots
@@ -2035,7 +2265,7 @@ export function VoiceAndLobbyDock({
                   <button
                     type="button"
                     disabled={loadingRoomAction || !activeCouple}
-                    onClick={() => handleConfirmJoinRoom(inspectedRoom.room!.roomCode)}
+                    onClick={() => handleConfirmJoinRoom(inspectedRoom.room!.roomCode, true)}
                     className="flex w-full items-center justify-center gap-1.5 rounded-lg bg-amber-500 py-2 text-xs font-bold text-stone-950 hover:bg-amber-400 disabled:opacity-50"
                   >
                     <LogIn className="h-3.5 w-3.5" />
@@ -2050,6 +2280,143 @@ export function VoiceAndLobbyDock({
                 )}
               </div>
             )}
+
+            {/* BROWSE PUBLIC ROOMS SECTION */}
+            <div className="border-t border-stone-800 pt-3 space-y-2.5">
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-1.5">
+                  <Globe className="h-3.5 w-3.5 text-emerald-400" />
+                  <span className="font-bold text-stone-100">Browse Public Rooms</span>
+                  <span className="rounded-full bg-emerald-500/20 px-1.5 py-0.5 font-mono text-[10px] font-bold text-emerald-300">
+                    {publicRooms.length}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  disabled={loadingPublicRooms}
+                  onClick={fetchPublicRooms}
+                  className="flex items-center gap-1 rounded-lg border border-stone-700 bg-stone-900 px-2 py-1 text-[11px] font-semibold text-stone-200 hover:bg-stone-800"
+                >
+                  <RefreshCw
+                    className={`h-3 w-3 ${loadingPublicRooms ? 'animate-spin' : ''}`}
+                  />
+                  <span>Refresh</span>
+                </button>
+              </div>
+
+              {/* Game & Mode Filters */}
+              <div className="grid grid-cols-2 gap-1.5">
+                <select
+                  aria-label="Filter public rooms by game"
+                  value={publicFilterGameId}
+                  onChange={(e) => setPublicFilterGameId(e.target.value)}
+                  className="rounded-lg border border-stone-800 bg-stone-900 px-2 py-1 text-[11px] text-stone-200 focus:border-amber-500 focus:outline-none"
+                >
+                  <option value="all">All Games</option>
+                  {MULTIPLAYER_GAMES.map((g) => (
+                    <option key={g.id} value={g.id}>
+                      {g.title}
+                    </option>
+                  ))}
+                </select>
+
+                <div className="grid grid-cols-3 gap-1 rounded-lg border border-stone-800 bg-stone-900 p-0.5">
+                  {(['all', '1v1', '2v2'] as const).map((m) => (
+                    <button
+                      key={m}
+                      type="button"
+                      onClick={() => setPublicFilterMode(m)}
+                      className={`rounded py-0.5 text-[10px] font-bold uppercase ${
+                        publicFilterMode === m
+                          ? 'bg-amber-500 text-stone-950'
+                          : 'text-stone-400 hover:text-stone-200'
+                      }`}
+                    >
+                      {m}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Active Joinable Public Room List */}
+              <div className="max-h-60 space-y-2 overflow-y-auto pr-0.5">
+                {loadingPublicRooms && publicRooms.length === 0 ? (
+                  <div className="flex items-center justify-center gap-2 rounded-lg border border-stone-800 bg-stone-900/60 py-5 text-[11px] text-stone-300">
+                    <ArcadeInlineSpinner size={14} label="Loading active public rooms..." />
+                  </div>
+                ) : publicRooms.length === 0 ? (
+                  <div className="rounded-lg border border-dashed border-stone-800 bg-stone-900/40 px-3 py-4 text-center text-[11px] text-stone-400">
+                    No active joinable public rooms match your filter right now. Create a Public Room or click Refresh!
+                  </div>
+                ) : (
+                  publicRooms.map((pr) => (
+                    <div
+                      key={pr.roomCode}
+                      className="space-y-2 rounded-xl border border-stone-800 bg-stone-900 p-2.5"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          <span className="font-mono text-xs font-bold text-amber-300">
+                            #{pr.roomCode}
+                          </span>
+                          <span className="truncate font-bold text-stone-100">
+                            {pr.gameName}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-1 shrink-0">
+                          <span
+                            className={`rounded px-1.5 py-0.5 text-[10px] font-bold uppercase ${
+                              pr.mode === '2v2'
+                                ? 'bg-rose-500/20 text-rose-300'
+                                : 'bg-amber-500/20 text-amber-300'
+                            }`}
+                          >
+                            {pr.mode}
+                          </span>
+                          <span className="rounded bg-stone-800 px-1.5 py-0.5 font-mono text-[10px] text-teal-300">
+                            {pr.currentPlayers}/{pr.maxPlayers}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center justify-between gap-2 text-[11px] text-stone-300">
+                        <div className="flex items-center gap-1.5 truncate">
+                          <span>{getAvatarEmoji(pr.hostAvatar)}</span>
+                          <span className="truncate">
+                            Host: <strong className="text-stone-100">@{pr.hostName}</strong>
+                          </span>
+                        </div>
+                        <span className="text-[10px] text-emerald-400">
+                          {pr.joinPolicy === 'approval_required'
+                            ? 'Approval Required'
+                            : 'Open Lobby'}
+                        </span>
+                      </div>
+
+                      <button
+                        type="button"
+                        disabled={
+                          loadingRoomAction ||
+                          !activeCouple ||
+                          Boolean(pr.pendingRequestAlreadySent)
+                        }
+                        onClick={() => handleConfirmJoinRoom(pr.roomCode, false)}
+                        className="flex w-full items-center justify-center gap-1.5 rounded-lg bg-emerald-500 py-1.5 text-xs font-bold text-stone-950 hover:bg-emerald-400 disabled:opacity-45"
+                      >
+                        <LogIn className="h-3.5 w-3.5" />
+                        <span>
+                          {pr.pendingRequestAlreadySent
+                            ? 'Approval Pending...'
+                            : pr.joinPolicy === 'approval_required'
+                            ? `Request to Join #${pr.roomCode}`
+                            : `Join Public Room #${pr.roomCode}`}
+                        </span>
+                      </button>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
           </div>
         )}
       </div>
@@ -2059,10 +2426,30 @@ export function VoiceAndLobbyDock({
         <>
           <div id="multiplayer-lobby-panel" className="border-b border-stone-800 pb-3">
             <div className="rounded-xl border border-amber-500/40 bg-stone-950 p-3 text-center">
-              <div className="text-[11px] font-medium text-stone-400">
-                Active Room Number · Share to Invite
+              <div className="flex items-center justify-center gap-1.5 text-[10px] font-bold uppercase">
+                <span
+                  className={`inline-flex items-center gap-1 rounded px-2 py-0.5 ${
+                    activeRoom.visibility === 'private'
+                      ? 'bg-indigo-500/20 text-indigo-300'
+                      : 'bg-emerald-500/20 text-emerald-300'
+                  }`}
+                >
+                  {activeRoom.visibility === 'private' ? (
+                    <Lock className="h-3 w-3" />
+                  ) : (
+                    <Globe className="h-3 w-3" />
+                  )}
+                  {activeRoom.visibility === 'private' ? 'Private Room' : 'Public Room'}
+                </span>
+                {activeRoom.visibility !== 'private' && (
+                  <span className="rounded bg-stone-800 px-2 py-0.5 text-stone-300">
+                    {activeRoom.joinPolicy === 'approval_required'
+                      ? 'Host Approval'
+                      : 'Immediate Join'}
+                  </span>
+                )}
               </div>
-              <div className="mt-0.5 font-mono text-2xl font-bold tracking-wider text-amber-300 tabular-nums">
+              <div className="mt-1 font-mono text-2xl font-bold tracking-wider text-amber-300 tabular-nums">
                 #{activeRoom.roomCode}
               </div>
               <div className="mt-1 text-xs text-stone-300">
@@ -2098,6 +2485,52 @@ export function VoiceAndLobbyDock({
                 </button>
               </div>
             </div>
+
+            {/* Host Join Request Approval Queue */}
+            {activeRoom.hostUid === currentUser.uid &&
+              Array.isArray(activeRoom.pendingRequests) &&
+              activeRoom.pendingRequests.length > 0 && (
+                <div className="mt-3 space-y-2 rounded-xl border border-amber-500/50 bg-amber-500/10 p-2.5 text-xs">
+                  <div className="font-bold text-amber-300">
+                    Pending Join Requests ({activeRoom.pendingRequests.length})
+                  </div>
+                  {activeRoom.pendingRequests.map((req) => (
+                    <div
+                      key={req.uid}
+                      className="flex items-center justify-between gap-2 rounded-lg border border-stone-800 bg-stone-950 p-2"
+                    >
+                      <div className="min-w-0">
+                        <div className="font-bold text-stone-100 truncate">
+                          {getAvatarEmoji(req.avatar)} @{req.username}
+                        </div>
+                        {req.coupleName && (
+                          <div className="text-[10px] text-stone-400 truncate">
+                            Couple: {req.coupleName}
+                          </div>
+                        )}
+                      </div>
+                      <div className="flex gap-1.5 shrink-0">
+                        <button
+                          type="button"
+                          disabled={respondingRequestUid === req.uid}
+                          onClick={() => handleRespondJoinRequest(req.uid, true)}
+                          className="rounded-md bg-emerald-500 px-2.5 py-1 text-[11px] font-bold text-stone-950 hover:bg-emerald-400"
+                        >
+                          Approve
+                        </button>
+                        <button
+                          type="button"
+                          disabled={respondingRequestUid === req.uid}
+                          onClick={() => handleRespondJoinRequest(req.uid, false)}
+                          className="rounded-md border border-stone-700 bg-stone-900 px-2 py-1 text-[11px] font-semibold text-stone-300 hover:bg-stone-800"
+                        >
+                          Decline
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
 
             {/* 2v2 Couple Teams Display */}
             {activeRoom.mode === '2v2' && activeRoom.teams.length > 0 && (

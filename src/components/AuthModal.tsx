@@ -10,7 +10,7 @@ import {
   signOut,
 } from 'firebase/auth';
 import { auth, googleAuthProvider, syncPlayerProfileToFirestore } from '@/src/lib/firebase';
-import { HERO_BANNER_IMAGE } from '@/src/lib/arcade-data';
+import { HERO_BANNER_IMAGE, SkinRarity, parseTierCountMap } from '@/src/lib/arcade-data';
 import {
   X,
   Mail,
@@ -32,6 +32,7 @@ export interface PlayerProfile {
   renameCards?: number;
   emailVerified: boolean;
   avatar: string;
+  customPhotoUrl?: string;
   xp: number;
   level: number;
   coins: number;
@@ -41,6 +42,10 @@ export interface PlayerProfile {
   draws: number;
   theme: string;
   equippedSkin: string;
+  equippedBanner?: string;
+  unlockedBanners?: string[];
+  chestInventory?: Record<SkinRarity, number>;
+  keyInventory?: Record<SkinRarity, number>;
   favoriteGames: string[];
   unlockedItems: string[];
   petState: {
@@ -72,6 +77,12 @@ export function normalizePlayerProfile(raw: Record<string, unknown>): PlayerProf
   if (!unlockedList.includes('skin-classic-notebook')) {
     unlockedList.push('skin-classic-notebook');
   }
+  const unlockedBannersList: string[] = safeParseJson(raw.unlockedBanners, [
+    'banner-sketchbook-grid',
+  ]);
+  if (!unlockedBannersList.includes('banner-sketchbook-grid')) {
+    unlockedBannersList.push('banner-sketchbook-grid');
+  }
   return {
     uid: String(raw.uid || ''),
     email: String(raw.email || ''),
@@ -80,6 +91,7 @@ export function normalizePlayerProfile(raw: Record<string, unknown>): PlayerProf
     renameCards: Number(raw.renameCards ?? 0),
     emailVerified: Boolean(raw.emailVerified),
     avatar: String(raw.avatar || 'kitsune'),
+    customPhotoUrl: String(raw.customPhotoUrl || ''),
     xp: Number(raw.xp ?? 0),
     level: Number(raw.level ?? 1),
     coins: Number(raw.coins ?? 0),
@@ -89,6 +101,18 @@ export function normalizePlayerProfile(raw: Record<string, unknown>): PlayerProf
     draws: Number(raw.draws ?? 0),
     theme: String(raw.theme || 'twilight-cocoa'),
     equippedSkin: String(raw.equippedSkin || 'skin-classic-notebook'),
+    equippedBanner: String(raw.equippedBanner || 'banner-sketchbook-grid'),
+    unlockedBanners: unlockedBannersList,
+    chestInventory: parseTierCountMap(
+      typeof raw.chestInventory === 'string'
+        ? raw.chestInventory
+        : JSON.stringify(raw.chestInventory || {})
+    ),
+    keyInventory: parseTierCountMap(
+      typeof raw.keyInventory === 'string'
+        ? raw.keyInventory
+        : JSON.stringify(raw.keyInventory || {})
+    ),
     favoriteGames: safeParseJson(raw.favoriteGames, []),
     unlockedItems: unlockedList,
     petState: safeParseJson(raw.petState, {

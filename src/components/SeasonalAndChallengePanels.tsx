@@ -17,6 +17,12 @@ import { PlayerProfile } from './AuthModal';
 import { EnrichedCouplePairing } from './CouplePairingPanel';
 import { ArcadeInlineSpinner } from './ArcadeLoader';
 import {
+  AnimatedSkinnedAvatar,
+  ThreeLayerProfileHeader,
+  CustomKeyArtwork,
+  getRarityBadgeClasses,
+} from './CosmeticAvatarAndBanner';
+import {
   Flame,
   Sparkles,
   Check,
@@ -29,6 +35,7 @@ import {
   Coins,
   Play,
   History,
+  Key,
 } from 'lucide-react';
 
 export interface ActiveChallengeRecord {
@@ -49,6 +56,8 @@ export interface ActiveChallengeRecord {
   claimed?: boolean;
   xpReward: number;
   xpAwarded: number;
+  keyRewardTier?: SkinRarity;
+  keyRewardCount?: number;
   expiresAtIso: string;
   remainingMs: number;
   remainingLabel: string;
@@ -65,6 +74,8 @@ export interface ChallengeHistoryRecord {
   target: number;
   completed: boolean;
   xpAwarded: number;
+  keyRewardTier?: SkinRarity;
+  keyAwardedCount?: number;
   claimedAt?: string | null;
 }
 
@@ -199,7 +210,7 @@ export function ChallengesVaultPanel({
           </h2>
           {!compact && (
             <p className="mt-0.5 text-xs text-stone-400">
-              Verified automatic progress from real gameplay &amp; companion care. Balanced XP rewards only (0 Coins — Coins are exclusive to 2v2 gameplay).
+              Verified progress from real gameplay &amp; companion care. Awards XP + Chest Keys (Daily: Common/Uncommon Key · Weekly: Rare/Epic Key · Monthly: Legendary Key).
             </p>
           )}
         </div>
@@ -292,9 +303,18 @@ export function ChallengesVaultPanel({
                     </p>
                   </div>
 
-                  <div className="shrink-0 text-right font-mono text-xs font-bold text-amber-300 tabular-nums">
-                    +{ch.xpReward} XP
-                    <div className="text-[9px] font-normal text-stone-400">0 Coins</div>
+                  <div className="shrink-0 flex flex-col items-end gap-1 font-mono text-xs font-bold text-amber-300 tabular-nums">
+                    <span>+{ch.xpReward} XP</span>
+                    <span
+                      className={`inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[10px] font-mono ${getRarityBadgeClasses(
+                        ch.keyRewardTier || 'Common'
+                      )}`}
+                    >
+                      <CustomKeyArtwork tier={ch.keyRewardTier || 'Common'} size={15} />
+                      <span>
+                        +{ch.keyRewardCount || 1} {ch.keyRewardTier || 'Common'} Key
+                      </span>
+                    </span>
                   </div>
                 </div>
 
@@ -337,7 +357,9 @@ export function ChallengesVaultPanel({
                   {isClaimed ? (
                     <span className="flex items-center gap-1 rounded-lg border border-emerald-500/40 bg-emerald-500/20 px-2.5 py-1 text-[11px] font-bold text-emerald-200">
                       <Check className="h-3 w-3" />
-                      <span>Claimed (+{ch.xpAwarded || ch.xpReward} XP)</span>
+                      <span>
+                        Claimed (+{ch.xpAwarded || ch.xpReward} XP &amp; {ch.keyRewardTier || 'Common'} Key)
+                      </span>
                     </span>
                   ) : isEligibleToClaim ? (
                     <button
@@ -350,8 +372,10 @@ export function ChallengesVaultPanel({
                         <ArcadeInlineSpinner size={12} label="Claiming..." />
                       ) : (
                         <>
-                          <Sparkles className="h-3 w-3" />
-                          <span>Claim +{ch.xpReward} XP</span>
+                          <Key className="h-3 w-3" />
+                          <span>
+                            Claim +{ch.xpReward} XP &amp; {ch.keyRewardTier || 'Common'} Key
+                          </span>
                         </>
                       )}
                     </button>
@@ -860,56 +884,19 @@ export function SkinsBoutiqueAndVaultPanel({
         )}
       </div>
 
-      {/* Interactive Live Skin Preview Card */}
+      {/* Interactive Live 3-Layer Skin & Banner Preview Card */}
       {previewSkin && (
-        <div
-          className={`rounded-2xl border-2 p-5 transition-all ${previewSkin.frameClass}`}
-        >
-          <div className="flex flex-wrap items-center justify-between gap-4">
-            <div className="space-y-1.5">
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="font-mono text-[10px] uppercase tracking-wider text-stone-300">
-                  Live Skin Preview
-                </span>
-                <span
-                  className={`rounded border px-2 py-0.5 text-[10px] font-bold uppercase ${
-                    SKIN_RARITY_META[previewSkin.rarity].badgeClass
-                  }`}
-                >
-                  #{SKIN_RARITY_META[previewSkin.rarity].rankOrder} · {previewSkin.rarity}
-                </span>
-                {previewSkin.acquisitionSource === 'seasonal_exclusive' && (
-                  <span className="rounded border border-amber-400/50 bg-amber-500/20 px-2 py-0.5 text-[10px] font-bold text-amber-200">
-                    🏆 Season Rank #{previewSkin.seasonalRank} Exclusive
-                  </span>
-                )}
-              </div>
-
-              <div className="flex items-center gap-2.5">
-                <span className="text-2xl">{previewSkin.icon}</span>
-                <div>
-                  <h3 className="text-base font-bold text-stone-100">
-                    @{currentUser.username} · {previewSkin.name}
-                  </h3>
-                  <p className="text-xs text-stone-300">{previewSkin.description}</p>
-                </div>
-              </div>
-            </div>
-
-            <div className="flex flex-wrap items-center gap-2">
-              <span
-                className={`rounded-lg border px-3 py-1.5 text-xs font-bold ${previewSkin.badgeClass}`}
-              >
-                {previewSkin.icon} {previewSkin.name} ({previewSkin.rarity})
-              </span>
-              {currentUser.equippedSkin === previewSkin.id && (
-                <span className="flex items-center gap-1 rounded-lg border border-emerald-500/40 bg-emerald-500/20 px-3 py-1.5 text-xs font-bold text-emerald-200">
-                  <ShieldCheck className="h-3.5 w-3.5" />
-                  <span>Currently Equipped</span>
-                </span>
-              )}
-            </div>
-          </div>
+        <div className="space-y-2">
+          <ThreeLayerProfileHeader
+            username={currentUser.username}
+            titleOrSubtitle={`${previewSkin.name} (${previewSkin.rarity} Frame · ${previewSkin.animationLabel})`}
+            avatarId={currentUser.avatar}
+            customPhotoUrl={currentUser.customPhotoUrl}
+            equippedSkinId={previewSkin.id}
+            equippedBannerId={currentUser.equippedBanner || 'banner-sketchbook-grid'}
+            level={currentUser.level}
+            coins={currentUser.coins}
+          />
         </div>
       )}
 
@@ -952,7 +939,6 @@ export function SkinsBoutiqueAndVaultPanel({
           const rarityMeta = SKIN_RARITY_META[skin.rarity];
           const isOwned =
             skin.acquisitionSource === 'starter' ||
-            skin.costCoins === 0 ||
             currentUser.unlockedItems.includes(skin.id);
           const isEquippedPlayer = currentUser.equippedSkin === skin.id;
           const isEquippedCouple = activeCouple?.equippedCoupleSkin === skin.id;
@@ -975,18 +961,24 @@ export function SkinsBoutiqueAndVaultPanel({
                     #{rarityMeta.rankOrder} {skin.rarity}
                   </span>
                   <span className="font-mono text-[11px] font-bold text-amber-300 tabular-nums">
-                    {skin.acquisitionSource === 'seasonal_exclusive'
-                      ? `Season #${skin.seasonalRank ?? skin.seasonExclusiveRank} Exclusive`
-                      : skin.costCoins === 0
+                    {skin.acquisitionSource === 'starter'
                       ? 'Starter (Free)'
                       : `${skin.costCoins.toLocaleString()} Coins`}
                   </span>
                 </div>
 
-                <div className="mt-2.5 flex items-center gap-2">
-                  <span className="text-2xl">{skin.icon || skin.emblem}</span>
+                <div className="mt-3 flex items-center gap-3">
+                  <AnimatedSkinnedAvatar
+                    avatarId={currentUser.avatar}
+                    customPhotoUrl={currentUser.customPhotoUrl}
+                    skinId={skin.id}
+                    size="md"
+                  />
                   <div>
                     <h3 className="text-sm font-bold text-stone-100">{skin.name}</h3>
+                    <div className="text-[10px] font-mono text-stone-400">
+                      {skin.animationLabel}
+                    </div>
                     <div className="text-[10px] text-stone-400">
                       {isOwned ? '✓ Owned in Inventory' : 'Locked Cosmetic Skin'}
                       {isEquippedCouple ? ' · ♥ Couple Equipped' : ''}
@@ -1040,13 +1032,6 @@ export function SkinsBoutiqueAndVaultPanel({
                       )}
                     </button>
                   )
-                ) : skin.acquisitionSource === 'seasonal_exclusive' ? (
-                  <div className="flex flex-1 items-center justify-center gap-1 rounded-xl border border-stone-800 bg-stone-950 py-2 text-[11px] font-semibold text-stone-400">
-                    <Trophy className="h-3.5 w-3.5 text-amber-400" />
-                    <span>
-                      Finish Top #{skin.seasonalRank ?? skin.seasonExclusiveRank} in Season
-                    </span>
-                  </div>
                 ) : (
                   <button
                     type="button"
@@ -1059,7 +1044,7 @@ export function SkinsBoutiqueAndVaultPanel({
                     ) : (
                       <>
                         <Coins className="h-3.5 w-3.5" />
-                        <span>Unlock ({skin.costCoins.toLocaleString()})</span>
+                        <span>Unlock ({skin.costCoins.toLocaleString()} Coins)</span>
                       </>
                     )}
                   </button>

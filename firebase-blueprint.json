@@ -33,9 +33,20 @@
           "minLength": 1,
           "maxLength": 64
         },
+        "customPhotoUrl": {
+          "type": "string",
+          "description": "Cropped custom uploaded profile picture data URL.",
+          "maxLength": 524288
+        },
         "equippedSkin": {
           "type": "string",
           "description": "Equipped 5-rarity cosmetic skin identifier.",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "equippedBanner": {
+          "type": "string",
+          "description": "Equipped 5-rarity profile banner identifier.",
           "minLength": 1,
           "maxLength": 64
         },
@@ -49,7 +60,7 @@
         },
         "coins": {
           "type": "integer",
-          "description": "Arcade coin balance (earned exclusively in 2v2 matches)."
+          "description": "Arcade coin balance (earned exclusively in 2v2 matches or duplicate chest conversion)."
         },
         "streak": {
           "type": "integer",
@@ -357,6 +368,18 @@
           "description": "Room creator username.",
           "minLength": 1,
           "maxLength": 20
+        },
+        "visibility": {
+          "type": "string",
+          "description": "Room visibility (public or private).",
+          "enum": ["public", "private"],
+          "maxLength": 16
+        },
+        "joinPolicy": {
+          "type": "string",
+          "description": "Join policy for public rooms (immediate or approval_required).",
+          "enum": ["immediate", "approval_required"],
+          "maxLength": 24
         },
         "status": {
           "type": "string",

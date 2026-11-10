@@ -1,141 +1,151 @@
-# Her Little Arcade — Real Authentication, Couple Pairing & 1v1 / 2v2 Multiplayer Upgrade
+# Profile Customization, Animated Avatar Frames, Banners & Collectible Chest System — Her Little Arcade
 
-This upgrade transforms **Her Little Arcade** into a strictly authenticated, zero-mock multiplayer and solo gaming platform where every player registers their own account, pairs with a partner via a mutual confirmation flow to unlock a shared Couple Profile, and competes or collaborates in database-validated **1v1** and **2v2 Couple** rooms.
+This plan upgrades **Her Little Arcade** with a scrollbar-free responsive sidebar, custom profile picture uploading and cropping, bespoke per-skin animated avatar frames, a 5-rarity **Profile Banners** cosmetic layer, a 5-tier **Collectible Chest & Key System** with tier-distinct GSAP card-reveal animations, and a unified 4-category **Inventory** backed by atomic server-side transactions.
 
-### User Review & Critical Decisions
+---
+
+## User Review & Critical Decisions
 
 > [!IMPORTANT]
-> The following architectural and product choices have been confirmed from your answers and are baked into this plan:
+> The following product and technical decisions incorporate your confirmed Phase 1 answers:
 
-- **Confirmed Decision 1 — Provisioned Cloud SQL PostgreSQL + Firebase Auth + PostgreSQL RLS**: We will use the workspace's provisioned PostgreSQL database and Firebase Authentication (Email/Password registration, Email Verification, Password Reset, and Google Sign-In) with strict backend token/session verification, PostgreSQL Row Level Security (RLS) policies, and complete removal of all seeded/mock users (`Claire`, `Noah`, sample rooms, and fabricated scores).
-- **Confirmed Decision 2 — Shared Couple Profile Scope**: Once two registered accounts mutually confirm a pairing, their shared Couple Profile displays both partners' avatars and usernames, a custom couple name, anniversary date, shared couple banner and bio, and combined couple XP, level, and win-loss record (while keeping individual coin wallets and personal game histories distinct so unpairing never deletes personal progress).
-- **Confirmed Decision 3 — 2v2 Couple Mode Game Coverage**: All party, trivia, word, drawing, and cooperative multiplayer games (*Draw & Guess*, *Quiz Battle*, *Word Battle*, *Reaction Race*, *Truth or Dare*, *Higher or Lower*, *Escape the Maze*, *Cooking Together*, *Jigsaw Puzzle Together*, and *Treasure Hunt*) will support **2v2 Couple Mode** (4 authenticated players across 2 paired couples) alongside **1v1 Mode**, while classic two-player board duels (*Tic-Tac-Toe*, *Connect Four*, *Battleship*, and *Chess*) enforce pure **1v1 Mode**.
+- **Confirmed Decision 1 — Duplicate Cosmetic Reward Conversion**: When a chest rolls a Skin or Banner that the player already owns, the server automatically converts the duplicate into **Arcade Coins** scaled by the item's rarity tier (**Common**: `+35 Coins`, **Uncommon**: `+75 Coins`, **Rare**: `+160 Coins`, **Epic**: `+320 Coins`, **Legendary**: `+650 Coins`), clearly badged during the card-reveal sequence and recorded in the player's coin ledger.
+- **Confirmed Decision 2 — Challenge Key Progression**: Completed and verified challenges award Chest Keys matching their period and difficulty:
+  - **Daily Challenges (Easy · 24h)**: Award **Common Keys** (or **Uncommon Keys** on higher-target daily objectives).
+  - **Weekly Challenges (Medium · 7d)**: Award **Rare Keys** or **Epic Keys**.
+  - **Monthly Challenges (Hard · 1m)**: Award **Legendary Keys**.
+- **Confirmed Decision 3 — Profile Picture Storage & Cropping**: Uploaded profile pictures (`PNG`, `JPG`, `JPEG`, `WebP` up to `5 MB`) use an interactive client-side zoom/pan square crop studio and are stored and served through the built-in authenticated backend and database storage layer, keeping the uploaded image strictly separate from equipped avatar frames and banners.
 
 ---
 
-### 1. Overview & Core Concept
+## 1. Overview & Core Concept
 
 - **What It Does**:
-  1. **Mandatory Individual Account Gate**: Unauthenticated visitors see a dedicated onboarding & sign-in gateway before entering the arcade. Players can register with Email & Password (with verification & password reset) or Continue with Google, automatically provisioning a fresh, zero-stat personal profile in PostgreSQL.
-  2. **Mutual Couple Account Pairing (`Pair with Partner`)**: Any registered player without an active partner can generate a unique pairing code or shareable invitation link. Their partner enters the code to review the requester's profile, and both accounts confirm the pairing to activate a shared Couple Profile. Either partner can unpair at any time without losing personal stats, coins, or match history.
-  3. **Database-Backed Multiplayer Room System (`Create Room` & `Join Group`)**:
-     - **Create Room**: Generates a unique database-backed room number, lets the host choose the game, mode (`1v1` or `2v2 Couple`), and game settings, and provides a prominent shareable room code and host `Start Game` button.
-     - **Join Group**: Validates any entered room number against PostgreSQL in real time, previews room metadata (game, mode, host, connected players/couples, slot availability) before joining, and surfaces clear errors for invalid, expired, or full rooms.
-  4. **1v1 & 2v2 Couple Multiplayer Modes**: Records individual match statistics in `1v1 Mode` and full team scores + couple-versus-couple match records in `2v2 Couple Mode`.
-  5. **Strict Zero-Mock Data & Empty States**: Purges all hardcoded sample users, fake online indicators, and seeded records. Leaderboards, match histories, rooms, and custom content render clean, actionable empty states until real authenticated activity occurs.
-- **Target Audience / Persona**: Couples and friends who want a cozy, private online arcade where their real accounts, relationship milestones, and head-to-head or couple-vs-couple game records are authentically tracked.
-- **Key Value**: Replaces simulated single-session placeholders with real multi-account identity, verifiable partner pairing, and authentic database-synchronized rooms and leaderboards.
+  1. **Scrollbar-Free Sidebar**: Eliminates both vertical and horizontal scrollbars inside the desktop/tablet collapsible sidebar and mobile drawer while keeping smooth mouse-wheel, trackpad, and touch scrolling when items exceed viewport height.
+  2. **Three-Layer Independent Profile Architecture**: Decouples player customization into three non-destructive layers that compose together everywhere profiles appear:
+     - **Layer 1 (Background)**: Rectangular **Profile Banner** (5 rarities: Legendary, Epic, Rare, Uncommon, Common).
+     - **Layer 2 (Center Subject)**: Uploaded custom **Profile Picture** (with interactive crop/zoom studio, or fallback cozy character portrait).
+     - **Layer 3 (Foreground Frame & FX)**: Equipped **Skin Avatar Frame** featuring a unique per-skin SVG/GSAP animation (orbiting stars, drifting sakura petals, solar eclipse corona, clockwork gears, botanical vines, wax seal pulse, etc.).
+  3. **5-Tier Chest & Custom Key Ecosystem**: Expands the Shop with **Common**, **Uncommon**, **Rare**, **Epic**, and **Legendary** Chests and matching custom-illustrated **Keys**. Players can purchase chests with Coins or unlock them using Keys earned from completed Daily, Weekly, and Monthly Challenges.
+  4. **Server-Authoritative GSAP Card-Draw Opening Experience**: Every chest tier plays its own distinct GSAP opening and card-drawing sequence (with an instant **Skip Animation** button that reveals the server-determined reward immediately).
+  5. **4-Category Persistent Inventory**: Organizes all owned items into **Skins**, **Banners**, **Chests**, and **Keys** with live preview, equip/unequip controls, and quantity badges.
 
 ---
 
-### 2. User Experience & Visual Design
+## 2. User Experience & Visual Design
 
-- **Key User Flows**:
-  1. **Account Creation & Verification Gate**:
-     - On arrival without an active session, the user lands on a full-viewport **Arcade Welcome & Authentication Gate** featuring Sign Up with Email & Password, Sign In with Email, Forgot Password, and Continue with Google.
-     - Completing registration immediately creates a fresh database profile (`0 XP`, `Level 1`, `0 Wins`, starter coins) and displays email verification status with a one-click resend verification action and secure Sign Out control in the header and profile.
-  2. **Pair with Partner Flow**:
-     - Inside the **Profile** and **Couple Hub** panel, an unpaired player clicks **Pair with Partner** to generate a unique 6-character pairing code and invitation URL (`?pair=CODE`).
-     - The second registered partner enters the code, previews the inviter's username and avatar, and submits their acceptance.
-     - Both users confirm the pairing (inviter confirms pending acceptance or auto-confirms via mutual handshake), unlocking the **Shared Couple Profile** editor (custom couple name, anniversary date, banner theme, and bio) and combined Couple XP/Level/Win-Loss dashboard.
-     - An **Unpair Account** button with confirmation dialog cleanly dissolves the active pairing while preserving each user's personal profile and match history.
-  3. **Multiplayer `Create Room` vs. `Join Group` Workflow**:
-     - Opening **Multiplayer** presents two primary tabs/cards: **Create Room** and **Join Group**.
-     - **Create Room**: The host picks one of the 14 multiplayer games, selects `1v1 Mode` (2 player slots) or `2v2 Couple Mode` (4 player slots / 2 couples, enabled on supported party, trivia, word, drawing, and co-op games), configures game settings, and generates a unique persisted room number. The lobby displays connected players/couples, ready states, optional WebRTC voice chat, and a host-only **Start Game** button once required slots are ready.
-     - **Join Group**: A player enters a room number and clicks **Look Up Room**. The backend validates the code against PostgreSQL:
-       - If the room does not exist, has expired/finished, or is already at capacity (`2/2` for 1v1 or `4/4` for 2v2), an explicit error banner explains why.
-       - If valid and open, a **Room Preview Card** displays the host, selected game, mode (`1v1` or `2v2 Couple`), and currently connected players (plus an option to join with your paired partner in 2v2 mode) before the user clicks **Confirm & Join Room**.
-- **Visual Identity & Theme**:
-  - *Aesthetic Direction*: Warm Twilight Arcade Sanctuary — tactile, cozy dark-mode gaming lounge with crisp tabular telemetry and high-contrast game boards.
-  - *Color Palette & Mood*:
-    - Dominant Canvas (`60%`): Deep Warm Obsidian (`bg-stone-950` / `#0C0A09`)
-    - Structural Surfaces (`30%`): Cocoa Slate panels (`bg-stone-900` / `#1C1917`) with subtle `1px` borders (`border-stone-800`)
-    - Accent Budget (`10%`): Warm Amber Gold (`bg-amber-500` / `text-amber-300`) for primary CTAs, Coral Rose (`text-rose-300`) for Couple Pairing highlights, and Mint Teal (`text-teal-300`) for live voice/room indicators.
-  - *Typography & Hierarchy*:
-    - Display / Headings: `Plus Jakarta Sans` (bold, tight tracking, balanced headline wrapping)
-    - Body Copy: `DM Sans` (clean, legible at 14px–16px)
-    - Scores, Clocks, Room Codes & Leaderboards: `JetBrains Mono` with `tabular-nums`
-  - *Component Styling & Layout*:
-    - Adheres to the 3-zone Top Bar Contract (Brand wordmark | 5 single-line navigation links | Authenticated Player & Sign Out action).
-    - Single-elevation cards (`rounded-2xl border border-stone-800 bg-stone-900/90 p-5`) with zero nested card-in-card clutter and unboxed metadata using `·` separators.
-- **Interactive Feedback & Motion**:
-  - Instant skeleton loading states while validating room codes or pairing codes, explicit error banners for invalid/full rooms, and celebratory audio-visual feedback when a couple pairing or match completes.
+### Key User Flows
+
+1. **Sidebar Navigation (Zero Visible Scrollbars)**
+   - Hides native scrollbar tracks and thumbs across WebKit, Firefox, and Chromium (`scrollbar-width: none`, `-ms-overflow-style: none`, `::-webkit-scrollbar { display: none }`) and prevents horizontal overflow caused by hover micro-shifts while preserving vertical wheel/touch scrolling.
+
+2. **Profile Picture Upload, Crop & Layer Independence**
+   - In **Profile & Couple** and **Account Settings**, clicking **Upload Profile Picture** opens an interactive **Crop & Preview Studio**:
+     - Validates file format (`PNG`, `JPG`, `JPEG`, `WebP`) and size ($\le 5\text{ MB}$).
+     - Provides zoom slider and drag-to-reposition square framing with live preview inside the player's currently equipped **Skin Avatar Frame** and **Profile Banner**.
+     - Includes **Save Picture**, **Replace Picture**, and **Remove Uploaded Picture** (reverting cleanly to the player's chosen character icon without affecting their equipped skin or banner).
+
+3. **Skin-Based Avatar Frames & Unique Per-Skin Animations**
+   - Every skin in the 5-rarity catalog renders a bespoke SVG + CSS/GSAP animated frame around the user's profile picture:
+     - *Sovereign Solar Eclipse (Legendary)*: Rotating golden eclipse corona with orbiting solar flares.
+     - *Imperial Gilded Constellation (Legendary)*: Twinkling astrolabe rings and orbiting starlight nodes.
+     - *Celestial Waltz Aura (Epic)*: Dual orbiting comet ribbons in rose and indigo.
+     - *Astral Origami Crane (Epic)*: Floating folded paper cranes and shimmering gold leaf particles.
+     - *Moonlit Sakura Pavilion (Epic)*: Gently drifting cherry blossom petals and soft lantern glow.
+     - *Paper Lantern Harmony (Rare)*: Warm swaying festival lanterns and rising ember motes.
+     - *Starlight Cartographer (Rare)*: Sweeping brass compass needle and cardinal star glints.
+     - *Pressed Clover Herbarium (Uncommon)*: Breathing botanical vine border with emerging four-leaf clovers.
+     - *Strawberry Postmark Stamp (Uncommon)*: Perforated stamp frame with a gentle wax-seal pulse.
+     - *Warm Sketchbook Margin & Twine Keepsake (Common)*: Hand-sketched graphite corner ticks and subtle paper-tape shimmer.
+   - Respects `prefers-reduced-motion` by rendering the full decorative frame artwork in a static, crisp posture when reduced motion is enabled.
+
+4. **Profile Banners (5 Rarity Tiers)**
+   - Adds 10 distinct rectangular **Profile Banners** spanning **Legendary**, **Epic**, **Rare**, **Uncommon**, and **Common** rarities, each with custom layered SVG/canvas artwork, title, lore description, and rarity badge.
+   - Positioned as the horizontal backdrop behind the player's avatar and animated skin frame on Individual Profiles, Couple Profiles, 2v2 Team Lobbies, Leaderboards, and the Live Preview Studio.
+   - Players can independently preview, equip, and unequip any owned banner without altering their skin or profile photo.
+
+5. **Chest Shop, Custom Keys & GSAP Card-Draw Reveal**
+   - **5 Chest Tiers & Transparent Drop Tables**:
+     - **Common Chest** (`100 Coins` or `1 Common Key`): 70% Common, 25% Uncommon, 5% Rare.
+     - **Uncommon Chest** (`220 Coins` or `1 Uncommon Key`): 30% Common, 50% Uncommon, 17% Rare, 3% Epic.
+     - **Rare Chest** (`450 Coins` or `1 Rare Key`): 15% Uncommon, 65% Rare, 17% Epic, 3% Legendary.
+     - **Epic Chest** (`850 Coins` or `1 Epic Key`): 20% Rare, 68% Epic, 12% Legendary.
+     - **Legendary Chest** (`1,500 Coins` or `1 Legendary Key`): 25% Epic, 75% Legendary.
+   - **Custom Key Progression**: 5 custom-crafted SVG key designs progressing from a simple wrought-iron notebook key (Common) and clover-engraved brass key (Uncommon) to a sapphire compass key (Rare), amethyst sakura key with glowing runes (Epic), and a radiant solar-crest key with animated aura (Legendary).
+   - **5 Distinct GSAP Opening & Card-Draw Sequences**:
+     - *Common*: Sketchbook parcel unties and slides out a single crisp keepsake card.
+     - *Uncommon*: Botanical clasp snaps open with leaf confetti and a vertical card lift + flip.
+     - *Rare*: Brass astrolabe lock rotates 180°, releasing a sapphire light beam as the reward card spirals to center stage.
+     - *Epic*: Double lacquer doors part with sakura/comet particles, elevating a glowing tarot-style card that flips with a shockwave ring.
+     - *Legendary*: Multi-stage cinematic sequence—the chest levitates with golden shockwaves, the solar lock shatters into starlight, three orbital energy rings converge into a radiant prism card, and the Legendary reward is unveiled with full banner/frame live preview.
+     - Includes an always-accessible **Skip Animation** button after the server returns the outcome.
+
+6. **Unified 4-Category Inventory**
+   - Dedicated **Inventory** view inside the Shop & Profile hub with 4 tabs: **Skins**, **Banners**, **Chests**, and **Keys**.
+   - Displays artwork, rarity, quantity owned (for Chests and Keys), ownership/equipped badges, and direct **Preview**, **Equip / Unequip**, or **Open Chest** actions.
 
 ---
 
-### 3. Key Product Decisions & Trade-Offs
+## 3. Key Product Decisions & Trade-Offs
 
-- **Decision 1: Strict Authentication Gate & Zero-Mock Database Cleanse**
-  - *Chosen Approach*: Remove all fallback guest/mock profiles (`player-claire`, `player-noah`), delete all pre-seeded mock database rows, and require an authenticated user session before accessing the arcade.
-  - *Why*: Guarantees every profile, room participant, pairing, and leaderboard row corresponds to a real registered user account.
-  - *Alternatives Considered*: Allowing anonymous guest play was rejected because the specification requires every player to create their own individual account before accessing the arcade.
-- **Decision 2: Two-Step Mutual Couple Pairing with Non-Destructive Unpairing**
-  - *Chosen Approach*: Introduce a dedicated `couple_pairings` table tracking `requester_uid`, `partner_uid`, `pairing_code`, `status` (`pending_partner` → `pending_requester_confirm` → `active` → `unpaired`), and shared couple metadata (`couple_name`, `anniversary_date`, `bio`, `banner_theme`, `couple_xp`, `couple_wins`, `couple_losses`). Enforce at most one active pairing per user.
-  - *Why*: Ensures both partners explicitly consent to pairing, aggregates couple-level progression cleanly, and allows unpairing by flipping status without deleting either individual's account or personal `game_records`.
-- **Decision 3: PostgreSQL Row Level Security (RLS) + Server-Enforced Session Context**
-  - *Chosen Approach*: Enable PostgreSQL Row Level Security (RLS) policies on user-owned and couple-owned tables and pass the verified authenticated UID into backend database transactions alongside strict API-layer authorization checks.
-  - *Why*: Satisfies defense-in-depth authorization so users can only mutate their own profile, their active couple pairing, or rooms in which they are an authenticated participant.
+- **Decision 1 — Server-Authoritative Chest Rolls Before Animation Playback**
+  - *Chosen Approach*: When a player clicks **Open with Key** or **Buy & Open with Coins**, the client first executes an atomic `POST /api/arcade` transaction (`open_chest` or `buy_chest`). The server verifies balance/key ownership, deducts the cost, rolls the rarity and item from the chest's pool, checks ownership, converts duplicates into rarity-scaled Coins if already owned, persists the ledger record, and returns the sealed result payload. The GSAP chest-opening animation then dramatizes that exact server-verified reward.
+  - *Why*: Guarantees zero client-side tampering, prevents double-spending or refresh exploits, and allows instant **Skip Animation** without altering the outcome.
+
+- **Decision 2 — Three-Layer Composable Profile Header & Avatar Component**
+  - *Chosen Approach*: Build a reusable `<ProfileBannerAndAvatar />` and `<AnimatedSkinnedAvatar />` component system that accepts `{ photoUrl, fallbackAvatar, skinId, bannerId, size }`.
+  - *Why*: Ensures changing a profile picture, equipping a new skin frame, or swapping a banner never overwrites or mutates the other two layers, and renders consistently across Sidebar, Profile, Couple Profile, Matchmaking Modals, and Leaderboards.
 
 ---
 
-### 4. Technical Architecture & Data Strategy *(Technical Reference)*
+## 4. Technical Architecture & Data Strategy *(Technical Reference)*
 
-- **Architecture & Component Diagram**:
+### Architecture & Component Diagram
 
 ```
 ┌────────────────────────────────────────────────────────────────────────────┐
-│                        CLIENT APPLICATION (Next.js)                        │
+│                        HER LITTLE ARCADE FRONTEND                          │
+│                                                                            │
+│  ┌──────────────────────┐   ┌───────────────────────────────────────────┐  │
+│  │ Scrollbar-Free       │   │ Three-Layer Profile & Avatar System       │  │
+│  │ ArcadeSidebar        │   │  • Layer 1: ProfileBannerArtwork (5 Tiers)│  │
+│  │  • Hidden Scrollbars │   │  • Layer 2: Uploaded Photo / Crop Studio  │  │
+│  │  • Wheel/Touch Scroll│   │  • Layer 3: AnimatedSkinAvatarFrame (GSAP)│  │
+│  └──────────────────────┘   └───────────────────────────────────────────┘  │
 │                                                                            │
 │  ┌──────────────────────────────────────────────────────────────────────┐  │
-│  │ 1. Auth Gate & Session Context                                       │  │
-│  │    • Email/Password Sign Up & Sign In   • Email Verification Banner  │  │
-│  │    • Continue with Google (OAuth)       • Forgot Password & Logout   │  │
-│  └──────────────────────────────────┬───────────────────────────────────┘  │
-│                                     ▼                                      │
-│  ┌──────────────────────┐  ┌──────────────────────┐  ┌──────────────────┐  │
-│  │ 2. Couple Pairing    │  │ 3. Multiplayer Hub   │  │ 4. 21 Game       │  │
-│  │    & Couple Profile  │  │    • Create Room     │  │    Arenas        │  │
-│  │    • Generate Code   │  │      (1v1 / 2v2)     │  │    • 7 Solo      │  │
-│  │    • Enter & Accept  │  │    • Join Group      │  │    • 14 Multi    │  │
-│  │    • Mutual Confirm  │  │      (DB Lookup &    │  │      (1v1 & 2v2  │  │
-│  │    • Couple Editor   │  │       Slot Check)    │  │       Team HUD)  │  │
-│  │    • Unpair Action   │  │    • Host Start Game │  │    • Real Stats  │  │
-│  └──────────┬───────────┘  └──────────┬───────────┘  └────────┬─────────┘  │
-└─────────────┼─────────────────────────┼───────────────────────┼────────────┘
-              │ Bearer Token / Session  │                       │
-              ▼                         ▼                       ▼
+│  │ Collectible Shop, Chests, Custom Keys & 4-Tab Inventory              │  │
+│  │  ┌────────────────┐ ┌────────────────┐ ┌──────────────────────────┐  │  │
+│  │  │ Chest Boutique │ │ 4-Tab Inventory│ │ GSAP Chest Opening Modal │  │  │
+│  │  │ • 5 Chest Tiers│ │ • Skins        │ │ • 5 Tier-Unique Timelines│  │  │
+│  │  │ • Drop Odds UI │ │ • Banners      │ │ • Card-Draw Flip Reveal  │  │  │
+│  │  │ • Coin / Key   │ │ • Chests (Qty) │ │ • Duplicate -> Coins Note│  │  │
+│  │  │   Triggers     │ │ • Keys (Qty)   │ │ • Instant Skip Button    │  │  │
+│  │  └───────┬────────┘ └───────┬────────┘ └────────────┬─────────────┘  │  │
+│  └──────────┼──────────────────┼───────────────────────┼────────────────┘  │
+└─────────────┼──────────────────┼───────────────────────┼───────────────────┘
+              │                  │                       │
+              ▼                  ▼                       ▼
 ┌────────────────────────────────────────────────────────────────────────────┐
-│                   BACKEND API & AUTH GUARD (/api/arcade)                   │
-│  • Verifies Firebase ID Token / Signed Account Credentials                 │
-│  • Enforces Authorization & Sets PostgreSQL RLS `app.current_user_uid`     │
-└───────────────────────────────────────┬────────────────────────────────────┘
-                                        ▼
-┌────────────────────────────────────────────────────────────────────────────┐
-│                CLOUD SQL POSTGRESQL (Drizzle ORM + RLS)                    │
-│  ┌──────────────┐ ┌─────────────────┐ ┌──────────────┐ ┌────────────────┐  │
-│  │ users        │ │ couple_pairings │ │ rooms        │ │ game_records   │  │
-│  │ • uid (PK)   │ │ • pairing_code  │ │ • room_code  │ │ • user_uid     │  │
-│  │ • email      │ │ • user_a_uid    │ │ • mode       │ │ • couple_id    │  │
-│  │ • username   │ │ • user_b_uid    │ │   (1v1/2v2)  │ │ • opponent_info│  │
-│  │ • password   │ │ • a_confirmed   │ │ • max_players│ │ • mode (1v1 /  │  │
-│  │   _hash      │ │ • b_confirmed   │ │ • status     │ │   2v2_couple)  │  │
-│  │ • verified   │ │ • status        │ │ • players    │ │ • score / xp   │  │
-│  │ • xp / coins │ │ • couple_name   │ │ • teams_json │ └────────────────┘  │
-│  └──────────────┘ └─────────────────┘ └──────────────┘                     │
+│                   SERVER API & ATOMIC REPOSITORY (/api/arcade)             │
+│                                                                            │
+│  • upload_profile_photo / remove_profile_photo (Validated Base64/Data URL) │
+│  • equip_banner / purchase_banner (Persisted on User & Couple Profiles)    │
+│  • claim_challenge (Grants XP + Tier-Matched Chest Key: Common..Legendary) │
+│  • buy_chest / open_chest (Atomic Coin/Key Deduction + Server RNG Roll +   │
+│    Duplicate-to-Coin Conversion + Chest Opening Ledger Record)             │
 └────────────────────────────────────────────────────────────────────────────┘
 ```
 
-- **Data Model & State**:
-  - **`users`**: Stores individual registered accounts (`uid`, `email`, `username`, `passwordHash` for direct PostgreSQL email/password auth fallback when Firebase Console Email provider is not toggled, `emailVerified`, `avatar`, `xp` starting at `0`, `level` starting at `1`, `coins` starting at `100`, `streak` starting at `1`, `favoriteGames`, `unlockedItems`, `petState`).
-  - **`couple_pairings`**: Stores partner invitations and active couple profiles (`id`, `pairingCode`, `requesterUid`, `partnerUid`, `requesterConfirmed`, `partnerConfirmed`, `status` [`pending` | `awaiting_confirm` | `active` | `unpaired`], `coupleName`, `anniversaryDate`, `coupleBio`, `coupleBanner`, `coupleXp`, `coupleLevel`, `coupleWins`, `coupleLosses`, `coupleDraws`, `createdAt`, `updatedAt`).
-  - **`rooms`**: Stores multiplayer rooms (`roomCode` unique, `gameId`, `mode` [`1v1` | `2v2` | `coop`], `maxPlayers` [`2` or `4`], `hostUid`, `hostName`, `status` [`lobby` | `playing` | `finished` | `expired`], `playersJson`, `teamsJson` for 2v2 Couple pairings, `settingsJson`, `gameStateJson`, `chatJson`, `voiceParticipantsJson`, `updatedAt`).
-  - **`game_records`**: Stores individual and couple match results (`userUid`, `username`, `coupleId`, `gameId`, `mode` [`single` | `1v1` | `2v2` | `coop`], `result` [`win` | `loss` | `draw` | `completed`], `score`, `xpEarned`, `coinsEarned`, `details`, `createdAt`).
-  - **`personalized_content` & `daily_challenges`**: Scoped to the authenticated user and their active paired partner so custom photos, trivia, and Truth or Dare decks are automatically shared between paired partners.
+### Data Model & State Extensions
 
-- **Interactive Component & State Mapping**:
-  - **Authentication Gate (`AuthGateway`)**: Blocks unauthenticated access to arcade views; handles Email/Password registration, login, password reset, email verification status, Google OAuth popup login, and complete state cleanup on logout.
-  - **Couple Pairing Manager (`CouplePairingPanel`)**: Handles generating a unique pairing code, looking up a partner's code, accepting an invitation, mutually confirming the link, editing the shared Couple Profile (couple name, anniversary date, banner, bio), and unpairing.
-  - **Multiplayer Room Controller (`MultiplayerLobbyManager`)**:
-    - *Create Room Flow*: Selects game, toggles `1v1 Mode` vs `2v2 Couple Mode` (based on game capability), sets custom rules, persists room to PostgreSQL, and enables the host's `Start Game` button when required players are present.
-    - *Join Group Flow*: Queries `GET /api/arcade?roomCode=...`, displays a live preview of room status and connected players/couples, validates capacity and couple requirements for `2v2`, and executes an atomic join mutation.
-  - **1v1 & 2v2 Game Arena HUD (`MultiplayerGameArena` & `ChessArena`)**: Displays individual avatars in `1v1 Mode` or dual Couple Team banners (Couple A with both partners' avatars vs. Couple B with both partners' avatars) in `2v2 Couple Mode`, rotating active turns across team members and recording both individual and couple match results to PostgreSQL upon completion.
+- **User Profile Extensions**:
+  - `customPhotoUrl`: Cropped uploaded profile image data/URL (empty string when using default character icon).
+  - `equippedBanner`: Equipped banner ID (default `'banner-warm-sketchbook'`).
+  - `unlockedBannersJson`: Array of owned banner IDs.
+  - `chestInventoryJson`: Map of owned unopened chests by tier (`{ Common, Uncommon, Rare, Epic, Legendary }`).
+  - `keyInventoryJson`: Map of owned chest keys by tier (`{ Common, Uncommon, Rare, Epic, Legendary }`).
+- **Chest Opening History Table (`chestOpenings`)**:
+  - Records `userUid`, `chestTier`, `unlockMethod` (`coins` or `key`), `rewardType` (`skin` or `banner`), `rewardId`, `rewardRarity`, `wasDuplicate`, `duplicateCoinsAwarded`, and `createdAt`.
+- **Challenge Key Rewards**:
+  - Each challenge definition in `ARCADE_CHALLENGE_CATALOG` includes `keyRewardTier` (`Common` / `Uncommon` for Daily, `Rare` / `Epic` for Weekly, `Legendary` for Monthly) and `keyRewardCount: 1`, awarded atomically upon claiming a completed challenge.

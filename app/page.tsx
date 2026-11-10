@@ -17,8 +17,10 @@ import {
   KEEPSAKE_PICNIC_IMAGE,
   ArcadeGameDef,
   ArcadeSkinDef,
+  SkinRarity,
   SeasonalBracketConfig,
   getSkinById,
+  getBannerById,
 } from '@/src/lib/arcade-data';
 import { calculateLevelFromXp } from '@/src/lib/game-rules';
 import {
@@ -35,7 +37,16 @@ import {
   VoiceAndLobbyDock,
   MultiplayerRoomState,
   IncomingInvitationRecord,
+  parseRawDatabaseRoom,
 } from '@/src/components/VoiceAndLobbyDock';
+import { PlayGameSetupModal } from '@/src/components/PlayGameSetupModal';
+import {
+  useGsapSectionTransition,
+  useGsapScrollReveal,
+  animateButtonPress,
+  animateCardHover,
+  smoothScrollToTop,
+} from '@/src/lib/gsap-motion';
 import { ChessArena } from '@/src/components/ChessArena';
 import {
   SinglePlayerGameArena,
@@ -57,6 +68,14 @@ import {
   ChallengePeriodWindows,
   SeasonDataState,
 } from '@/src/components/SeasonalAndChallengePanels';
+import {
+  AnimatedSkinnedAvatar,
+  ProfilePhotoUploadAndCropModal,
+} from '@/src/components/CosmeticAvatarAndBanner';
+import {
+  CosmeticChestShopAndInventorySuite,
+  ChestOpeningResultPayload,
+} from '@/src/components/ChestBoutiqueAndInventory';
 import { soundFX } from '@/src/lib/sound';
 import {
   Users,
@@ -146,6 +165,21 @@ export default function HerLittleArcadePage() {
   const [challengePeriodWindows, setChallengePeriodWindows] =
     useState<ChallengePeriodWindows | null>(null);
   const [seasonState, setSeasonState] = useState<SeasonDataState | null>(null);
+  const [photoModalOpen, setPhotoModalOpen] = useState<boolean>(false);
+  const [chestOpenings, setChestOpenings] = useState<
+    Array<{
+      id: number;
+      chestTier: string;
+      openMethod: string;
+      rewardCategory: string;
+      rewardId: string;
+      rewardName: string;
+      rewardRarity: string;
+      wasDuplicate: boolean;
+      duplicateCoinsAwarded: number;
+      createdAt?: string;
+    }>
+  >([]);
 
   // Real Multiplayer Room State (Null until user creates or joins a validated room)
   const [activeRoom, setActiveRoom] = useState<MultiplayerRoomState | null>(null);
@@ -196,6 +230,18 @@ export default function HerLittleArcadePage() {
   const hasBootstrappedOnceRef = useRef<boolean>(false);
   const gameSwitchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mainViewportRef = useRef<HTMLElement | null>(null);
+
+  // Modal state for Play Game -> 1v1 or 2v2 Match Setup
+  const [playSetupModal, setPlaySetupModal] = useState<{
+    isOpen: boolean;
+    gameId: string;
+    mode: '1v1' | '2v2';
+  }>({
+    isOpen: false,
+    gameId: 'chess',
+    mode: '1v1',
+  });
+  const [urlRoomCode, setUrlRoomCode] = useState<string>('');
 
   // Sync Light / Dark Sketchbook class on <html>
   useEffect(() => {
@@ -250,7 +296,11 @@ export default function HerLittleArcadePage() {
     []
   );
 
-  // GSAP Page Transition & Staggered Collection Entrance Animations
+  // Global GSAP Section Transitions & ScrollTrigger Reveal Animations
+  const gsapRefreshKey = `${activeSection}-${activeGameId || 'grid'}-${multiplayerFilter}-${catalogFilter}-${leaderboardTab}-${couplesLeaderboard.length}-${challenges.length}`;
+  useGsapSectionTransition(mainViewportRef, gsapRefreshKey);
+  useGsapScrollReveal(mainViewportRef, gsapRefreshKey);
+
   useEffect(() => {
     const container = mainViewportRef.current;
     if (!container) return;
@@ -259,18 +309,6 @@ export default function HerLittleArcadePage() {
       typeof window !== 'undefined' &&
       window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     if (prefersReducedMotion) return;
-
-    gsap.fromTo(
-      container,
-      { opacity: 0, y: 12 },
-      {
-        opacity: 1,
-        y: 0,
-        duration: 0.34,
-        ease: 'power3.out',
-        clearProps: 'transform,opacity',
-      }
-    );
 
     const cards = container.querySelectorAll('.gsap-stagger-card');
     if (cards.length > 0) {
@@ -294,6 +332,55 @@ export default function HerLittleArcadePage() {
     catalogFilter,
     leaderboardTab,
   ]);
+
+  // Unified Play Game Navigation Flow:
+  // Single-Player games open directly; Multiplayer games open the 1v1 or 2v2 Setup Modal
+  // (unless the player is already inside a full active room for that exact game & mode).
+  const handlePlayGameClick = useCallback(
+    (game: ArcadeGameDef, forcedMode?: '1v1' | '2v2') => {
+      if (game.collection === 'single') {
+        handleLaunchGame(game.id, { autostart: false });
+        return;
+      }
+
+      const resolvedMode: '1v1' | '2v2' =
+        forcedMode ||
+        (game.supports2v2 && selectedMultiplayerMode === '2v2' ? '2v2' : '1v1');
+
+      setSelectedMultiplayerMode(resolvedMode);
+
+      // If already in an active room with all required seats filled for this game & mode, launch immediately
+      if (
+        activeRoom &&
+        activeRoom.status !== 'finished' &&
+        activeRoom.status !== 'expired' &&
+        activeRoom.gameId === game.id &&
+        activeRoom.mode === resolvedMode &&
+        activeRoom.players.length >= activeRoom.maxPlayers
+      ) {
+        handleLaunchGame(game.id, { mode: resolvedMode, autostart: true });
+        return;
+      }
+
+      setPlaySetupModal({
+        isOpen: true,
+        gameId: game.id,
+        mode: resolvedMode,
+      });
+    },
+    [activeRoom, handleLaunchGame, selectedMultiplayerMode]
+  );
+
+  const authFetcher = useCallback(
+    async (url: string, options?: RequestInit) => {
+      const headers = new Headers(options?.headers || {});
+      if (sessionToken) {
+        headers.set('Authorization', `Bearer ${sessionToken}`);
+      }
+      return fetch(url, { ...options, headers });
+    },
+    [sessionToken]
+  );
 
   const loadBootstrapData = useCallback(async (uid: string) => {
     if (!uid) return;
@@ -360,6 +447,10 @@ export default function HerLittleArcadePage() {
         setSeasonState(data.seasonState);
       }
 
+      if (Array.isArray(data.chestOpenings)) {
+        setChestOpenings(data.chestOpenings);
+      }
+
       hasBootstrappedOnceRef.current = true;
     } catch {
       // Non-fatal network error
@@ -379,7 +470,53 @@ export default function HerLittleArcadePage() {
         setActiveSection('profile');
       });
     }
+    const roomParam = params.get('room');
+    if (roomParam) {
+      Promise.resolve().then(() => {
+        setUrlRoomCode(roomParam.toUpperCase().trim());
+        setActiveSection('multiplayer');
+        setRequestedDockTab('join');
+      });
+    }
   }, []);
+
+  // Automatically join or load room when arriving via shared ?room=CODE invitation link
+  useEffect(() => {
+    if (!urlRoomCode || !currentUser || !sessionToken) return;
+    const codeToJoin = urlRoomCode;
+    (async () => {
+      setUrlRoomCode('');
+      try {
+        const res = await fetch('/api/arcade', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${sessionToken}`,
+          },
+          body: JSON.stringify({
+            action: 'join_room',
+            roomCode: codeToJoin,
+            player: {
+              uid: currentUser.uid,
+              username: currentUser.username,
+              avatar: currentUser.avatar,
+              ready: true,
+              isHost: false,
+              voiceActive: false,
+              muted: false,
+            },
+          }),
+        });
+        const data = await res.json();
+        if (res.ok && data.room) {
+          setActiveRoom(parseRawDatabaseRoom(data.room));
+          setActiveSection('multiplayer');
+        }
+      } catch {
+        // Non-fatal
+      }
+    })();
+  }, [urlRoomCode, currentUser, sessionToken]);
 
   // Real-time online presence & availability heartbeat
   const currentUid = currentUser?.uid || '';
@@ -688,7 +825,7 @@ export default function HerLittleArcadePage() {
     }
   }
 
-  async function handleEquipSkin(skinId: string, applyToCouple: boolean) {
+  async function handleEquipSkin(skinId: string, applyToCouple = false) {
     if (!currentUser || !sessionToken) return;
     setRewardStatusBanner(null);
     setPendingShopItemId(skinId);
@@ -734,6 +871,206 @@ export default function HerLittleArcadePage() {
 
   async function handlePurchaseSkin(skin: ArcadeSkinDef) {
     await handleBuyOrEquipShopItem(skin.id, skin.costCoins, 'skin', skin.id);
+  }
+
+  async function handleSaveProfilePhoto(croppedDataUrl: string) {
+    if (!currentUser || !sessionToken) return;
+    const res = await fetch('/api/arcade', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${sessionToken}`,
+      },
+      body: JSON.stringify({
+        action: 'update_profile_photo',
+        photoDataUrl: croppedDataUrl,
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      soundFX.playError();
+      throw new Error(data.error || 'Could not update profile picture.');
+    }
+    if (data.user) {
+      setCurrentUser(normalizePlayerProfile(data.user));
+    }
+    setRewardStatusBanner(
+      croppedDataUrl
+        ? 'Updated your custom profile picture! Your equipped skin frame & banner remain untouched.'
+        : 'Removed custom profile picture and restored your default avatar.'
+    );
+    soundFX.playSuccess();
+    await loadBootstrapData(currentUser.uid);
+  }
+
+  async function handlePurchaseBanner(bannerId: string) {
+    if (!currentUser || !sessionToken) return;
+    setRewardStatusBanner(null);
+    setPendingShopItemId(bannerId);
+    try {
+      const res = await fetch('/api/arcade', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${sessionToken}`,
+        },
+        body: JSON.stringify({
+          action: 'purchase_banner',
+          bannerId,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setRewardStatusBanner(data.error || 'Could not purchase banner.');
+        soundFX.playError();
+        return;
+      }
+      if (data.user) {
+        setCurrentUser(normalizePlayerProfile(data.user));
+      }
+      if (Array.isArray(data.coinTransactions)) {
+        setCoinTransactions(data.coinTransactions);
+      }
+      const bannerDef = getBannerById(bannerId);
+      setRewardStatusBanner(`Unlocked & equipped banner: ${bannerDef?.name || bannerId}!`);
+      soundFX.playSuccess();
+      await loadBootstrapData(currentUser.uid);
+    } catch {
+      setRewardStatusBanner('Could not purchase banner right now.');
+    } finally {
+      setPendingShopItemId(null);
+    }
+  }
+
+  async function handleEquipBanner(bannerId: string, applyToCouple = false) {
+    if (!currentUser || !sessionToken) return;
+    setRewardStatusBanner(null);
+    setPendingShopItemId(bannerId);
+    try {
+      const res = await fetch('/api/arcade', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${sessionToken}`,
+        },
+        body: JSON.stringify({
+          action: 'equip_banner',
+          bannerId,
+          applyToCouple,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setRewardStatusBanner(data.error || 'Could not equip banner.');
+        soundFX.playError();
+        return;
+      }
+      if (data.user) {
+        setCurrentUser(normalizePlayerProfile(data.user));
+      }
+      if (data.coupleContext) {
+        setCoupleContext(data.coupleContext);
+      }
+      const bannerDef = getBannerById(bannerId);
+      setRewardStatusBanner(
+        `Equipped banner: ${bannerDef?.name || bannerId}${
+          applyToCouple && coupleContext.activeCouple ? ' on Player & Couple Profile!' : '!'
+        }`
+      );
+      soundFX.playSuccess();
+      await loadBootstrapData(currentUser.uid);
+    } catch {
+      setRewardStatusBanner('Could not equip banner right now.');
+    } finally {
+      setPendingShopItemId(null);
+    }
+  }
+
+  async function handleBuyChest(chestTier: SkinRarity) {
+    if (!currentUser || !sessionToken) return;
+    setRewardStatusBanner(null);
+    setPendingShopItemId(`buy-chest-${chestTier}`);
+    try {
+      const res = await fetch('/api/arcade', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${sessionToken}`,
+        },
+        body: JSON.stringify({
+          action: 'buy_chest',
+          chestTier,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setRewardStatusBanner(data.error || 'Could not purchase chest.');
+        soundFX.playError();
+        return;
+      }
+      if (data.user) {
+        setCurrentUser(normalizePlayerProfile(data.user));
+      }
+      if (Array.isArray(data.coinTransactions)) {
+        setCoinTransactions(data.coinTransactions);
+      }
+      setRewardStatusBanner(
+        `Stored 1 ${chestTier.toUpperCase()} Chest in your Inventory! Open it anytime from Shop or Inventory.`
+      );
+      soundFX.playSuccess();
+      await loadBootstrapData(currentUser.uid);
+    } catch {
+      setRewardStatusBanner('Could not buy chest right now.');
+    } finally {
+      setPendingShopItemId(null);
+    }
+  }
+
+  async function handleOpenChest(
+    chestTier: SkinRarity,
+    openMethod: 'coins' | 'key' | 'inventory'
+  ): Promise<ChestOpeningResultPayload | null> {
+    if (!currentUser || !sessionToken) return null;
+    setRewardStatusBanner(null);
+    setPendingShopItemId(`open-chest-${chestTier}`);
+    try {
+      const res = await fetch('/api/arcade', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${sessionToken}`,
+        },
+        body: JSON.stringify({
+          action: 'open_chest',
+          chestTier,
+          openMethod,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setRewardStatusBanner(data.error || 'Could not open chest.');
+        soundFX.playError();
+        return null;
+      }
+      if (data.user) {
+        setCurrentUser(normalizePlayerProfile(data.user));
+      }
+      if (Array.isArray(data.coinTransactions)) {
+        setCoinTransactions(data.coinTransactions);
+      }
+      if (Array.isArray(data.chestOpenings)) {
+        setChestOpenings(data.chestOpenings);
+      }
+      soundFX.playSuccess();
+      await loadBootstrapData(currentUser.uid);
+      return (data.openingResult as ChestOpeningResultPayload) || null;
+    } catch {
+      setRewardStatusBanner('Could not open chest right now.');
+      soundFX.playError();
+      return null;
+    } finally {
+      setPendingShopItemId(null);
+    }
   }
 
   async function handleUpdateSeasonBracket(configUpdates: Partial<SeasonalBracketConfig>) {
@@ -1442,7 +1779,8 @@ export default function HerLittleArcadePage() {
                             game={game}
                             isFavorite={currentUser.favoriteGames.includes(game.id)}
                             personalBest={personalBestByGame[game.id]}
-                            onPlay={() => handleLaunchGame(game.id)}
+                            onPlay={() => handlePlayGameClick(game)}
+                            onPlayMode={(m) => handlePlayGameClick(game, m)}
                             onToggleFav={() => toggleFavoriteGame(game.id)}
                           />
                         ))}
@@ -1764,17 +2102,8 @@ export default function HerLittleArcadePage() {
                                     forcedMultiplayerMode="1v1"
                                     isFavorite={currentUser.favoriteGames.includes(game.id)}
                                     personalBest={personalBestByGame[game.id]}
-                                    onPlay={() => {
-                                      setSelectedMultiplayerMode('1v1');
-                                      if (activeRoom) {
-                                        handlePersistRoom({
-                                          ...activeRoom,
-                                          gameId: game.id,
-                                          mode: '1v1',
-                                        });
-                                      }
-                                      handleLaunchGame(game.id, { mode: '1v1' });
-                                    }}
+                                    onPlay={() => handlePlayGameClick(game, '1v1')}
+                                    onPlayMode={(m) => handlePlayGameClick(game, m)}
                                     onToggleFav={() => toggleFavoriteGame(game.id)}
                                   />
                                 ))}
@@ -1799,17 +2128,8 @@ export default function HerLittleArcadePage() {
                                     forcedMultiplayerMode="1v1"
                                     isFavorite={currentUser.favoriteGames.includes(game.id)}
                                     personalBest={personalBestByGame[game.id]}
-                                    onPlay={() => {
-                                      setSelectedMultiplayerMode('1v1');
-                                      if (activeRoom) {
-                                        handlePersistRoom({
-                                          ...activeRoom,
-                                          gameId: game.id,
-                                          mode: '1v1',
-                                        });
-                                      }
-                                      handleLaunchGame(game.id, { mode: '1v1' });
-                                    }}
+                                    onPlay={() => handlePlayGameClick(game, '1v1')}
+                                    onPlayMode={(m) => handlePlayGameClick(game, m)}
                                     onToggleFav={() => toggleFavoriteGame(game.id)}
                                   />
                                 ))}
@@ -1858,17 +2178,8 @@ export default function HerLittleArcadePage() {
                                     forcedMultiplayerMode="2v2"
                                     isFavorite={currentUser.favoriteGames.includes(game.id)}
                                     personalBest={personalBestByGame[game.id]}
-                                    onPlay={() => {
-                                      setSelectedMultiplayerMode('2v2');
-                                      if (activeRoom) {
-                                        handlePersistRoom({
-                                          ...activeRoom,
-                                          gameId: game.id,
-                                          mode: '2v2',
-                                        });
-                                      }
-                                      handleLaunchGame(game.id, { mode: '2v2' });
-                                    }}
+                                    onPlay={() => handlePlayGameClick(game, '2v2')}
+                                    onPlayMode={(m) => handlePlayGameClick(game, m)}
                                     onToggleFav={() => toggleFavoriteGame(game.id)}
                                   />
                                 ))}
@@ -1895,17 +2206,8 @@ export default function HerLittleArcadePage() {
                                     forcedMultiplayerMode="2v2"
                                     isFavorite={currentUser.favoriteGames.includes(game.id)}
                                     personalBest={personalBestByGame[game.id]}
-                                    onPlay={() => {
-                                      setSelectedMultiplayerMode('2v2');
-                                      if (activeRoom) {
-                                        handlePersistRoom({
-                                          ...activeRoom,
-                                          gameId: game.id,
-                                          mode: '2v2',
-                                        });
-                                      }
-                                      handleLaunchGame(game.id, { mode: '2v2' });
-                                    }}
+                                    onPlay={() => handlePlayGameClick(game, '2v2')}
+                                    onPlayMode={(m) => handlePlayGameClick(game, m)}
                                     onToggleFav={() => toggleFavoriteGame(game.id)}
                                   />
                                 ))}
@@ -2390,13 +2692,14 @@ export default function HerLittleArcadePage() {
                         personalBest={personalBestByGame[game.id]}
                         onPlay={() => {
                           if (catalogFilter === '2v2' && game.supports2v2) {
-                            handleLaunchGame(game.id, { mode: '2v2' });
+                            handlePlayGameClick(game, '2v2');
                           } else if (game.collection === 'multiplayer') {
-                            handleLaunchGame(game.id, { mode: '1v1' });
+                            handlePlayGameClick(game, '1v1');
                           } else {
-                            handleLaunchGame(game.id);
+                            handlePlayGameClick(game);
                           }
                         }}
+                        onPlayMode={(m) => handlePlayGameClick(game, m)}
                         onToggleFav={() => toggleFavoriteGame(game.id)}
                       />
                     ))}
@@ -2754,10 +3057,27 @@ export default function HerLittleArcadePage() {
                                         </div>
                                       </td>
                                       <td className="px-4 py-3 font-sans text-stone-200">
-                                        {getAvatarEmoji(c.requesterProfile?.avatar || 'kitsune')}{' '}
-                                        @{c.requesterProfile?.username || 'Partner 1'} &amp;{' '}
-                                        {getAvatarEmoji(c.partnerProfile?.avatar || 'star-cat')}{' '}
-                                        @{c.partnerProfile?.username || 'Partner 2'}
+                                        <div className="flex flex-wrap items-center gap-2">
+                                          <span className="inline-flex items-center gap-1.5">
+                                            <AnimatedSkinnedAvatar
+                                              avatarId={c.requesterProfile?.avatar || 'kitsune'}
+                                              customPhotoUrl={c.requesterProfile?.customPhotoUrl || ''}
+                                              skinId={c.requesterProfile?.equippedSkin || c.equippedCoupleSkin || 'skin-paper-kraft'}
+                                              size="xs"
+                                            />
+                                            <span>@{c.requesterProfile?.username || 'Partner 1'}</span>
+                                          </span>
+                                          <span className="text-stone-500">&amp;</span>
+                                          <span className="inline-flex items-center gap-1.5">
+                                            <AnimatedSkinnedAvatar
+                                              avatarId={c.partnerProfile?.avatar || 'star-cat'}
+                                              customPhotoUrl={c.partnerProfile?.customPhotoUrl || ''}
+                                              skinId={c.partnerProfile?.equippedSkin || c.equippedCoupleSkin || 'skin-paper-kraft'}
+                                              size="xs"
+                                            />
+                                            <span>@{c.partnerProfile?.username || 'Partner 2'}</span>
+                                          </span>
+                                        </div>
                                       </td>
                                       <td className="px-4 py-3 text-right font-bold text-amber-300">
                                         🏆 {displayedTrophies}
@@ -2967,6 +3287,24 @@ export default function HerLittleArcadePage() {
                       </div>
                     </div>
                   </section>
+
+                  {/* 5-Tier Chests & Keys Boutique + Banners + Unified 4-Category Inventory */}
+                  <CosmeticChestShopAndInventorySuite
+                    player={currentUser}
+                    activeCouple={activeCouple}
+                    chestOpenings={chestOpenings}
+                    onBuyChest={handleBuyChest}
+                    onOpenChest={handleOpenChest}
+                    onPurchaseSkin={(skinId) => {
+                      const skin = getSkinById(skinId);
+                      if (skin) return handlePurchaseSkin(skin);
+                      return Promise.resolve();
+                    }}
+                    onEquipSkin={handleEquipSkin}
+                    onPurchaseBanner={handlePurchaseBanner}
+                    onEquipBanner={handleEquipBanner}
+                    onOpenPhotoStudio={() => setPhotoModalOpen(true)}
+                  />
 
                   {/* 5-Rarity Equippable Skins Vault & Live Preview */}
                   <SkinsBoutiqueAndVaultPanel
@@ -3190,6 +3528,8 @@ export default function HerLittleArcadePage() {
                       setCoupleContext(nextCtx);
                       loadBootstrapData(currentUser.uid);
                     }}
+                    onOpenPhotoUpload={() => setPhotoModalOpen(true)}
+                    onOpenCosmeticsVault={() => setActiveSection('shop')}
                   />
 
                   <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
@@ -3309,6 +3649,33 @@ export default function HerLittleArcadePage() {
                   </div>
 
                   <div className="space-y-5 rounded-2xl border border-stone-800 bg-stone-900/90 p-6">
+                    {/* Profile Picture Upload Studio Option in Profile Settings */}
+                    <div className="flex flex-wrap items-center justify-between gap-4 border-b border-stone-800 pb-5">
+                      <div className="flex items-center gap-3.5">
+                        <AnimatedSkinnedAvatar
+                          avatarId={currentUser.avatar}
+                          customPhotoUrl={currentUser.customPhotoUrl}
+                          skinId={currentUser.equippedSkin}
+                          size="md"
+                        />
+                        <div>
+                          <div className="text-sm font-bold text-stone-100">
+                            Upload Profile Picture &amp; Avatar Crop Studio
+                          </div>
+                          <div className="text-xs text-stone-400">
+                            Upload PNG, JPG, JPEG, or WebP (up to 5 MB). Stored independently so changing skin frames or banners never modifies your photo.
+                          </div>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setPhotoModalOpen(true)}
+                        className="rounded-xl bg-amber-500 px-4 py-2 text-xs font-bold text-stone-950 hover:bg-amber-400"
+                      >
+                        {currentUser.customPhotoUrl ? 'Replace / Crop Photo' : 'Upload Profile Picture'}
+                      </button>
+                    </div>
+
                     <div className="flex items-center justify-between">
                       <div>
                         <div className="text-sm font-bold text-stone-100">
@@ -3424,6 +3791,75 @@ export default function HerLittleArcadePage() {
       </div>
       </div>
 
+      {/* 1v1 Match Setup & 2v2 Team/Matchmaking Modal Overlay */}
+      <PlayGameSetupModal
+        isOpen={playSetupModal.isOpen}
+        initialGameId={playSetupModal.gameId}
+        mode={playSetupModal.mode}
+        currentUser={{
+          uid: currentUser.uid,
+          username: currentUser.username,
+          avatar: currentUser.avatar,
+          equippedSkin: currentUser.equippedSkin,
+        }}
+        activeCouple={
+          activeCouple
+            ? {
+                id: activeCouple.id,
+                coupleName: activeCouple.coupleName,
+                coupleTitle: activeCouple.coupleTitle,
+                coupleTrophies: activeCouple.coupleTrophies ?? 0,
+                equippedCoupleSkin: activeCouple.equippedCoupleSkin,
+                coupleBanner: activeCouple.coupleBanner,
+                status: activeCouple.status,
+                requesterUid: activeCouple.requesterUid,
+                partnerUid: activeCouple.partnerUid,
+                partnerProfile: pairedPartnerProfile
+                  ? {
+                      uid: pairedPartnerProfile.uid,
+                      username: pairedPartnerProfile.username,
+                      avatar: pairedPartnerProfile.avatar,
+                      equippedSkin: pairedPartnerProfile.equippedSkin,
+                      presenceStatus: pairedPartnerProfile.presenceStatus,
+                    }
+                  : null,
+              }
+            : null
+        }
+        activeRoom={activeRoom}
+        authFetcher={authFetcher}
+        onClose={() =>
+          setPlaySetupModal((prev) => ({
+            ...prev,
+            isOpen: false,
+          }))
+        }
+        onSwitchMode={(nextMode) => {
+          setSelectedMultiplayerMode(nextMode);
+          setPlaySetupModal((prev) => ({
+            ...prev,
+            mode: nextMode,
+          }));
+        }}
+        onRoomJoinedOrCreated={(room, autoLaunchGame) => {
+          setActiveRoom(room);
+          setSelectedMultiplayerMode(room.mode);
+          if (autoLaunchGame) {
+            setPlaySetupModal((prev) => ({ ...prev, isOpen: false }));
+            handleLaunchGame(room.gameId, {
+              mode: room.mode,
+              autostart: true,
+            });
+          }
+        }}
+        onOpenCouplePairing={() => {
+          setPlaySetupModal((prev) => ({ ...prev, isOpen: false }));
+          handleLaunchGame(null);
+          setActiveSection('profile');
+          smoothScrollToTop();
+        }}
+      />
+
       {/* Account Management Modal (when already authenticated) */}
       <AuthModal
         isOpen={authModalOpen}
@@ -3447,6 +3883,18 @@ export default function HerLittleArcadePage() {
           setActiveRoom(null);
         }}
       />
+
+      {/* Profile Picture Upload, Crop & Preview Studio Modal */}
+      <ProfilePhotoUploadAndCropModal
+        isOpen={photoModalOpen}
+        currentPhotoUrl={currentUser.customPhotoUrl || ''}
+        avatarId={currentUser.avatar}
+        equippedSkinId={currentUser.equippedSkin}
+        equippedBannerId={currentUser.equippedBanner}
+        username={currentUser.username}
+        onClose={() => setPhotoModalOpen(false)}
+        onSavePhoto={handleSaveProfilePhoto}
+      />
     </div>
   );
 }
@@ -3460,6 +3908,7 @@ function GameCard({
   isFavorite,
   personalBest,
   onPlay,
+  onPlayMode,
   onToggleFav,
 }: {
   game: ArcadeGameDef;
@@ -3467,39 +3916,22 @@ function GameCard({
   isFavorite: boolean;
   personalBest?: number;
   onPlay: () => void;
+  onPlayMode?: (mode: '1v1' | '2v2') => void;
   onToggleFav: () => void;
 }) {
   const is2v2Card = forcedMultiplayerMode === '2v2' && Boolean(game.supports2v2);
   const is1v1Card = forcedMultiplayerMode === '1v1' && game.collection === 'multiplayer';
-
-  function handleCardHover(e: React.MouseEvent<HTMLDivElement>, entering: boolean) {
-    const prefersReducedMotion =
-      typeof window !== 'undefined' &&
-      window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    if (prefersReducedMotion) return;
-
-    if (entering) {
-      gsap.to(e.currentTarget, {
-        y: -3,
-        duration: 0.2,
-        ease: 'power2.out',
-        overwrite: 'auto',
-      });
-    } else {
-      gsap.to(e.currentTarget, {
-        y: 0,
-        duration: 0.22,
-        ease: 'power2.out',
-        overwrite: 'auto',
-        clearProps: 'transform',
-      });
-    }
-  }
+  const showDualModeButtons =
+    !forcedMultiplayerMode &&
+    game.collection === 'multiplayer' &&
+    Boolean(game.supports2v2) &&
+    Boolean(onPlayMode);
 
   return (
     <div
-      onMouseEnter={(e) => handleCardHover(e, true)}
-      onMouseLeave={(e) => handleCardHover(e, false)}
+      data-gsap-card
+      onMouseEnter={(e) => animateCardHover(e.currentTarget, true)}
+      onMouseLeave={(e) => animateCardHover(e.currentTarget, false)}
       className="gsap-stagger-card flex flex-col justify-between rounded-2xl border border-stone-800 bg-stone-900/90 p-4 transition-colors hover:border-stone-700"
     >
       <div>
@@ -3546,7 +3978,10 @@ function GameCard({
 
           <button
             type="button"
-            onClick={onToggleFav}
+            onClick={(e) => {
+              animateButtonPress(e.currentTarget);
+              onToggleFav();
+            }}
             aria-label={
               isFavorite ? `Remove ${game.title} from favorites` : `Favorite ${game.title}`
             }
@@ -3559,7 +3994,7 @@ function GameCard({
         <p className="mt-2 text-xs leading-relaxed text-stone-300">{game.shortDesc}</p>
       </div>
 
-      <div className="mt-4 flex items-center justify-between gap-2 pt-2">
+      <div className="mt-4 flex flex-wrap items-center justify-between gap-2 pt-2">
         <div className="font-mono text-xs text-stone-400 tabular-nums">
           {personalBest !== undefined
             ? `Best: ${personalBest}`
@@ -3574,24 +4009,54 @@ function GameCard({
             : '1v1 Mode: +XP Only (0 Coins / 0 🏆)'}
         </div>
 
-        <button
-          type="button"
-          onClick={onPlay}
-          className={`flex items-center gap-1.5 rounded-lg px-3.5 py-1.5 text-xs font-bold text-stone-950 transition-colors whitespace-nowrap shrink-0 ${
-            is2v2Card
-              ? 'bg-rose-400 hover:bg-rose-300'
-              : 'bg-amber-500 hover:bg-amber-400'
-          }`}
-        >
-          <Play className="h-3 w-3 fill-current" />
-          <span>
-            {is2v2Card
-              ? `Play 2v2 · ${game.title}`
-              : is1v1Card
-              ? `Play 1v1 · ${game.title}`
-              : `Play ${game.title}`}
-          </span>
-        </button>
+        {showDualModeButtons ? (
+          <div className="flex items-center gap-1.5 shrink-0">
+            <button
+              type="button"
+              onClick={(e) => {
+                animateButtonPress(e.currentTarget);
+                onPlayMode?.('1v1');
+              }}
+              className="flex items-center gap-1 rounded-lg bg-amber-500 px-2.5 py-1.5 text-xs font-bold text-stone-950 transition-colors hover:bg-amber-400 whitespace-nowrap"
+            >
+              <Play className="h-3 w-3 fill-current" />
+              <span>Play 1v1</span>
+            </button>
+            <button
+              type="button"
+              onClick={(e) => {
+                animateButtonPress(e.currentTarget);
+                onPlayMode?.('2v2');
+              }}
+              className="flex items-center gap-1 rounded-lg bg-rose-400 px-2.5 py-1.5 text-xs font-bold text-stone-950 transition-colors hover:bg-rose-300 whitespace-nowrap"
+            >
+              <Play className="h-3 w-3 fill-current" />
+              <span>Play 2v2</span>
+            </button>
+          </div>
+        ) : (
+          <button
+            type="button"
+            onClick={(e) => {
+              animateButtonPress(e.currentTarget);
+              onPlay();
+            }}
+            className={`flex items-center gap-1.5 rounded-lg px-3.5 py-1.5 text-xs font-bold text-stone-950 transition-colors whitespace-nowrap shrink-0 ${
+              is2v2Card
+                ? 'bg-rose-400 hover:bg-rose-300'
+                : 'bg-amber-500 hover:bg-amber-400'
+            }`}
+          >
+            <Play className="h-3 w-3 fill-current" />
+            <span>
+              {is2v2Card
+                ? `Play 2v2 · ${game.title}`
+                : is1v1Card || game.collection === 'multiplayer'
+                ? `Play 1v1 · ${game.title}`
+                : `Play ${game.title}`}
+            </span>
+          </button>
+        )}
       </div>
     </div>
   );

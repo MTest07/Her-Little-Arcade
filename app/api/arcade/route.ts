@@ -13,6 +13,11 @@ import {
   redeemRenameCardForUsername,
   purchaseRewardShopItem,
   equipOrUnequipSkin,
+  updateUserProfilePhoto,
+  purchaseArcadeBanner,
+  equipOrUnequipBanner,
+  purchaseChestToInventory,
+  openArcadeChest,
   claimChallengeReward,
   updateSeasonalBracketConfig,
   concludeActiveSeasonNow,
@@ -27,6 +32,8 @@ import {
   createValidatedMultiplayerRoom,
   inspectRoomForJoin,
   joinValidatedMultiplayerRoom,
+  respondToRoomJoinRequest,
+  listJoinablePublicRooms,
   upsertMultiplayerRoom,
   getRoomByCode,
   recordGameMatchResult,
@@ -41,6 +48,10 @@ import {
   searchUsersAndCouplesForInvite,
   sendGameInvitationByUsername,
   respondToGameInvitation,
+  get2v2CoupleTeamLobby,
+  invitePartnerTo2v2Team,
+  respondPartnerTo2v2Team,
+  toggle2v2TeamReady,
 } from '@/src/db/repository';
 
 async function resolveAuthenticatedIdentity(req: NextRequest): Promise<{
@@ -82,6 +93,27 @@ export async function GET(req: NextRequest) {
     if (checkUsername !== null) {
       const check = await checkUsernameAvailability(checkUsername, actorUid);
       return NextResponse.json(check);
+    }
+
+    const publicRooms = searchParams.get('publicRooms');
+    if (publicRooms) {
+      const gameId = searchParams.get('gameId') || undefined;
+      const modeParam = searchParams.get('mode');
+      const mode =
+        modeParam === '1v1' || modeParam === '2v2' ? modeParam : 'all';
+      const roomsList = await listJoinablePublicRooms({
+        gameId,
+        mode,
+        actorUid,
+      });
+      return NextResponse.json({ publicRooms: roomsList });
+    }
+
+    const teamLobby2v2 = searchParams.get('teamLobby2v2');
+    if (teamLobby2v2 && actorUid) {
+      const gameId = searchParams.get('gameId') || undefined;
+      const teamLobby = await get2v2CoupleTeamLobby(actorUid, gameId);
+      return NextResponse.json({ teamLobby });
     }
 
     const searchUsername = searchParams.get('searchUsername');
@@ -227,6 +259,59 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ profile, coupleContext });
     }
 
+    if (action === 'update_profile_photo') {
+      const profile = await updateUserProfilePhoto(
+        identity.uid,
+        String(body.customPhotoUrl || '')
+      );
+      const coupleContext = await getCoupleContextForUser(identity.uid);
+      return NextResponse.json({ profile, coupleContext });
+    }
+
+    if (action === 'purchase_banner') {
+      const profile = await purchaseArcadeBanner(
+        identity.uid,
+        String(body.bannerId || '')
+      );
+      return NextResponse.json({ profile, user: profile });
+    }
+
+    if (action === 'equip_banner') {
+      const profile = await equipOrUnequipBanner(
+        identity.uid,
+        String(body.bannerId || 'banner-sketchbook-grid'),
+        Boolean(body.applyToCouple)
+      );
+      const coupleContext = await getCoupleContextForUser(identity.uid);
+      return NextResponse.json({ profile, coupleContext });
+    }
+
+    if (action === 'buy_chest') {
+      const profile = await purchaseChestToInventory(
+        identity.uid,
+        (body.chestTier || 'Common') as 'Common' | 'Uncommon' | 'Rare' | 'Epic' | 'Legendary',
+        Number(body.quantity || 1)
+      );
+      return NextResponse.json({ profile, user: profile });
+    }
+
+    if (action === 'open_chest') {
+      const out = await openArcadeChest({
+        uid: identity.uid,
+        chestTier: (body.chestTier || 'Common') as
+          | 'Common'
+          | 'Uncommon'
+          | 'Rare'
+          | 'Epic'
+          | 'Legendary',
+        openMethod:
+          body.openMethod === 'key' || body.openMethod === 'inventory'
+            ? body.openMethod
+            : 'coins',
+      });
+      return NextResponse.json(out);
+    }
+
     if (action === 'claim_challenge') {
       const out = await claimChallengeReward(
         identity.uid,
@@ -287,6 +372,32 @@ export async function POST(req: NextRequest) {
       return NextResponse.json(out);
     }
 
+    if (action === 'invite_partner_2v2_team') {
+      const teamLobby = await invitePartnerTo2v2Team({
+        actorUid: identity.uid,
+        gameId: String(body.gameId || 'word-orbit-relay'),
+      });
+      return NextResponse.json({ teamLobby });
+    }
+
+    if (action === 'respond_partner_2v2_team') {
+      const teamLobby = await respondPartnerTo2v2Team({
+        actorUid: identity.uid,
+        accept: Boolean(body.accept),
+        gameId: body.gameId ? String(body.gameId) : undefined,
+      });
+      return NextResponse.json({ teamLobby });
+    }
+
+    if (action === 'toggle_2v2_team_ready') {
+      const teamLobby = await toggle2v2TeamReady({
+        actorUid: identity.uid,
+        ready: body.ready !== undefined ? Boolean(body.ready) : undefined,
+        gameId: body.gameId ? String(body.gameId) : undefined,
+      });
+      return NextResponse.json({ teamLobby });
+    }
+
     if (action === 'presence_heartbeat') {
       const out = await updateUserPresenceHeartbeat({
         uid: identity.uid,
@@ -301,6 +412,7 @@ export async function POST(req: NextRequest) {
         actorUid: identity.uid,
         queueMode: body.queueMode === '1v1' ? '1v1' : '2v2',
         gameId: String(body.gameId || 'quiz-battle'),
+        requireTeamReady: Boolean(body.requireTeamReady),
       });
       return NextResponse.json(state);
     }
@@ -380,23 +492,51 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ unpaired: true, coupleContext });
     }
 
-    // Multiplayer Room actions (Create Room & Join Group)
+    // Multiplayer Room actions (Create Room, Public Room Browser, & Join Group)
     if (action === 'create_room') {
       const room = await createValidatedMultiplayerRoom({
         hostUid: identity.uid,
         gameId: String(body.gameId || 'chess'),
         mode: body.mode === '2v2' ? '2v2' : '1v1',
+        visibility: body.visibility === 'private' ? 'private' : 'public',
+        joinPolicy:
+          body.joinPolicy === 'approval_required' ? 'approval_required' : 'immediate',
+        invitedUids: Array.isArray(body.invitedUids) ? body.invitedUids : [],
         settings: body.settings || {},
         includePairedPartner: body.includePairedPartner !== false,
       });
       return NextResponse.json({ room });
     }
 
+    if (action === 'list_public_rooms') {
+      const publicRooms = await listJoinablePublicRooms({
+        gameId: body.gameId ? String(body.gameId) : undefined,
+        mode: body.mode === '1v1' || body.mode === '2v2' ? body.mode : 'all',
+        actorUid: identity.uid,
+      });
+      return NextResponse.json({ publicRooms });
+    }
+
     if (action === 'join_room') {
-      const room = await joinValidatedMultiplayerRoom({
+      const out = await joinValidatedMultiplayerRoom({
         actorUid: identity.uid,
         roomCode: String(body.roomCode || ''),
         includePairedPartner: body.includePairedPartner !== false,
+        viaDirectCodeOrInvite: Boolean(body.viaDirectCodeOrInvite),
+      });
+      return NextResponse.json({
+        room: out,
+        pendingApproval: 'pendingApproval' in out ? Boolean(out.pendingApproval) : false,
+        pendingMessage: 'pendingMessage' in out ? out.pendingMessage : undefined,
+      });
+    }
+
+    if (action === 'respond_join_request') {
+      const room = await respondToRoomJoinRequest({
+        hostUid: identity.uid,
+        roomCode: String(body.roomCode || ''),
+        requesterUid: String(body.requesterUid || ''),
+        approve: Boolean(body.approve),
       });
       return NextResponse.json({ room });
     }
@@ -406,13 +546,26 @@ export async function POST(req: NextRequest) {
         roomCode: String(body.roomCode || ''),
         gameId: String(body.gameId || 'chess'),
         mode: body.mode === '2v2' ? '2v2' : '1v1',
+        visibility:
+          body.visibility === 'private' || body.visibility === 'public'
+            ? body.visibility
+            : undefined,
+        joinPolicy:
+          body.joinPolicy === 'approval_required' || body.joinPolicy === 'immediate'
+            ? body.joinPolicy
+            : undefined,
         maxPlayers: Number(body.maxPlayers || (body.mode === '2v2' ? 4 : 2)),
         hostUid: String(body.hostUid || identity.uid),
         hostName: String(body.hostName || 'Player'),
+        hostAvatar: body.hostAvatar ? String(body.hostAvatar) : undefined,
         status: String(body.status || 'lobby'),
         settings: body.settings || {},
         players: body.players || [],
         teams: body.teams || [],
+        pendingRequests: Array.isArray(body.pendingRequests)
+          ? body.pendingRequests
+          : undefined,
+        invitedUids: Array.isArray(body.invitedUids) ? body.invitedUids : undefined,
         gameState: body.gameState || {},
         chat: body.chat || [],
         voiceParticipants: body.voiceParticipants || [],
@@ -464,4 +617,5 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: message }, { status: 400 });
   }
 }
+
 

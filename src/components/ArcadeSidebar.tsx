@@ -25,6 +25,7 @@ import {
 import { PlayerProfile } from './AuthModal';
 import { EnrichedCouplePairing } from './CouplePairingPanel';
 import { ArcadeInlineSpinner } from './ArcadeLoader';
+import { AnimatedSkinnedAvatar } from './CosmeticAvatarAndBanner';
 import { getSkinById } from '@/src/lib/arcade-data';
 import { soundFX } from '@/src/lib/sound';
 
@@ -335,12 +336,6 @@ export function ArcadeSidebar({
     if (prefersReducedMotion) return;
 
     const iconEl = e.currentTarget.querySelector('.sidebar-nav-icon');
-    gsap.to(e.currentTarget, {
-      x: entering ? 3 : 0,
-      duration: 0.18,
-      ease: 'power2.out',
-      overwrite: 'auto',
-    });
     if (iconEl) {
       gsap.to(iconEl, {
         scale: entering ? 1.12 : 1,
@@ -456,9 +451,9 @@ export function ArcadeSidebar({
 
           <div
             ref={mobileDrawerRef}
-            className="arcade-sidebar-shell relative z-10 flex h-full w-72 max-w-[86vw] flex-col justify-between p-4 shadow-2xl"
+            className="arcade-sidebar-shell arcade-no-scrollbar relative z-10 flex h-full w-72 max-w-[86vw] flex-col justify-between overflow-x-hidden p-4 shadow-2xl"
           >
-            <div className="space-y-4 overflow-y-auto pr-1">
+            <div className="arcade-no-scrollbar space-y-4 overflow-y-auto overflow-x-hidden">
               {/* Drawer Brand Header */}
               <div className="flex items-center justify-between border-b border-dashed border-[var(--dp-color-line)] pb-3">
                 <div className="flex items-center gap-2.5">
@@ -492,9 +487,14 @@ export function ArcadeSidebar({
                     onClick={() =>
                       closeMobileDrawerWithAnimation(() => onSelectSection('couple-profile'))
                     }
-                    className="flex h-11 w-11 shrink-0 items-center justify-center border-[1.5px] border-[var(--dp-color-ink)] bg-[var(--dp-color-ground)] text-xl shadow-[2px_2px_0px_rgba(56,53,47,0.16)]"
+                    className="shrink-0"
                   >
-                    {getAvatarEmoji(currentUser.avatar)}
+                    <AnimatedSkinnedAvatar
+                      avatarId={currentUser.avatar}
+                      customPhotoUrl={currentUser.customPhotoUrl}
+                      skinId={currentUser.equippedSkin}
+                      size="sm"
+                    />
                   </button>
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center justify-between gap-1">
@@ -721,9 +721,14 @@ export function ArcadeSidebar({
                 type="button"
                 onClick={() => onSelectSection('couple-profile')}
                 title={`${currentUser.username} · Lv.${levelMetrics.level} (${currentUser.coins} Coins)`}
-                className="relative flex h-10 w-10 shrink-0 items-center justify-center border-[1.5px] border-[var(--dp-color-ink)] bg-[var(--dp-color-ground)] text-lg shadow-[2px_2px_0px_rgba(56,53,47,0.16)] transition-transform hover:scale-105"
+                className="relative shrink-0 transition-transform hover:scale-105"
               >
-                <span>{getAvatarEmoji(currentUser.avatar)}</span>
+                <AnimatedSkinnedAvatar
+                  avatarId={currentUser.avatar}
+                  customPhotoUrl={currentUser.customPhotoUrl}
+                  skinId={currentUser.equippedSkin}
+                  size="sm"
+                />
               </button>
 
               {!isCollapsed && (
@@ -806,7 +811,7 @@ export function ArcadeSidebar({
           <nav
             ref={navListRef}
             aria-label="Primary Sidebar Navigation"
-            className="flex-1 space-y-1 overflow-y-auto overflow-x-visible pr-0.5"
+            className="arcade-no-scrollbar flex-1 space-y-1 overflow-y-auto overflow-x-hidden"
           >
             {SIDEBAR_NAV_ITEMS.map((item) => {
               const Icon = item.icon;

@@ -12,6 +12,8 @@ import {
   matchmakingQueue,
   coinTransactions,
   gameInvitations,
+  coupleTeamLobbies,
+  chestOpenings,
 } from './schema.ts';
 import { eq, desc, or, and, ne } from 'drizzle-orm';
 import { calculateLevelFromXp } from '../lib/game-rules.ts';
@@ -22,6 +24,14 @@ import {
   RENAME_CARD_COST_COINS,
   TROPHY_ROAD_MILESTONES,
   ARCADE_SKINS,
+  ARCADE_BANNERS,
+  getBannerById,
+  ARCADE_KEYS,
+  ARCADE_CHESTS,
+  DUPLICATE_COSMETIC_COIN_PAYOUT,
+  SkinRarity,
+  parseTierCountMap,
+  getRewardPoolForChest,
   ARCADE_CHALLENGE_CATALOG,
   getChallengePeriodWindow,
   DEFAULT_SEASONAL_BRACKET_CONFIG,
@@ -101,6 +111,20 @@ export function sanitizeUserRow(row: typeof users.$inferSelect) {
   if (!unlockedParsed.includes('skin-classic-notebook')) {
     unlockedParsed.push('skin-classic-notebook');
   }
+
+  let unlockedBannersParsed: string[] = [];
+  try {
+    unlockedBannersParsed = JSON.parse(row.unlockedBannersJson || '["banner-sketchbook-grid"]');
+  } catch {
+    unlockedBannersParsed = ['banner-sketchbook-grid'];
+  }
+  if (!unlockedBannersParsed.includes('banner-sketchbook-grid')) {
+    unlockedBannersParsed.push('banner-sketchbook-grid');
+  }
+
+  const chestInventoryParsed = parseTierCountMap(row.chestInventoryJson);
+  const keyInventoryParsed = parseTierCountMap(row.keyInventoryJson);
+
   return {
     id: row.id,
     uid: row.uid,
@@ -110,6 +134,7 @@ export function sanitizeUserRow(row: typeof users.$inferSelect) {
     renameCards: row.renameCards ?? 0,
     emailVerified: row.emailVerified,
     avatar: row.avatar,
+    customPhotoUrl: row.customPhotoUrl || '',
     xp: row.xp,
     level: row.level,
     coins: row.coins,
@@ -119,6 +144,10 @@ export function sanitizeUserRow(row: typeof users.$inferSelect) {
     draws: row.draws,
     theme: row.theme,
     equippedSkin: row.equippedSkin || 'skin-classic-notebook',
+    equippedBanner: row.equippedBanner || 'banner-sketchbook-grid',
+    unlockedBanners: JSON.stringify(unlockedBannersParsed),
+    chestInventory: JSON.stringify(chestInventoryParsed),
+    keyInventory: JSON.stringify(keyInventoryParsed),
     favoriteGames: row.favoriteGames,
     unlockedItems: JSON.stringify(unlockedParsed),
     petState: row.petState,
@@ -330,15 +359,6 @@ export async function redeemRenameCardForUsername(uid: string, desiredUsername: 
 
 export async function purchaseRewardShopItem(uid: string, itemId: string) {
   try {
-    const seasonalSkin = ARCADE_SKINS.find(
-      (s) => s.id === itemId && s.acquisitionSource === 'seasonal_exclusive'
-    );
-    if (seasonalSkin) {
-      throw new Error(
-        `"${seasonalSkin.name}" is an Exclusive Seasonal Championship Skin (${seasonalSkin.rarity}) awarded only to Top 3 Couples at the end of a season.`
-      );
-    }
-
     const shopItem = REWARD_SHOP_ITEMS.find((item) => item.id === itemId);
     if (!shopItem) {
       throw new Error('Reward item not found in the official shop catalog.');
@@ -439,10 +459,12 @@ export async function equipOrUnequipSkin(
       }
     })();
 
-    const isStarter = skinDef.acquisitionSource === 'starter' || skinDef.id === 'skin-classic-notebook';
+    const isStarter =
+      skinDef.acquisitionSource === 'starter' ||
+      skinDef.id === 'skin-classic-notebook';
     if (!isStarter && !unlockedList.includes(skinDef.id)) {
       throw new Error(
-        `You cannot equip "${skinDef.name}" (${skinDef.rarity}) because you do not own it yet.`
+        `You cannot equip "${skinDef.name}" (${skinDef.rarity}) because you have not bought or obtained it from a chest yet.`
       );
     }
 
@@ -460,7 +482,7 @@ export async function equipOrUnequipSkin(
       .where(eq(users.uid, uid))
       .returning();
 
-    if (applyToCouple) {
+      if (applyToCouple) {
       const coupleCtx = await getCoupleContextForUser(uid);
       if (coupleCtx.activeCouple) {
         await db
@@ -477,6 +499,493 @@ export async function equipOrUnequipSkin(
   } catch (error) {
     console.error('Database equipOrUnequipSkin failed:', error);
     const msg = error instanceof Error ? error.message : 'Failed to equip skin.';
+    throw new Error(msg, { cause: error });
+  }
+}
+
+/* ============================================================================
+   UPLOADED PROFILE PICTURE, COSMETIC BANNERS, 5-TIER CHESTS & CUSTOM KEYS
+   ============================================================================ */
+
+export async function updateUserProfilePhoto(uid: string, customPhotoUrl: string) {
+  try {
+    const userRows = await db.select().from(users).where(eq(users.uid, uid));
+    if (!userRows.length) {
+      throw new Error('Player account not found.');
+    }
+
+    const cleanUrl = (customPhotoUrl || '').trim();
+    if (cleanUrl.length > 0) {
+      const isValidDataImage = /^data:image\/(png|jpeg|jpg|webp);base64,[A-Za-z0-9+/=]+$/i.test(
+        cleanUrl
+      );
+      if (!isValidDataImage) {
+        throw new Error(
+          'Unsupported image format. Please upload a PNG, JPG, JPEG, or WebP image.'
+        );
+      }
+      // Enforce maximum ~1.5MB cropped data URL payload (corresponds to <= 5MB source image after crop)
+      if (cleanUrl.length > 2_000_000) {
+        throw new Error(
+          'Cropped profile image is too large. Please choose an image under 5 MB.'
+        );
+      }
+    }
+
+    // Strictly keep customPhotoUrl independent from equippedSkin and equippedBanner
+    const updated = await db
+      .update(users)
+      .set({
+        customPhotoUrl: cleanUrl,
+        lastSeenAt: new Date(),
+      })
+      .where(eq(users.uid, uid))
+      .returning();
+
+    return sanitizeUserRow(updated[0]);
+  } catch (error) {
+    console.error('Database updateUserProfilePhoto failed:', error);
+    const msg =
+      error instanceof Error ? error.message : 'Failed to update profile picture.';
+    throw new Error(msg, { cause: error });
+  }
+}
+
+export async function purchaseArcadeBanner(uid: string, bannerId: string) {
+  try {
+    const bannerDef = ARCADE_BANNERS.find((b) => b.id === bannerId);
+    if (!bannerDef) {
+      throw new Error('Selected banner does not exist in the arcade catalog.');
+    }
+    if (bannerDef.acquisitionSource === 'trophy_road' && bannerDef.costCoins <= 0) {
+      throw new Error(
+        `"${bannerDef.name}" is an exclusive Trophy Road or chest banner and cannot be purchased directly.`
+      );
+    }
+
+    const userRows = await db.select().from(users).where(eq(users.uid, uid));
+    if (!userRows.length) {
+      throw new Error('Player account not found.');
+    }
+    const user = userRows[0];
+
+    const unlockedBanners: string[] = (() => {
+      try {
+        return JSON.parse(user.unlockedBannersJson || '["banner-sketchbook-grid"]');
+      } catch {
+        return ['banner-sketchbook-grid'];
+      }
+    })();
+
+    if (unlockedBanners.includes(bannerDef.id)) {
+      throw new Error(`You already own the "${bannerDef.name}" banner.`);
+    }
+
+    if (user.coins < bannerDef.costCoins) {
+      throw new Error(
+        `Insufficient coins! You need ${bannerDef.costCoins.toLocaleString()} Coins (current balance: ${user.coins.toLocaleString()} Coins).`
+      );
+    }
+
+    const nextCoins = user.coins - bannerDef.costCoins;
+    const nextUnlockedBanners = Array.from(
+      new Set([...unlockedBanners, 'banner-sketchbook-grid', bannerDef.id])
+    );
+
+    const updated = await db
+      .update(users)
+      .set({
+        coins: nextCoins,
+        unlockedBannersJson: JSON.stringify(nextUnlockedBanners),
+        equippedBanner: bannerDef.id,
+        lastSeenAt: new Date(),
+      })
+      .where(eq(users.uid, uid))
+      .returning();
+
+    const coupleCtx = await getCoupleContextForUser(uid);
+    if (bannerDef.costCoins > 0) {
+      await db.insert(coinTransactions).values({
+        userUid: uid,
+        coupleId: coupleCtx.activeCouple?.id || 0,
+        amount: -bannerDef.costCoins,
+        balanceAfter: nextCoins,
+        txType: 'banner_purchase',
+        referenceId: `banner-${bannerDef.id}-${Date.now()}`,
+        description: `Purchased Banner: ${bannerDef.name} (${bannerDef.rarity})`,
+      });
+    }
+
+    return sanitizeUserRow(updated[0]);
+  } catch (error) {
+    console.error('Database purchaseArcadeBanner failed:', error);
+    const msg = error instanceof Error ? error.message : 'Failed to purchase banner.';
+    throw new Error(msg, { cause: error });
+  }
+}
+
+export async function equipOrUnequipBanner(
+  uid: string,
+  bannerId: string,
+  applyToCouple?: boolean
+) {
+  try {
+    const userRows = await db.select().from(users).where(eq(users.uid, uid));
+    if (!userRows.length) {
+      throw new Error('Player account not found.');
+    }
+    const user = userRows[0];
+
+    const targetBannerId = (bannerId || '').trim() || 'banner-warm-sketchbook';
+    const bannerDef = getBannerById(targetBannerId);
+    if (!bannerDef) {
+      throw new Error('Selected banner does not exist in the arcade catalog.');
+    }
+
+    const unlockedBanners: string[] = (() => {
+      try {
+        return JSON.parse(user.unlockedBannersJson || '["banner-warm-sketchbook"]');
+      } catch {
+        return ['banner-warm-sketchbook'];
+      }
+    })();
+
+    const isStarter =
+      bannerDef.acquisitionSource === 'starter' ||
+      bannerDef.id === 'banner-warm-sketchbook' ||
+      bannerDef.id === 'banner-sketchbook-grid';
+
+    if (!isStarter && !unlockedBanners.includes(bannerDef.id)) {
+      throw new Error(
+        `You cannot equip "${bannerDef.name}" (${bannerDef.rarity}) because you have not bought or obtained it from a chest yet.`
+      );
+    }
+
+    const nextUnlockedBanners = isStarter
+      ? Array.from(new Set([...unlockedBanners, bannerDef.id]))
+      : unlockedBanners;
+
+    const updated = await db
+      .update(users)
+      .set({
+        equippedBanner: bannerDef.id,
+        unlockedBannersJson: JSON.stringify(nextUnlockedBanners),
+        lastSeenAt: new Date(),
+      })
+      .where(eq(users.uid, uid))
+      .returning();
+
+    if (applyToCouple) {
+      const coupleCtx = await getCoupleContextForUser(uid);
+      if (coupleCtx.activeCouple) {
+        await db
+          .update(couplePairings)
+          .set({
+            coupleBanner: bannerDef.id,
+            updatedAt: new Date(),
+          })
+          .where(eq(couplePairings.id, coupleCtx.activeCouple.id));
+      }
+    }
+
+    return sanitizeUserRow(updated[0]);
+  } catch (error) {
+    console.error('Database equipOrUnequipBanner failed:', error);
+    const msg = error instanceof Error ? error.message : 'Failed to equip banner.';
+    throw new Error(msg, { cause: error });
+  }
+}
+
+export async function purchaseChestToInventory(
+  uid: string,
+  chestTier: SkinRarity,
+  quantity = 1
+) {
+  try {
+    const safeQty = Math.max(1, Math.min(10, Math.floor(quantity || 1)));
+    const chestDef = ARCADE_CHESTS.find((c) => c.tier === chestTier);
+    if (!chestDef) {
+      throw new Error('Invalid chest tier selected.');
+    }
+
+    const userRows = await db.select().from(users).where(eq(users.uid, uid));
+    if (!userRows.length) {
+      throw new Error('Player account not found.');
+    }
+    const user = userRows[0];
+
+    const totalCost = chestDef.costCoins * safeQty;
+    if (user.coins < totalCost) {
+      throw new Error(
+        `Insufficient coins! You need ${totalCost.toLocaleString()} Coins to buy ${safeQty}x ${chestDef.name} (current balance: ${user.coins.toLocaleString()} Coins).`
+      );
+    }
+
+    const nextCoins = user.coins - totalCost;
+    const chestInv = parseTierCountMap(user.chestInventoryJson);
+    chestInv[chestDef.tier] = (chestInv[chestDef.tier] || 0) + safeQty;
+
+    const updated = await db
+      .update(users)
+      .set({
+        coins: nextCoins,
+        chestInventoryJson: JSON.stringify(chestInv),
+        lastSeenAt: new Date(),
+      })
+      .where(eq(users.uid, uid))
+      .returning();
+
+    const coupleCtx = await getCoupleContextForUser(uid);
+    await db.insert(coinTransactions).values({
+      userUid: uid,
+      coupleId: coupleCtx.activeCouple?.id || 0,
+      amount: -totalCost,
+      balanceAfter: nextCoins,
+      txType: 'chest_purchase',
+      referenceId: `chest-buy-${chestDef.id}-${Date.now()}`,
+      description: `Purchased ${safeQty}x ${chestDef.name}`,
+    });
+
+    return sanitizeUserRow(updated[0]);
+  } catch (error) {
+    console.error('Database purchaseChestToInventory failed:', error);
+    const msg = error instanceof Error ? error.message : 'Failed to purchase chest.';
+    throw new Error(msg, { cause: error });
+  }
+}
+
+function rollChestRarityServerSide(probabilities: Record<SkinRarity, number>): SkinRarity {
+  const rarities: SkinRarity[] = ['Common', 'Uncommon', 'Rare', 'Epic', 'Legendary'];
+  // Roll 0..9999 for 0.01% precision
+  const roll = crypto.randomInt(0, 10000);
+  let cumulative = 0;
+  for (const r of rarities) {
+    const pct = probabilities[r] || 0;
+    if (pct <= 0) continue;
+    cumulative += Math.round(pct * 100);
+    if (roll < cumulative) {
+      return r;
+    }
+  }
+  // Fallback to highest non-zero rarity
+  for (let i = rarities.length - 1; i >= 0; i--) {
+    if ((probabilities[rarities[i]] || 0) > 0) {
+      return rarities[i];
+    }
+  }
+  return 'Common';
+}
+
+export async function openArcadeChest(input: {
+  uid: string;
+  chestTier: SkinRarity;
+  openMethod: 'coins' | 'key' | 'inventory';
+}) {
+  try {
+    const chestDef = ARCADE_CHESTS.find((c) => c.tier === input.chestTier);
+    if (!chestDef) {
+      throw new Error('Selected chest tier does not exist.');
+    }
+
+    const userRows = await db.select().from(users).where(eq(users.uid, input.uid));
+    if (!userRows.length) {
+      throw new Error('Player account not found.');
+    }
+    const user = userRows[0];
+
+    const chestInv = parseTierCountMap(user.chestInventoryJson);
+    const keyInv = parseTierCountMap(user.keyInventoryJson);
+    let nextCoins = user.coins;
+
+    // 1. Validate and deduct payment / key / stored chest
+    if (input.openMethod === 'key') {
+      const ownedKeys = keyInv[chestDef.tier] || 0;
+      if (ownedKeys < 1) {
+        const keyDef = ARCADE_KEYS.find((k) => k.tier === chestDef.tier);
+        throw new Error(
+          `You need 1 ${keyDef?.name || `${chestDef.tier} Key`} to unlock a ${chestDef.name}. Complete Daily, Weekly, or Monthly Challenges to earn keys!`
+        );
+      }
+      keyInv[chestDef.tier] = Math.max(0, ownedKeys - 1);
+    } else if (input.openMethod === 'inventory') {
+      const ownedChests = chestInv[chestDef.tier] || 0;
+      if (ownedChests < 1) {
+        throw new Error(
+          `You do not have a stored ${chestDef.name} in your inventory.`
+        );
+      }
+      chestInv[chestDef.tier] = Math.max(0, ownedChests - 1);
+    } else if (input.openMethod === 'coins') {
+      if (user.coins < chestDef.costCoins) {
+        throw new Error(
+          `Insufficient coins! Opening a ${chestDef.name} costs ${chestDef.costCoins.toLocaleString()} Coins (current balance: ${user.coins.toLocaleString()} Coins).`
+        );
+      }
+      nextCoins -= chestDef.costCoins;
+    } else {
+      throw new Error('Invalid chest opening method.');
+    }
+
+    // 2. Roll rarity server-side
+    const rolledRarity = rollChestRarityServerSide(chestDef.rarityProbabilities);
+
+    // 3. Build candidate reward pool (both Skins and Banners of the rolled rarity)
+    const eligibleSkins = ARCADE_SKINS.filter(
+      (s) => s.acquisitionSource !== 'starter' && s.rarity === rolledRarity
+    );
+    const eligibleBanners = ARCADE_BANNERS.filter(
+      (b) => b.acquisitionSource !== 'starter' && b.rarity === rolledRarity
+    );
+
+    type CandidateDrop = {
+      category: 'skin' | 'banner';
+      id: string;
+      name: string;
+      rarity: SkinRarity;
+      description: string;
+    };
+
+    let candidates: CandidateDrop[] = [
+      ...eligibleSkins.map((s) => ({
+        category: 'skin' as const,
+        id: s.id,
+        name: s.name,
+        rarity: s.rarity,
+        description: s.description,
+      })),
+      ...eligibleBanners.map((b) => ({
+        category: 'banner' as const,
+        id: b.id,
+        name: b.name,
+        rarity: b.rarity,
+        description: b.description,
+      })),
+    ];
+
+    if (candidates.length === 0) {
+      const fallbackPool = getRewardPoolForChest(chestDef.tier);
+      candidates = fallbackPool.map((item) => ({
+        category: item.category,
+        id: item.id,
+        name: item.name,
+        rarity: item.rarity,
+        description: item.description,
+      }));
+    }
+
+    const unlockedSkins: string[] = (() => {
+      try {
+        return JSON.parse(user.unlockedItems || '[]');
+      } catch {
+        return [];
+      }
+    })();
+
+    const unlockedBanners: string[] = (() => {
+      try {
+        return JSON.parse(user.unlockedBannersJson || '["banner-sketchbook-grid"]');
+      } catch {
+        return ['banner-sketchbook-grid'];
+      }
+    })();
+
+    // Pick randomly among candidates in the rolled rarity tier
+    const chosenIndex = crypto.randomInt(0, candidates.length);
+    const chosen = candidates[chosenIndex];
+
+    const alreadyOwned =
+      chosen.category === 'skin'
+        ? unlockedSkins.includes(chosen.id)
+        : unlockedBanners.includes(chosen.id);
+
+    let duplicateCoinsAwarded = 0;
+    let nextUnlockedSkins = [...unlockedSkins];
+    let nextUnlockedBanners = [...unlockedBanners];
+
+    if (alreadyOwned) {
+      duplicateCoinsAwarded = DUPLICATE_COSMETIC_COIN_PAYOUT[chosen.rarity] || 35;
+      nextCoins += duplicateCoinsAwarded;
+    } else if (chosen.category === 'skin') {
+      nextUnlockedSkins = Array.from(new Set([...unlockedSkins, chosen.id]));
+    } else {
+      nextUnlockedBanners = Array.from(
+        new Set([...unlockedBanners, 'banner-sketchbook-grid', chosen.id])
+      );
+    }
+
+    const updatedUserRows = await db
+      .update(users)
+      .set({
+        coins: nextCoins,
+        unlockedItems: JSON.stringify(nextUnlockedSkins),
+        unlockedBannersJson: JSON.stringify(nextUnlockedBanners),
+        chestInventoryJson: JSON.stringify(chestInv),
+        keyInventoryJson: JSON.stringify(keyInv),
+        lastSeenAt: new Date(),
+      })
+      .where(eq(users.uid, input.uid))
+      .returning();
+
+    const coupleCtx = await getCoupleContextForUser(input.uid);
+
+    if (input.openMethod === 'coins') {
+      await db.insert(coinTransactions).values({
+        userUid: input.uid,
+        coupleId: coupleCtx.activeCouple?.id || 0,
+        amount: -chestDef.costCoins,
+        balanceAfter: alreadyOwned ? nextCoins - duplicateCoinsAwarded : nextCoins,
+        txType: 'chest_open_coins',
+        referenceId: `chest-open-${chestDef.id}-${Date.now()}`,
+        description: `Opened ${chestDef.name} with Coins`,
+      });
+    }
+
+    if (alreadyOwned && duplicateCoinsAwarded > 0) {
+      await db.insert(coinTransactions).values({
+        userUid: input.uid,
+        coupleId: coupleCtx.activeCouple?.id || 0,
+        amount: duplicateCoinsAwarded,
+        balanceAfter: nextCoins,
+        txType: 'chest_duplicate_conversion',
+        referenceId: `dup-${chosen.id}-${Date.now()}`,
+        description: `Duplicate ${chosen.rarity} ${chosen.category === 'skin' ? 'Skin' : 'Banner'} (${chosen.name}) converted to +${duplicateCoinsAwarded} Coins`,
+      });
+    }
+
+    const insertedOpening = await db
+      .insert(chestOpenings)
+      .values({
+        userUid: input.uid,
+        chestTier: chestDef.tier,
+        openMethod: input.openMethod,
+        rewardCategory: chosen.category,
+        rewardId: chosen.id,
+        rewardName: chosen.name,
+        rewardRarity: chosen.rarity,
+        wasDuplicate: alreadyOwned,
+        duplicateCoinsAwarded,
+      })
+      .returning();
+
+    const recentOpenings = await db
+      .select()
+      .from(chestOpenings)
+      .where(eq(chestOpenings.userUid, input.uid))
+      .orderBy(desc(chestOpenings.createdAt))
+      .limit(25);
+
+    return {
+      profile: sanitizeUserRow(updatedUserRows[0]),
+      openingResult: {
+        ...insertedOpening[0],
+        rewardDescription: chosen.description,
+        chestName: chestDef.name,
+      },
+      chestOpenings: recentOpenings,
+    };
+  } catch (error) {
+    console.error('Database openArcadeChest failed:', error);
+    const msg = error instanceof Error ? error.message : 'Failed to open chest.';
     throw new Error(msg, { cause: error });
   }
 }
@@ -1360,6 +1869,8 @@ export async function syncAndEvaluatePlayerChallenges(uid: string) {
       objectiveCompleted: Boolean(currentRow.completed || currentRow.progress >= ch.target),
       claimed: Boolean(currentRow.claimed),
       xpAwarded: currentRow.xpAwarded || 0,
+      keyRewardTier: ch.keyRewardTier,
+      keyRewardCount: ch.keyRewardCount || 1,
       claimedAt: currentRow.claimedAt ? new Date(currentRow.claimedAt).toISOString() : null,
       startsAtIso: winInfo.startsAtIso,
       endsAtIso: winInfo.endsAtIso,
@@ -1388,6 +1899,8 @@ export async function syncAndEvaluatePlayerChallenges(uid: string) {
         completed: Boolean(r.completed),
         claimed: Boolean(r.claimed),
         xpAwarded: r.xpAwarded || def?.xpReward || 25,
+        keyRewardTier: (r.keyRewardTier || def?.keyRewardTier || 'Common') as SkinRarity,
+        keyAwardedCount: r.keyAwardedCount || def?.keyRewardCount || 1,
         claimedAt: r.claimedAt || r.updatedAt,
       };
     });
@@ -1473,6 +1986,11 @@ export async function claimChallengeReward(uid: string, challengeKey: string) {
     }
     const user = userRows[0];
 
+    const keyTier: SkinRarity = def.keyRewardTier || 'Common';
+    const keyCount = def.keyRewardCount || 1;
+    const keyInv = parseTierCountMap(user.keyInventoryJson);
+    keyInv[keyTier] = (keyInv[keyTier] || 0) + keyCount;
+
     const now = new Date();
     await db
       .update(dailyChallenges)
@@ -1480,12 +1998,14 @@ export async function claimChallengeReward(uid: string, challengeKey: string) {
         completed: 1,
         claimed: 1,
         xpAwarded: def.xpReward,
+        keyRewardTier: keyTier,
+        keyAwardedCount: keyCount,
         claimedAt: now,
         updatedAt: now,
       })
       .where(eq(dailyChallenges.id, targetRow.id));
 
-    // Strictly award XP only (0 Coins) to preserve 2v2 coin economy rules
+    // Award XP + Challenge Chest Key (0 Coins to preserve 2v2 coin economy rules)
     const nextXp = user.xp + def.xpReward;
     const { level: nextLevel } = calculateLevelFromXp(nextXp);
 
@@ -1494,6 +2014,7 @@ export async function claimChallengeReward(uid: string, challengeKey: string) {
       .set({
         xp: nextXp,
         level: nextLevel,
+        keyInventoryJson: JSON.stringify(keyInv),
         lastSeenAt: now,
       })
       .where(eq(users.uid, uid))
@@ -1504,6 +2025,8 @@ export async function claimChallengeReward(uid: string, challengeKey: string) {
     return {
       profile: sanitizeUserRow(updatedUserRows[0]),
       xpAwarded: def.xpReward,
+      keyRewardTier: keyTier,
+      keyAwardedCount: keyCount,
       challengeKey: def.key,
       periodKey: winInfo.periodKey,
       ...synced,
@@ -2053,6 +2576,15 @@ export async function getArcadeBootstrapData(activeUid?: string) {
         )
       : [];
 
+    const userChestOpenings = activeUid
+      ? await db
+          .select()
+          .from(chestOpenings)
+          .where(eq(chestOpenings.userUid, activeUid))
+          .orderBy(desc(chestOpenings.createdAt))
+          .limit(25)
+      : [];
+
     return {
       players: sanitizedPlayers,
       couplesLeaderboard: enrichedCouplesLeaderboard,
@@ -2077,6 +2609,7 @@ export async function getArcadeBootstrapData(activeUid?: string) {
       },
       coupleContext: coupleCtx,
       coinTransactions: userCoinLedger,
+      chestOpenings: userChestOpenings,
       incomingInvitations,
       outgoingInvitations,
     };
@@ -2111,10 +2644,23 @@ export interface RoomCoupleTeamPayload {
   members: { uid: string; username: string; avatar: string }[];
 }
 
+export interface RoomJoinRequestPayload {
+  uid: string;
+  username: string;
+  avatar: string;
+  coupleId?: number;
+  coupleName?: string;
+  requestedAt: string;
+  status: 'pending' | 'approved' | 'declined';
+}
+
 export async function createValidatedMultiplayerRoom(input: {
   hostUid: string;
   gameId: string;
   mode: '1v1' | '2v2';
+  visibility?: 'public' | 'private';
+  joinPolicy?: 'immediate' | 'approval_required';
+  invitedUids?: string[];
   settings?: Record<string, unknown>;
   includePairedPartner?: boolean;
 }) {
@@ -2150,11 +2696,18 @@ export async function createValidatedMultiplayerRoom(input: {
     }
 
     let roomCode = generateRandomCode(6);
-    for (let i = 0; i < 6; i++) {
+    for (let i = 0; i < 10; i++) {
       const existing = await db.select().from(rooms).where(eq(rooms.roomCode, roomCode));
       if (existing.length === 0) break;
       roomCode = generateRandomCode(6);
     }
+
+    const visibility: 'public' | 'private' =
+      input.visibility === 'private' ? 'private' : 'public';
+    const joinPolicy: 'immediate' | 'approval_required' =
+      visibility === 'public' && input.joinPolicy === 'approval_required'
+        ? 'approval_required'
+        : 'immediate';
 
     const maxPlayers = input.mode === '2v2' ? 4 : 2;
     const players: RoomParticipantPayload[] = [
@@ -2173,7 +2726,7 @@ export async function createValidatedMultiplayerRoom(input: {
     const teams: RoomCoupleTeamPayload[] = [];
 
     if (input.mode === '1v1') {
-      if (input.includePairedPartner !== false) {
+      if (input.includePairedPartner === true) {
         players.push({
           uid: partnerProfile.uid,
           username: partnerProfile.username,
@@ -2215,13 +2768,28 @@ export async function createValidatedMultiplayerRoom(input: {
       });
     }
 
+    const invitedUids = Array.from(
+      new Set([
+        host.uid,
+        partnerProfile.uid,
+        ...(Array.isArray(input.invitedUids) ? input.invitedUids : []),
+      ])
+    );
+
     const sessionSeed = generateFreshGameSeed();
+    const mergedSettings = {
+      ...(input.settings || {}),
+      visibility,
+      joinPolicy,
+    };
 
     const systemChat = [
       {
         id: `sys-${Date.now()}`,
         sender: host.username,
-        text: `Created ${input.mode.toUpperCase()} room #${roomCode} (${maxPlayers} player slots).`,
+        text: `Created ${visibility.toUpperCase()} ${input.mode.toUpperCase()} room #${roomCode} (${maxPlayers} player slots · ${
+          joinPolicy === 'approval_required' ? 'Host Approval Required' : 'Immediate Join'
+        }).`,
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       },
     ];
@@ -2232,13 +2800,18 @@ export async function createValidatedMultiplayerRoom(input: {
         roomCode,
         gameId: input.gameId,
         mode: input.mode,
+        visibility,
+        joinPolicy,
         maxPlayers,
         hostUid: host.uid,
         hostName: host.username,
+        hostAvatar: host.avatar,
         status: 'lobby',
-        settingsJson: JSON.stringify(input.settings || {}),
+        settingsJson: JSON.stringify(mergedSettings),
         playersJson: JSON.stringify(players),
         teamsJson: JSON.stringify(teams),
+        pendingRequestsJson: JSON.stringify([]),
+        invitedUidsJson: JSON.stringify(invitedUids),
         gameStateJson: JSON.stringify({ sessionSeed, roundNumber: 1 }),
         chatJson: JSON.stringify(systemChat),
         voiceParticipantsJson: JSON.stringify([]),
@@ -2278,16 +2851,49 @@ export async function inspectRoomForJoin(roomCode: string, actorUid?: string) {
     const room = rows[0];
     const players: RoomParticipantPayload[] = JSON.parse(room.playersJson || '[]');
     const teams: RoomCoupleTeamPayload[] = JSON.parse(room.teamsJson || '[]');
+    const pendingRequests: RoomJoinRequestPayload[] = JSON.parse(
+      room.pendingRequestsJson || '[]'
+    );
+    const invitedUids: string[] = JSON.parse(room.invitedUidsJson || '[]');
+    const settings: Record<string, unknown> = JSON.parse(room.settingsJson || '{}');
+    const visibility: 'public' | 'private' =
+      room.visibility === 'private' || settings.visibility === 'private'
+        ? 'private'
+        : 'public';
+    const joinPolicy: 'immediate' | 'approval_required' =
+      room.joinPolicy === 'approval_required' || settings.joinPolicy === 'approval_required'
+        ? 'approval_required'
+        : 'immediate';
+
     const isAlreadyParticipant = actorUid
       ? players.some((p) => p.uid === actorUid)
       : false;
+
+    const hydratedRoom = {
+      ...room,
+      visibility,
+      joinPolicy,
+      players,
+      teams,
+      pendingRequests,
+      invitedUids,
+    };
 
     if (room.status === 'finished' || room.status === 'expired') {
       return {
         valid: false,
         reason: 'expired',
         message: `Room #${cleanCode} has already finished or expired.`,
-        room: { ...room, players, teams },
+        room: hydratedRoom,
+      };
+    }
+
+    if (room.status === 'playing' && !isAlreadyParticipant) {
+      return {
+        valid: false,
+        reason: 'in_progress',
+        message: `Room #${cleanCode} is already in an active match and closed to new players.`,
+        room: hydratedRoom,
       };
     }
 
@@ -2296,7 +2902,27 @@ export async function inspectRoomForJoin(roomCode: string, actorUid?: string) {
         valid: false,
         reason: 'full',
         message: `Room #${cleanCode} is full (${players.length}/${room.maxPlayers} players).`,
-        room: { ...room, players, teams },
+        room: hydratedRoom,
+      };
+    }
+
+    // Check if private room has a restricted invite target that excludes actorUid
+    if (
+      visibility === 'private' &&
+      !isAlreadyParticipant &&
+      actorUid &&
+      settings.inviteMode === 'username_1v1' &&
+      typeof settings.invitedUid === 'string' &&
+      settings.invitedUid !== actorUid &&
+      room.hostUid !== actorUid
+    ) {
+      return {
+        valid: false,
+        reason: 'unauthorized_private',
+        message: `Room #${cleanCode} is a private 1v1 invitation room reserved for @${String(
+          settings.invitedUsername || 'invited player'
+        )}.`,
+        room: null,
       };
     }
 
@@ -2305,8 +2931,10 @@ export async function inspectRoomForJoin(roomCode: string, actorUid?: string) {
       reason: 'ok',
       message: isAlreadyParticipant
         ? `You are already a member of Room #${cleanCode}.`
+        : joinPolicy === 'approval_required' && visibility === 'public'
+        ? `Room #${cleanCode} is open (${players.length}/${room.maxPlayers} players · Host Approval Required).`
         : `Room #${cleanCode} is open (${players.length}/${room.maxPlayers} players).`,
-      room: { ...room, players, teams },
+      room: hydratedRoom,
     };
   } catch (error) {
     console.error('Database inspectRoomForJoin failed:', error);
@@ -2318,6 +2946,7 @@ export async function joinValidatedMultiplayerRoom(input: {
   actorUid: string;
   roomCode: string;
   includePairedPartner?: boolean;
+  viaDirectCodeOrInvite?: boolean;
 }) {
   try {
     const inspection = await inspectRoomForJoin(input.roomCode, input.actorUid);
@@ -2342,7 +2971,84 @@ export async function joinValidatedMultiplayerRoom(input: {
     const room = inspection.room;
     const players: RoomParticipantPayload[] = [...room.players];
     const teams: RoomCoupleTeamPayload[] = [...room.teams];
+    const pendingRequests: RoomJoinRequestPayload[] = [
+      ...(room.pendingRequests || []),
+    ];
+    const invitedUids: string[] = [...(room.invitedUids || [])];
     const chat = JSON.parse(room.chatJson || '[]');
+
+    const isAlreadyInRoom = players.some((p) => p.uid === actor.uid);
+    const isHost = room.hostUid === actor.uid;
+    const isPreApproved = invitedUids.includes(actor.uid);
+
+    // Private room protection: prevent unauthorized users who did not enter the valid room code or receive an invitation
+    if (
+      room.visibility === 'private' &&
+      !isAlreadyInRoom &&
+      !isHost &&
+      !isPreApproved &&
+      input.viaDirectCodeOrInvite === false
+    ) {
+      throw new Error(
+        `Room #${room.roomCode} is private. You must have a valid room code or direct invitation from the host to join.`
+      );
+    }
+
+    // Host approval gate for public rooms configured with 'approval_required'
+    if (
+      room.visibility === 'public' &&
+      room.joinPolicy === 'approval_required' &&
+      !isAlreadyInRoom &&
+      !isHost &&
+      !isPreApproved
+    ) {
+      const existingReqIdx = pendingRequests.findIndex((r) => r.uid === actor.uid);
+      if (existingReqIdx >= 0 && pendingRequests[existingReqIdx].status === 'pending') {
+        return {
+          ...room,
+          pendingApproval: true,
+          pendingMessage: `Your request to join Room #${room.roomCode} is awaiting approval from host @${room.hostName}.`,
+        };
+      }
+
+      const newReq: RoomJoinRequestPayload = {
+        uid: actor.uid,
+        username: actor.username,
+        avatar: actor.avatar,
+        coupleId: coupleCtx.activeCouple.id,
+        coupleName: coupleCtx.activeCouple.coupleName,
+        requestedAt: new Date().toISOString(),
+        status: 'pending',
+      };
+
+      const nextPending =
+        existingReqIdx >= 0
+          ? pendingRequests.map((r, i) => (i === existingReqIdx ? newReq : r))
+          : [...pendingRequests, newReq];
+
+      chat.push({
+        id: `req-${Date.now()}`,
+        sender: actor.username,
+        text: `@${actor.username} requested to join the room (awaiting host approval).`,
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      });
+
+      const updatedPendingRows = await db
+        .update(rooms)
+        .set({
+          pendingRequestsJson: JSON.stringify(nextPending),
+          chatJson: JSON.stringify(chat),
+          updatedAt: new Date(),
+        })
+        .where(eq(rooms.roomCode, room.roomCode))
+        .returning();
+
+      return {
+        ...updatedPendingRows[0],
+        pendingApproval: true,
+        pendingMessage: `Join request sent! Waiting for host @${room.hostName} to approve your entry into Room #${room.roomCode}.`,
+      };
+    }
 
     const existingIdx = players.findIndex((p) => p.uid === actor.uid);
     if (existingIdx >= 0) {
@@ -2435,11 +3141,14 @@ export async function joinValidatedMultiplayerRoom(input: {
       });
     }
 
+    const cleanedPending = pendingRequests.filter((r) => r.uid !== actor.uid);
+
     const updated = await db
       .update(rooms)
       .set({
         playersJson: JSON.stringify(players),
         teamsJson: JSON.stringify(teams),
+        pendingRequestsJson: JSON.stringify(cleanedPending),
         chatJson: JSON.stringify(chat),
         updatedAt: new Date(),
       })
@@ -2454,23 +3163,213 @@ export async function joinValidatedMultiplayerRoom(input: {
   }
 }
 
+export async function respondToRoomJoinRequest(input: {
+  hostUid: string;
+  roomCode: string;
+  requesterUid: string;
+  approve: boolean;
+}) {
+  const cleanCode = input.roomCode.trim().toUpperCase();
+  const rows = await db.select().from(rooms).where(eq(rooms.roomCode, cleanCode));
+  if (!rows.length) {
+    throw new Error(`Room #${cleanCode} not found.`);
+  }
+  const room = rows[0];
+  if (room.hostUid !== input.hostUid) {
+    throw new Error('Only the room host can approve or decline join requests.');
+  }
+
+  const pendingRequests: RoomJoinRequestPayload[] = JSON.parse(
+    room.pendingRequestsJson || '[]'
+  );
+  const invitedUids: string[] = JSON.parse(room.invitedUidsJson || '[]');
+  const chat = JSON.parse(room.chatJson || '[]');
+
+  const targetReq = pendingRequests.find((r) => r.uid === input.requesterUid);
+  if (!targetReq) {
+    throw new Error('Join request not found or already handled.');
+  }
+
+  const remainingRequests = pendingRequests.filter((r) => r.uid !== input.requesterUid);
+
+  if (!input.approve) {
+    chat.push({
+      id: `decl-${Date.now()}`,
+      sender: room.hostName,
+      text: `Declined join request from @${targetReq.username}.`,
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+    });
+    const updated = await db
+      .update(rooms)
+      .set({
+        pendingRequestsJson: JSON.stringify(remainingRequests),
+        chatJson: JSON.stringify(chat),
+        updatedAt: new Date(),
+      })
+      .where(eq(rooms.roomCode, cleanCode))
+      .returning();
+    return updated[0];
+  }
+
+  // Approve: add requesterUid to invitedUids and seat them via joinValidatedMultiplayerRoom
+  const nextInvited = Array.from(new Set([...invitedUids, input.requesterUid]));
+  await db
+    .update(rooms)
+    .set({
+      pendingRequestsJson: JSON.stringify(remainingRequests),
+      invitedUidsJson: JSON.stringify(nextInvited),
+      updatedAt: new Date(),
+    })
+    .where(eq(rooms.roomCode, cleanCode));
+
+  return await joinValidatedMultiplayerRoom({
+    actorUid: input.requesterUid,
+    roomCode: cleanCode,
+    includePairedPartner: room.mode === '2v2',
+    viaDirectCodeOrInvite: true,
+  });
+}
+
+export async function listJoinablePublicRooms(input?: {
+  gameId?: string;
+  mode?: 'all' | '1v1' | '2v2';
+  actorUid?: string;
+}) {
+  try {
+    const allRooms = await db
+      .select()
+      .from(rooms)
+      .orderBy(desc(rooms.updatedAt))
+      .limit(60);
+
+    const allUsers = await db.select().from(users);
+    const userByUid = new Map(allUsers.map((u) => [u.uid, u]));
+    const nowMs = Date.now();
+    const twoHoursMs = 2 * 60 * 60 * 1000;
+
+    const publicRooms = [];
+
+    for (const r of allRooms) {
+      // Only show rooms in 'lobby' status that haven't gone stale
+      if (r.status !== 'lobby') continue;
+      const updatedMs = r.updatedAt ? new Date(r.updatedAt).getTime() : nowMs;
+      if (nowMs - updatedMs > twoHoursMs) continue;
+
+      let settings: Record<string, unknown> = {};
+      let players: RoomParticipantPayload[] = [];
+      let teams: RoomCoupleTeamPayload[] = [];
+      let pendingRequests: RoomJoinRequestPayload[] = [];
+
+      try {
+        settings = JSON.parse(r.settingsJson || '{}');
+      } catch {
+        settings = {};
+      }
+      try {
+        players = JSON.parse(r.playersJson || '[]');
+      } catch {
+        players = [];
+      }
+      try {
+        teams = JSON.parse(r.teamsJson || '[]');
+      } catch {
+        teams = [];
+      }
+      try {
+        pendingRequests = JSON.parse(r.pendingRequestsJson || '[]');
+      } catch {
+        pendingRequests = [];
+      }
+
+      const visibility =
+        r.visibility === 'private' || settings.visibility === 'private'
+          ? 'private'
+          : 'public';
+      if (visibility !== 'public') continue;
+
+      const maxPlayers = r.maxPlayers || (r.mode === '2v2' ? 4 : 2);
+      const isParticipant = input?.actorUid
+        ? players.some((p) => p.uid === input.actorUid)
+        : false;
+      if (players.length >= maxPlayers && !isParticipant) continue;
+
+      if (input?.gameId && input.gameId !== 'all' && r.gameId !== input.gameId) {
+        continue;
+      }
+      if (input?.mode && input.mode !== 'all' && r.mode !== input.mode) {
+        continue;
+      }
+
+      const hostUser = userByUid.get(r.hostUid);
+      const gameDef = MULTIPLAYER_GAMES.find((g) => g.id === r.gameId);
+      const joinPolicy: 'immediate' | 'approval_required' =
+        r.joinPolicy === 'approval_required' || settings.joinPolicy === 'approval_required'
+          ? 'approval_required'
+          : 'immediate';
+
+      const myPendingRequest = input?.actorUid
+        ? pendingRequests.some(
+            (req) => req.uid === input.actorUid && req.status === 'pending'
+          )
+        : false;
+
+      publicRooms.push({
+        roomCode: r.roomCode,
+        gameId: r.gameId,
+        gameTitle: gameDef?.title || r.gameId,
+        mode: (r.mode === '2v2' ? '2v2' : '1v1') as '1v1' | '2v2',
+        visibility: 'public' as const,
+        joinPolicy,
+        hostUid: r.hostUid,
+        hostName: hostUser?.username || r.hostName,
+        hostAvatar: hostUser?.avatar || r.hostAvatar || 'kitsune',
+        currentPlayers: players.length,
+        maxPlayers,
+        status: r.status,
+        players,
+        teams,
+        pendingRequestsCount: pendingRequests.length,
+        myPendingRequest,
+        isParticipant,
+        updatedAt: r.updatedAt ? new Date(r.updatedAt).toISOString() : new Date().toISOString(),
+      });
+    }
+
+    return publicRooms;
+  } catch (error) {
+    console.error('Database listJoinablePublicRooms failed:', error);
+    return [];
+  }
+}
+
 export async function upsertMultiplayerRoom(input: {
   roomCode: string;
   gameId: string;
   mode?: '1v1' | '2v2';
+  visibility?: 'public' | 'private';
+  joinPolicy?: 'immediate' | 'approval_required';
   maxPlayers?: number;
   hostUid: string;
   hostName: string;
+  hostAvatar?: string;
   status: string;
   settings?: Record<string, unknown>;
   players: unknown[];
   teams?: unknown[];
+  pendingRequests?: unknown[];
+  invitedUids?: string[];
   gameState: Record<string, unknown>;
   chat: unknown[];
   voiceParticipants: unknown[];
 }) {
   try {
     const cleanCode = input.roomCode.trim().toUpperCase();
+    const existingRows = await db
+      .select()
+      .from(rooms)
+      .where(eq(rooms.roomCode, cleanCode));
+    const existingRoom = existingRows[0] || null;
+
     // Ensure gameState always preserves or initializes a valid sessionSeed
     const gameStateWithSeed = {
       ...input.gameState,
@@ -2480,19 +3379,50 @@ export async function upsertMultiplayerRoom(input: {
           : generateFreshGameSeed(),
     };
 
+    const visibility: 'public' | 'private' =
+      input.visibility ||
+      (existingRoom?.visibility as 'public' | 'private') ||
+      (input.settings?.visibility === 'private' ? 'private' : 'public');
+
+    const joinPolicy: 'immediate' | 'approval_required' =
+      input.joinPolicy ||
+      (existingRoom?.joinPolicy as 'immediate' | 'approval_required') ||
+      (input.settings?.joinPolicy === 'approval_required'
+        ? 'approval_required'
+        : 'immediate');
+
+    const mergedSettings = {
+      ...(input.settings || {}),
+      visibility,
+      joinPolicy,
+    };
+
+    const pendingRequestsJson = input.pendingRequests
+      ? JSON.stringify(input.pendingRequests)
+      : existingRoom?.pendingRequestsJson || '[]';
+
+    const invitedUidsJson = input.invitedUids
+      ? JSON.stringify(input.invitedUids)
+      : existingRoom?.invitedUidsJson || '[]';
+
     const rows = await db
       .insert(rooms)
       .values({
         roomCode: cleanCode,
         gameId: input.gameId,
         mode: input.mode || '1v1',
+        visibility,
+        joinPolicy,
         maxPlayers: input.maxPlayers || (input.mode === '2v2' ? 4 : 2),
         hostUid: input.hostUid,
         hostName: input.hostName,
+        hostAvatar: input.hostAvatar || existingRoom?.hostAvatar || 'kitsune',
         status: input.status,
-        settingsJson: JSON.stringify(input.settings || {}),
+        settingsJson: JSON.stringify(mergedSettings),
         playersJson: JSON.stringify(input.players),
         teamsJson: JSON.stringify(input.teams || []),
+        pendingRequestsJson,
+        invitedUidsJson,
         gameStateJson: JSON.stringify(gameStateWithSeed),
         chatJson: JSON.stringify(input.chat),
         voiceParticipantsJson: JSON.stringify(input.voiceParticipants),
@@ -2502,11 +3432,15 @@ export async function upsertMultiplayerRoom(input: {
         set: {
           gameId: input.gameId,
           mode: input.mode || '1v1',
+          visibility,
+          joinPolicy,
           maxPlayers: input.maxPlayers || (input.mode === '2v2' ? 4 : 2),
           status: input.status,
-          settingsJson: JSON.stringify(input.settings || {}),
+          settingsJson: JSON.stringify(mergedSettings),
           playersJson: JSON.stringify(input.players),
           teamsJson: JSON.stringify(input.teams || []),
+          pendingRequestsJson,
+          invitedUidsJson,
           gameStateJson: JSON.stringify(gameStateWithSeed),
           chatJson: JSON.stringify(input.chat),
           voiceParticipantsJson: JSON.stringify(input.voiceParticipants),
@@ -3051,9 +3985,310 @@ async function expireStaleMatchmakingEntries() {
   }
 }
 
+async function expireStaleGameInvitations() {
+  const pendingRows = await db
+    .select()
+    .from(gameInvitations)
+    .where(eq(gameInvitations.status, 'pending'));
+
+  const fiveMinutesAgo = Date.now() - 5 * 60_000;
+  for (const inv of pendingRows) {
+    const createdTs = inv.createdAt ? new Date(inv.createdAt).getTime() : Date.now();
+    if (createdTs < fiveMinutesAgo) {
+      await db
+        .update(gameInvitations)
+        .set({ status: 'expired', updatedAt: new Date() })
+        .where(eq(gameInvitations.id, inv.id));
+    }
+  }
+}
+
+export async function get2v2CoupleTeamLobby(actorUid: string, gameId?: string) {
+  const coupleCtx = await getCoupleContextForUser(actorUid);
+  if (!coupleCtx.activeCouple || coupleCtx.activeCouple.status !== 'active') {
+    return null;
+  }
+  const c = coupleCtx.activeCouple;
+  const reqProfile = c.requesterProfile;
+  const partProfile = c.partnerProfile;
+  if (!reqProfile || !partProfile) return null;
+
+  const existingRows = await db
+    .select()
+    .from(coupleTeamLobbies)
+    .where(eq(coupleTeamLobbies.coupleId, c.id));
+
+  let row = existingRows[0];
+  const fallbackGameId = gameId || 'word-orbit-relay';
+
+  if (!row) {
+    const inserted = await db
+      .insert(coupleTeamLobbies)
+      .values({
+        coupleId: c.id,
+        gameId: fallbackGameId,
+        hostUid: c.requesterUid,
+        partnerUid: c.partnerUid,
+        partnerInviteStatus: 'none',
+        hostReady: false,
+        partnerReady: false,
+        updatedAt: new Date(),
+        createdAt: new Date(),
+      })
+      .returning();
+    row = inserted[0];
+  } else if (gameId && row.gameId !== gameId) {
+    const updated = await db
+      .update(coupleTeamLobbies)
+      .set({
+        gameId,
+        updatedAt: new Date(),
+      })
+      .where(eq(coupleTeamLobbies.id, row.id))
+      .returning();
+    row = updated[0] || row;
+  }
+
+  const hostProfile = row.hostUid === reqProfile.uid ? reqProfile : partProfile;
+  const partnerProfile = row.hostUid === reqProfile.uid ? partProfile : reqProfile;
+  const bothOnline = Boolean(hostProfile.isOnline && partnerProfile.isOnline);
+  const bothReady =
+    row.partnerInviteStatus === 'accepted' &&
+    Boolean(row.hostReady) &&
+    Boolean(row.partnerReady) &&
+    bothOnline;
+
+  return {
+    id: row.id,
+    coupleId: c.id,
+    coupleName: c.coupleName,
+    coupleTitle: c.coupleTitle || 'Newborn Duo',
+    coupleTrophies: c.coupleTrophies || 0,
+    equippedCoupleSkin: c.equippedCoupleSkin || 'skin-classic-notebook',
+    equippedBanner: c.coupleBanner || 'banner-none',
+    gameId: row.gameId || fallbackGameId,
+    hostUid: row.hostUid,
+    partnerUid: row.partnerUid,
+    partnerInviteStatus: (row.partnerInviteStatus || 'none') as
+      | 'none'
+      | 'pending'
+      | 'accepted'
+      | 'declined',
+    hostReady: Boolean(row.hostReady),
+    partnerReady: Boolean(row.partnerReady),
+    bothOnline,
+    bothReady,
+    hostProfile: {
+      uid: hostProfile.uid,
+      username: hostProfile.username,
+      avatar: hostProfile.avatar,
+      equippedSkin: hostProfile.equippedSkin || 'skin-classic-notebook',
+      isOnline: Boolean(hostProfile.isOnline),
+      ready: Boolean(row.hostReady),
+    },
+    partnerProfile: {
+      uid: partnerProfile.uid,
+      username: partnerProfile.username,
+      avatar: partnerProfile.avatar,
+      equippedSkin: partnerProfile.equippedSkin || 'skin-classic-notebook',
+      isOnline: Boolean(partnerProfile.isOnline),
+      ready: Boolean(row.partnerReady),
+    },
+    updatedAt: row.updatedAt,
+  };
+}
+
+export async function invitePartnerTo2v2Team(input: {
+  actorUid: string;
+  gameId: string;
+}) {
+  const coupleCtx = await getCoupleContextForUser(input.actorUid);
+  if (!coupleCtx.activeCouple || coupleCtx.activeCouple.status !== 'active') {
+    throw new Error(
+      'Only actively paired couples can form a 2v2 Couple Team. Pair with your partner first in Profile & Couple.'
+    );
+  }
+  const c = coupleCtx.activeCouple;
+  const actorIsReq = c.requesterUid === input.actorUid;
+  const hostProfile = actorIsReq ? c.requesterProfile : c.partnerProfile;
+  const partnerProfile = actorIsReq ? c.partnerProfile : c.requesterProfile;
+
+  if (!hostProfile || !partnerProfile) {
+    throw new Error('Both paired partners must have registered accounts.');
+  }
+
+  const existingRows = await db
+    .select()
+    .from(coupleTeamLobbies)
+    .where(eq(coupleTeamLobbies.coupleId, c.id));
+
+  if (!existingRows.length) {
+    await db.insert(coupleTeamLobbies).values({
+      coupleId: c.id,
+      gameId: input.gameId,
+      hostUid: hostProfile.uid,
+      partnerUid: partnerProfile.uid,
+      partnerInviteStatus: 'pending',
+      hostReady: false,
+      partnerReady: false,
+      updatedAt: new Date(),
+      createdAt: new Date(),
+    });
+  } else {
+    await db
+      .update(coupleTeamLobbies)
+      .set({
+        gameId: input.gameId,
+        hostUid: hostProfile.uid,
+        partnerUid: partnerProfile.uid,
+        partnerInviteStatus: 'pending',
+        hostReady: false,
+        partnerReady: false,
+        updatedAt: new Date(),
+      })
+      .where(eq(coupleTeamLobbies.id, existingRows[0].id));
+  }
+
+  // Cancel any older pending 2v2_partner_team invites for this couple
+  await db
+    .update(gameInvitations)
+    .set({ status: 'expired', updatedAt: new Date() })
+    .where(
+      and(
+        eq(gameInvitations.senderCoupleId, c.id),
+        eq(gameInvitations.inviteType, '2v2_partner_team'),
+        eq(gameInvitations.status, 'pending')
+      )
+    );
+
+  await db.insert(gameInvitations).values({
+    inviteType: '2v2_partner_team',
+    senderUid: hostProfile.uid,
+    senderUsername: hostProfile.username,
+    senderAvatar: hostProfile.avatar,
+    senderCoupleId: c.id,
+    senderCoupleName: c.coupleName,
+    targetUid: partnerProfile.uid,
+    targetUsername: partnerProfile.username,
+    targetCoupleId: c.id,
+    targetCoupleName: c.coupleName,
+    gameId: input.gameId,
+    roomCode: `TEAM-${c.id}`,
+    status: 'pending',
+  });
+
+  return await get2v2CoupleTeamLobby(input.actorUid, input.gameId);
+}
+
+export async function respondPartnerTo2v2Team(input: {
+  actorUid: string;
+  accept: boolean;
+  gameId?: string;
+}) {
+  const coupleCtx = await getCoupleContextForUser(input.actorUid);
+  if (!coupleCtx.activeCouple || coupleCtx.activeCouple.status !== 'active') {
+    throw new Error('No active couple pairing found.');
+  }
+  const c = coupleCtx.activeCouple;
+  const isMember = c.requesterUid === input.actorUid || c.partnerUid === input.actorUid;
+  if (!isMember) {
+    throw new Error('Only the paired partner can respond to this 2v2 team invitation.');
+  }
+
+  const existingRows = await db
+    .select()
+    .from(coupleTeamLobbies)
+    .where(eq(coupleTeamLobbies.coupleId, c.id));
+
+  const nextStatus = input.accept ? 'accepted' : 'declined';
+
+  if (!existingRows.length) {
+    await db.insert(coupleTeamLobbies).values({
+      coupleId: c.id,
+      gameId: input.gameId || 'word-orbit-relay',
+      hostUid: c.requesterUid === input.actorUid ? c.partnerUid : c.requesterUid,
+      partnerUid: input.actorUid,
+      partnerInviteStatus: nextStatus,
+      hostReady: false,
+      partnerReady: false,
+      updatedAt: new Date(),
+      createdAt: new Date(),
+    });
+  } else {
+    await db
+      .update(coupleTeamLobbies)
+      .set({
+        partnerInviteStatus: nextStatus,
+        hostReady: false,
+        partnerReady: false,
+        updatedAt: new Date(),
+      })
+      .where(eq(coupleTeamLobbies.id, existingRows[0].id));
+  }
+
+  await db
+    .update(gameInvitations)
+    .set({ status: nextStatus, updatedAt: new Date() })
+    .where(
+      and(
+        eq(gameInvitations.senderCoupleId, c.id),
+        eq(gameInvitations.inviteType, '2v2_partner_team'),
+        eq(gameInvitations.status, 'pending')
+      )
+    );
+
+  return await get2v2CoupleTeamLobby(input.actorUid, input.gameId);
+}
+
+export async function toggle2v2TeamReady(input: {
+  actorUid: string;
+  ready?: boolean;
+  gameId?: string;
+}) {
+  const lobby = await get2v2CoupleTeamLobby(input.actorUid, input.gameId);
+  if (!lobby) {
+    throw new Error('Only actively paired couples can ready up for 2v2 matchmaking.');
+  }
+
+  if (lobby.partnerInviteStatus !== 'accepted') {
+    throw new Error(
+      'Your paired partner must first accept the 2v2 Team Invitation before either partner can click Ready.'
+    );
+  }
+
+  const isHost = lobby.hostUid === input.actorUid;
+  const isPartner = lobby.partnerUid === input.actorUid;
+  if (!isHost && !isPartner) {
+    throw new Error('Unrelated users cannot join or ready up in a paired couple team.');
+  }
+
+  const nextHostReady = isHost
+    ? input.ready !== undefined
+      ? input.ready
+      : !lobby.hostReady
+    : lobby.hostReady;
+  const nextPartnerReady = isPartner
+    ? input.ready !== undefined
+      ? input.ready
+      : !lobby.partnerReady
+    : lobby.partnerReady;
+
+  await db
+    .update(coupleTeamLobbies)
+    .set({
+      hostReady: nextHostReady,
+      partnerReady: nextPartnerReady,
+      updatedAt: new Date(),
+    })
+    .where(eq(coupleTeamLobbies.id, lobby.id));
+
+  return await get2v2CoupleTeamLobby(input.actorUid, input.gameId);
+}
+
 export async function getMatchmakingStateForUser(actorUid: string) {
   try {
     await expireStaleMatchmakingEntries();
+    await expireStaleGameInvitations();
     const coupleCtx = await getCoupleContextForUser(actorUid);
 
     const activeQueues = await db
@@ -3065,6 +4300,13 @@ export async function getMatchmakingStateForUser(actorUid: string) {
     const queue1v1Count = activeQueues.filter((q) => q.queueMode === '1v1').length;
     const queue2v2Count = activeQueues.filter((q) => q.queueMode === '2v2').length;
 
+    const outgoingRows = await db
+      .select()
+      .from(gameInvitations)
+      .where(eq(gameInvitations.senderUid, actorUid))
+      .orderBy(desc(gameInvitations.createdAt))
+      .limit(12);
+
     if (!coupleCtx.activeCouple) {
       return {
         myQueueEntry: null,
@@ -3072,6 +4314,8 @@ export async function getMatchmakingStateForUser(actorUid: string) {
         queueCounts: { queue1v1Count, queue2v2Count },
         partnerOnline: false,
         coupleAvailable: false,
+        coupleTeamLobby: null,
+        outgoingInvitations: outgoingRows,
       };
     }
 
@@ -3084,6 +4328,8 @@ export async function getMatchmakingStateForUser(actorUid: string) {
       c.requesterUid,
       c.partnerUid
     );
+
+    const coupleTeamLobby = await get2v2CoupleTeamLobby(actorUid);
 
     const myEntries = await db
       .select()
@@ -3112,6 +4358,8 @@ export async function getMatchmakingStateForUser(actorUid: string) {
           queueCounts: { queue1v1Count, queue2v2Count },
           partnerOnline,
           coupleAvailable: false,
+          coupleTeamLobby,
+          outgoingInvitations: outgoingRows,
         };
       }
       await tryMatch2v2Couples(activeEntry.id);
@@ -3156,6 +4404,8 @@ export async function getMatchmakingStateForUser(actorUid: string) {
       coupleInActiveMatch: activeMatchCheck.inMatch,
       activeMatchRoomCode: activeMatchCheck.roomCode,
       coupleAvailable: requesterOnline && partnerOnline && !activeMatchCheck.inMatch,
+      coupleTeamLobby,
+      outgoingInvitations: outgoingRows,
     };
   } catch (error) {
     console.error('Database getMatchmakingStateForUser failed:', error);
@@ -3175,6 +4425,7 @@ async function matchPairedPartnersFor1v1(queueId: number) {
     hostUid: entry.requesterUid,
     gameId: entry.gameId,
     mode: '1v1',
+    visibility: 'private',
     settings: { matchmaking: '1v1_paired_couple', format: 'Standard Match (Best of 3)' },
     includePairedPartner: true,
   });
@@ -3361,9 +4612,12 @@ async function tryMatch2v2Couples(queueId: number) {
       roomCode,
       gameId: myEntry.gameId,
       mode: '2v2',
+      visibility: 'private',
+      joinPolicy: 'immediate',
       maxPlayers: 4,
       hostUid: candidate.requesterUid,
       hostName: candidate.requesterUsername,
+      hostAvatar: candidate.requesterAvatar,
       status: 'playing',
       settingsJson: JSON.stringify({
         matchmaking: '2v2_couple_queue',
@@ -3372,6 +4626,8 @@ async function tryMatch2v2Couples(queueId: number) {
       }),
       playersJson: JSON.stringify(players),
       teamsJson: JSON.stringify(teams),
+      pendingRequestsJson: JSON.stringify([]),
+      invitedUidsJson: JSON.stringify([]),
       gameStateJson: JSON.stringify({ sessionSeed, roundNumber: 1 }),
       chatJson: JSON.stringify(systemChat),
       voiceParticipantsJson: JSON.stringify([]),
@@ -3413,6 +4669,7 @@ export async function enqueueMatchmaking(input: {
   actorUid: string;
   queueMode: '1v1' | '2v2';
   gameId: string;
+  requireTeamReady?: boolean;
 }) {
   try {
     if (input.queueMode !== '2v2') {
@@ -3460,6 +4717,20 @@ export async function enqueueMatchmaking(input: {
       throw new Error(
         `Both partners must be online and available to enter ${input.queueMode.toUpperCase()} matchmaking. Your paired partner (${otherPartnerProfile.username}) is currently offline.`
       );
+    }
+
+    if (input.requireTeamReady) {
+      const teamLobby = await get2v2CoupleTeamLobby(input.actorUid, input.gameId);
+      if (!teamLobby || teamLobby.partnerInviteStatus !== 'accepted') {
+        throw new Error(
+          'Your paired partner must accept the 2v2 Team Invitation before entering matchmaking.'
+        );
+      }
+      if (!teamLobby.hostReady || !teamLobby.partnerReady) {
+        throw new Error(
+          'Both partners must click Ready in the 2v2 Team Lobby before Find Match unlocks.'
+        );
+      }
     }
 
     const activeMatchCheck = await isCoupleCurrentlyInActiveMatch(
@@ -3590,6 +4861,7 @@ export async function searchUsersAndCouplesForInvite(input: {
   inviteType: '1v1' | '2v2';
 }) {
   try {
+    await expireStaleGameInvitations();
     const cleanQuery = (input.query || '')
       .trim()
       .replace(/^@+/, '')
@@ -3755,6 +5027,7 @@ export async function sendGameInvitationByUsername(input: {
   gameId: string;
 }) {
   try {
+    await expireStaleGameInvitations();
     const senderRows = await db.select().from(users).where(eq(users.uid, input.senderUid));
     if (!senderRows.length) {
       throw new Error('Sender account not found.');
@@ -3821,7 +5094,14 @@ export async function sendGameInvitationByUsername(input: {
         hostUid: sender.uid,
         gameId: input.gameId,
         mode: '1v1',
-        settings: { inviteMode: 'username_1v1', invitedUsername: targetRow.username },
+        visibility: 'private',
+        joinPolicy: 'immediate',
+        invitedUids: [sender.uid, targetRow.uid],
+        settings: {
+          inviteMode: 'username_1v1',
+          invitedUid: targetRow.uid,
+          invitedUsername: targetRow.username,
+        },
         includePairedPartner: false,
       });
 
@@ -3908,6 +5188,9 @@ export async function sendGameInvitationByUsername(input: {
       hostUid: sender.uid,
       gameId: input.gameId,
       mode: '2v2',
+      visibility: 'private',
+      joinPolicy: 'immediate',
+      invitedUids: [sender.uid, targetPartnerA.uid, targetPartnerB.uid],
       settings: {
         inviteMode: 'couple_2v2',
         invitedCoupleId: targetCouple.id,
@@ -3961,6 +5244,23 @@ export async function respondToGameInvitation(input: {
       throw new Error(`This invitation has already been ${inv.status}.`);
     }
 
+    if (inv.inviteType === '2v2_partner_team') {
+      const teamLobby = await respondPartnerTo2v2Team({
+        actorUid: input.actorUid,
+        accept: input.accept,
+        gameId: inv.gameId,
+      });
+      const updatedRows = await db
+        .select()
+        .from(gameInvitations)
+        .where(eq(gameInvitations.id, inv.id));
+      return {
+        invitation: updatedRows[0] || { ...inv, status: input.accept ? 'accepted' : 'declined' },
+        room: null,
+        teamLobby,
+      };
+    }
+
     if (!input.accept) {
       const declined = await db
         .update(gameInvitations)
@@ -3975,6 +5275,7 @@ export async function respondToGameInvitation(input: {
       actorUid: input.actorUid,
       roomCode: inv.roomCode,
       includePairedPartner: inv.inviteType === '2v2',
+      viaDirectCodeOrInvite: true,
     });
 
     // Transition room to playing with a fresh synchronized sessionSeed
@@ -4015,5 +5316,6 @@ export async function respondToGameInvitation(input: {
     throw new Error(msg, { cause: error });
   }
 }
+
 
 

@@ -450,6 +450,18 @@ export const SKIN_RARITY_META: Record<
   },
 };
 
+export type SkinFrameAnimationStyle =
+  | 'solar_eclipse_corona'
+  | 'celestial_waltz_orbit'
+  | 'lantern_river_sway'
+  | 'clockwork_escapement'
+  | 'sakura_petal_drift'
+  | 'starlight_compass_sweep'
+  | 'botanical_clover_bloom'
+  | 'strawberry_wax_pulse'
+  | 'sketchbook_graphite_tick'
+  | 'kraft_twine_swing';
+
 export interface ArcadeSkinDef {
   id: string;
   name: string;
@@ -469,6 +481,10 @@ export interface ArcadeSkinDef {
   tagColorClass: string;
   badgeClass?: string;
   patternMotif: string;
+  animationStyle: SkinFrameAnimationStyle;
+  animationLabel: string;
+  framePrimaryColor: string;
+  frameSecondaryColor: string;
 }
 
 export const ARCADE_SKINS: ArcadeSkinDef[] = [
@@ -479,17 +495,21 @@ export const ARCADE_SKINS: ArcadeSkinDef[] = [
     rarity: 'Legendary',
     rarityOrder: 1,
     description:
-      'Exclusive 1st Place Seasonal Championship Skin. Gilded celestial astrolabe frame with twin solar-eclipse halos and crimson-gold foil.',
+      'Gilded celestial astrolabe frame with twin solar-eclipse halos and crimson-gold foil. Unlock with Coins, Chests, or 1st Place Season finish.',
     emblem: '👑✨',
     scope: 'individual_and_couple',
     acquisitionSource: 'seasonal_exclusive',
     seasonExclusiveRank: 1,
-    costCoins: 0,
+    costCoins: 750,
     previewCode: 'skin-season-sovereign-eclipse',
     bannerGradient: 'from-amber-500/35 via-rose-500/25 to-yellow-500/30',
     frameClass: 'border-amber-400 shadow-[0_0_24px_rgba(245,158,11,0.28)]',
     tagColorClass: 'text-amber-200 border-amber-400/60 bg-amber-500/20',
     patternMotif: 'Solar Astrolabe & Twin Gilded Halos',
+    animationStyle: 'solar_eclipse_corona',
+    animationLabel: 'Orbiting Solar Eclipse Corona & Gilded Astrolabe Rays',
+    framePrimaryColor: '#F59E0B',
+    frameSecondaryColor: '#F43F5E',
   },
   {
     id: 'skin-season-celestial-waltz',
@@ -497,17 +517,21 @@ export const ARCADE_SKINS: ArcadeSkinDef[] = [
     rarity: 'Epic',
     rarityOrder: 2,
     description:
-      'Exclusive 2nd Place Seasonal Championship Skin. Velvet constellation tapestry with silver-violet starlight ribbons.',
+      'Velvet constellation tapestry with silver-violet starlight ribbons. Unlock with Coins, Chests, or 2nd Place Season finish.',
     emblem: '🦢🌙',
     scope: 'individual_and_couple',
     acquisitionSource: 'seasonal_exclusive',
     seasonExclusiveRank: 2,
-    costCoins: 0,
+    costCoins: 480,
     previewCode: 'skin-season-celestial-waltz',
     bannerGradient: 'from-fuchsia-500/30 via-purple-500/25 to-indigo-500/30',
     frameClass: 'border-fuchsia-400 shadow-[0_0_20px_rgba(217,70,239,0.24)]',
     tagColorClass: 'text-fuchsia-200 border-fuchsia-400/60 bg-fuchsia-500/20',
     patternMotif: 'Velvet Starlight & Silver Swans',
+    animationStyle: 'celestial_waltz_orbit',
+    animationLabel: 'Counter-Rotating Comet Ribbons & Silver Swan Stardust',
+    framePrimaryColor: '#D946EF',
+    frameSecondaryColor: '#818CF8',
   },
   {
     id: 'skin-season-paper-lantern-harmony',
@@ -515,20 +539,24 @@ export const ARCADE_SKINS: ArcadeSkinDef[] = [
     rarity: 'Rare',
     rarityOrder: 3,
     description:
-      'Exclusive 3rd Place Seasonal Championship Skin. Azure river lanterns drifting across warm twilight ink wash.',
+      'Azure river lanterns drifting across warm twilight ink wash. Unlock with Coins, Chests, or 3rd Place Season finish.',
     emblem: '🏮🌊',
     scope: 'individual_and_couple',
     acquisitionSource: 'seasonal_exclusive',
     seasonExclusiveRank: 3,
-    costCoins: 0,
+    costCoins: 300,
     previewCode: 'skin-season-paper-lantern-harmony',
     bannerGradient: 'from-sky-500/30 via-teal-500/20 to-amber-500/25',
     frameClass: 'border-sky-400 shadow-[0_0_16px_rgba(14,165,233,0.22)]',
     tagColorClass: 'text-sky-200 border-sky-400/60 bg-sky-500/20',
     patternMotif: 'Drifting River Lanterns & Ink Wash',
+    animationStyle: 'lantern_river_sway',
+    animationLabel: 'Swaying Paper Lanterns & Rising Golden River Embers',
+    framePrimaryColor: '#38BDF8',
+    frameSecondaryColor: '#FBBF24',
   },
 
-  // === SHOP & STARTER SKINS ACROSS ALL 5 RARITY LEVELS ===
+  // === SHOP & CHEST SKINS ACROSS ALL 5 RARITY LEVELS ===
   {
     id: 'skin-imperial-clockwork-heart',
     name: 'Clockwork Sanctuary Grandmaster',
@@ -545,6 +573,10 @@ export const ARCADE_SKINS: ArcadeSkinDef[] = [
     frameClass: 'border-amber-400/90 shadow-[0_0_20px_rgba(245,158,11,0.22)]',
     tagColorClass: 'text-amber-200 border-amber-400/60 bg-amber-500/20',
     patternMotif: 'Precision Brass Escapement & Ruby Filigree',
+    animationStyle: 'clockwork_escapement',
+    animationLabel: 'Interlocking Brass Escapement Gears & Ruby Pendulum Pulse',
+    framePrimaryColor: '#D97706',
+    frameSecondaryColor: '#E11D48',
   },
   {
     id: 'skin-sakura-moonlit-pavilion',
@@ -562,6 +594,10 @@ export const ARCADE_SKINS: ArcadeSkinDef[] = [
     frameClass: 'border-fuchsia-400/80 shadow-[0_0_16px_rgba(217,70,239,0.18)]',
     tagColorClass: 'text-fuchsia-200 border-fuchsia-400/60 bg-fuchsia-500/20',
     patternMotif: 'Evening Sakura Petals & Lacquer Trim',
+    animationStyle: 'sakura_petal_drift',
+    animationLabel: 'Floating Moonlit Cherry Blossom Petals & Crescent Shimmer',
+    framePrimaryColor: '#EC4899',
+    frameSecondaryColor: '#C084FC',
   },
   {
     id: 'skin-starlight-observatory',
@@ -579,6 +615,10 @@ export const ARCADE_SKINS: ArcadeSkinDef[] = [
     frameClass: 'border-sky-400/80',
     tagColorClass: 'text-sky-200 border-sky-400/60 bg-sky-500/20',
     patternMotif: 'Sapphire Celestial Chart & Compass Rose',
+    animationStyle: 'starlight_compass_sweep',
+    animationLabel: 'Sweeping Compass Rose & Orbiting Polaris Starlight',
+    framePrimaryColor: '#0EA5E9',
+    frameSecondaryColor: '#6366F1',
   },
   {
     id: 'skin-matcha-botanical-press',
@@ -596,6 +636,10 @@ export const ARCADE_SKINS: ArcadeSkinDef[] = [
     frameClass: 'border-emerald-400/75',
     tagColorClass: 'text-emerald-200 border-emerald-400/60 bg-emerald-500/20',
     patternMotif: 'Pressed Clover Leaf & Linen Tape',
+    animationStyle: 'botanical_clover_bloom',
+    animationLabel: 'Breathing Botanical Vine Garland & Blooming Four-Leaf Clovers',
+    framePrimaryColor: '#10B981',
+    frameSecondaryColor: '#84CC16',
   },
   {
     id: 'skin-berry-milk-postmark',
@@ -613,6 +657,10 @@ export const ARCADE_SKINS: ArcadeSkinDef[] = [
     frameClass: 'border-emerald-400/70',
     tagColorClass: 'text-emerald-200 border-emerald-400/60 bg-emerald-500/20',
     patternMotif: 'Airmail Postmark & Berry Wax Seal',
+    animationStyle: 'strawberry_wax_pulse',
+    animationLabel: 'Airmail Chevron Border & Pulsing Crimson Wax Seal',
+    framePrimaryColor: '#F43F5E',
+    frameSecondaryColor: '#10B981',
   },
   {
     id: 'skin-classic-notebook',
@@ -630,6 +678,10 @@ export const ARCADE_SKINS: ArcadeSkinDef[] = [
     frameClass: 'border-stone-600',
     tagColorClass: 'text-stone-200 border-stone-500/60 bg-stone-500/20',
     patternMotif: 'Archival Grid & Graphite Pencil Rule',
+    animationStyle: 'sketchbook_graphite_tick',
+    animationLabel: 'Hand-Sketched Graphite Corner Crop Marks & Paper Tape Gleam',
+    framePrimaryColor: '#78716C',
+    frameSecondaryColor: '#D6D3D1',
   },
   {
     id: 'skin-cozy-parchment-cord',
@@ -647,6 +699,10 @@ export const ARCADE_SKINS: ArcadeSkinDef[] = [
     frameClass: 'border-stone-500',
     tagColorClass: 'text-stone-200 border-stone-500/60 bg-stone-500/20',
     patternMotif: 'Kraft Parcel & Baker’s Twine',
+    animationStyle: 'kraft_twine_swing',
+    animationLabel: 'Braided Baker’s Twine Stitch & Gently Swinging Parcel Tag',
+    framePrimaryColor: '#A8A29E',
+    frameSecondaryColor: '#D97706',
   },
 ];
 
@@ -690,8 +746,8 @@ export const REWARD_SHOP_ITEMS: RewardShopItem[] = [
     previewCode: 'rename-card',
     consumable: true,
   },
-  // Purchasable & starter skins exposed in unified shop catalog
-  ...ARCADE_SKINS.filter((s) => s.acquisitionSource !== 'seasonal_exclusive').map((s) => ({
+  // All skins exposed in unified shop catalog so any unowned skin can be unlocked with coins
+  ...ARCADE_SKINS.map((s) => ({
     id: s.id,
     name: `${s.name} (${s.rarity} Skin)`,
     category: 'skin' as const,
@@ -857,10 +913,12 @@ export interface ArcadeChallengeDef {
   target: number;
   xpReward: number;
   coinReward: 0; // Strictly 0 Coins — Challenges never bypass 2v2 coin economy rules
+  keyRewardTier: SkinRarity; // Chest Key awarded upon verified completion & claim
+  keyRewardCount: number;
 }
 
 export const ARCADE_CHALLENGE_CATALOG: ArcadeChallengeDef[] = [
-  // === DAILY CHALLENGES (Easy · 24 Hours) ===
+  // === DAILY CHALLENGES (Easy · 24 Hours -> Awards Common or Uncommon Key) ===
   {
     key: 'daily-chess-blitz',
     periodType: 'daily',
@@ -875,6 +933,8 @@ export const ARCADE_CHALLENGE_CATALOG: ArcadeChallengeDef[] = [
     target: 1,
     xpReward: 30,
     coinReward: 0,
+    keyRewardTier: 'Common',
+    keyRewardCount: 1,
   },
   {
     key: 'daily-pet-care',
@@ -890,6 +950,8 @@ export const ARCADE_CHALLENGE_CATALOG: ArcadeChallengeDef[] = [
     target: 3,
     xpReward: 25,
     coinReward: 0,
+    keyRewardTier: 'Common',
+    keyRewardCount: 1,
   },
   {
     key: 'daily-memory-match',
@@ -905,6 +967,8 @@ export const ARCADE_CHALLENGE_CATALOG: ArcadeChallengeDef[] = [
     target: 1,
     xpReward: 25,
     coinReward: 0,
+    keyRewardTier: 'Uncommon',
+    keyRewardCount: 1,
   },
   {
     key: 'daily-coop-team',
@@ -920,9 +984,11 @@ export const ARCADE_CHALLENGE_CATALOG: ArcadeChallengeDef[] = [
     target: 1,
     xpReward: 35,
     coinReward: 0,
+    keyRewardTier: 'Uncommon',
+    keyRewardCount: 1,
   },
 
-  // === WEEKLY CHALLENGES (Medium · 7 Days) ===
+  // === WEEKLY CHALLENGES (Medium · 7 Days -> Awards Rare or Epic Key) ===
   {
     key: 'weekly-strategy-tactician',
     periodType: 'weekly',
@@ -937,6 +1003,8 @@ export const ARCADE_CHALLENGE_CATALOG: ArcadeChallengeDef[] = [
     target: 4,
     xpReward: 110,
     coinReward: 0,
+    keyRewardTier: 'Rare',
+    keyRewardCount: 1,
   },
   {
     key: 'weekly-2v2-couple-contender',
@@ -951,6 +1019,8 @@ export const ARCADE_CHALLENGE_CATALOG: ArcadeChallengeDef[] = [
     target: 3,
     xpReward: 135,
     coinReward: 0,
+    keyRewardTier: 'Epic',
+    keyRewardCount: 1,
   },
   {
     key: 'weekly-solo-sanctuary-tour',
@@ -965,6 +1035,8 @@ export const ARCADE_CHALLENGE_CATALOG: ArcadeChallengeDef[] = [
     target: 5,
     xpReward: 95,
     coinReward: 0,
+    keyRewardTier: 'Rare',
+    keyRewardCount: 1,
   },
   {
     key: 'weekly-victory-streak',
@@ -979,9 +1051,11 @@ export const ARCADE_CHALLENGE_CATALOG: ArcadeChallengeDef[] = [
     target: 5,
     xpReward: 120,
     coinReward: 0,
+    keyRewardTier: 'Epic',
+    keyRewardCount: 1,
   },
 
-  // === MONTHLY CHALLENGES (Hard · 1 Month) ===
+  // === MONTHLY CHALLENGES (Hard · 1 Month -> Awards Legendary Key) ===
   {
     key: 'monthly-arcade-veteran',
     periodType: 'monthly',
@@ -995,6 +1069,8 @@ export const ARCADE_CHALLENGE_CATALOG: ArcadeChallengeDef[] = [
     target: 15,
     xpReward: 340,
     coinReward: 0,
+    keyRewardTier: 'Legendary',
+    keyRewardCount: 1,
   },
   {
     key: 'monthly-2v2-championship-drive',
@@ -1009,6 +1085,8 @@ export const ARCADE_CHALLENGE_CATALOG: ArcadeChallengeDef[] = [
     target: 8,
     xpReward: 420,
     coinReward: 0,
+    keyRewardTier: 'Legendary',
+    keyRewardCount: 1,
   },
   {
     key: 'monthly-1v1-duelist-mastery',
@@ -1023,6 +1101,8 @@ export const ARCADE_CHALLENGE_CATALOG: ArcadeChallengeDef[] = [
     target: 10,
     xpReward: 320,
     coinReward: 0,
+    keyRewardTier: 'Legendary',
+    keyRewardCount: 1,
   },
   {
     key: 'monthly-high-score-alchemist',
@@ -1037,6 +1117,8 @@ export const ARCADE_CHALLENGE_CATALOG: ArcadeChallengeDef[] = [
     target: 8,
     xpReward: 380,
     coinReward: 0,
+    keyRewardTier: 'Legendary',
+    keyRewardCount: 1,
   },
 ];
 
@@ -1321,4 +1403,592 @@ export function computeDynamicSeasonalBracket(
   };
 }
 
+/* ============================================================================
+   5-RARITY PROFILE BANNERS, 5-TIER CHESTS & CUSTOM KEYS SYSTEM
+   ============================================================================ */
 
+export type BannerArtworkPattern =
+  | 'solar_eclipse_sanctuary'
+  | 'imperial_clockwork_orrery'
+  | 'astral_swan_nocturne'
+  | 'moonlit_sakura_bridge'
+  | 'river_lantern_festival'
+  | 'celestial_compass_chart'
+  | 'pressed_clover_herbarium'
+  | 'strawberry_airmail_parlor'
+  | 'warm_sketchbook_grid'
+  | 'kraft_twine_postscript';
+
+export interface ArcadeBannerDef {
+  id: string;
+  name: string;
+  rarity: SkinRarity;
+  rarityOrder: number;
+  description: string;
+  emblem: string;
+  costCoins: number;
+  acquisitionSource: 'starter' | 'shop' | 'chest' | 'trophy_road';
+  artworkPattern: BannerArtworkPattern;
+  primaryColor: string;
+  secondaryColor: string;
+  accentColor: string;
+  borderClass: string;
+  badgeClass: string;
+  motifLabel: string;
+}
+
+export const ARCADE_BANNERS: ArcadeBannerDef[] = [
+  // 1. LEGENDARY BANNERS
+  {
+    id: 'banner-sovereign-eclipse-horizon',
+    name: 'Sovereign Eclipse Horizon',
+    rarity: 'Legendary',
+    rarityOrder: 1,
+    description:
+      'Gilded celestial horizon where twin solar-eclipse rings and golden astrolabe arcs illuminate dark velvet parchment.',
+    emblem: '🌞👑',
+    costCoins: 620,
+    acquisitionSource: 'shop',
+    artworkPattern: 'solar_eclipse_sanctuary',
+    primaryColor: '#451A03',
+    secondaryColor: '#991B1B',
+    accentColor: '#FBBF24',
+    borderClass: 'border-amber-400',
+    badgeClass: 'border-amber-400/70 bg-amber-500/20 text-amber-200',
+    motifLabel: 'Twin Solar Halos & Gilded Astrolabe',
+  },
+  {
+    id: 'banner-grandmaster-clockwork-orrery',
+    name: 'Grandmaster Clockwork Orrery',
+    rarity: 'Legendary',
+    rarityOrder: 1,
+    description:
+      'Intricate planetary gearwork, brass pendulums, and ruby jewel bearings spanning a royal horology blueprint.',
+    emblem: '⚙️🕰️',
+    costCoins: 580,
+    acquisitionSource: 'chest',
+    artworkPattern: 'imperial_clockwork_orrery',
+    primaryColor: '#3B1D0A',
+    secondaryColor: '#7C2D12',
+    accentColor: '#F59E0B',
+    borderClass: 'border-amber-400',
+    badgeClass: 'border-amber-400/70 bg-amber-500/20 text-amber-200',
+    motifLabel: 'Planetary Brass Gears & Ruby Bearings',
+  },
+
+  // 2. EPIC BANNERS
+  {
+    id: 'banner-astral-swan-constellation',
+    name: 'Astral Swan Constellation',
+    rarity: 'Epic',
+    rarityOrder: 2,
+    description:
+      'Silver-violet nebula silk embroidered with twin swans, crescent moon reflections, and shimmering starlight threads.',
+    emblem: '🦢🌌',
+    costCoins: 400,
+    acquisitionSource: 'shop',
+    artworkPattern: 'astral_swan_nocturne',
+    primaryColor: '#2E1065',
+    secondaryColor: '#701A75',
+    accentColor: '#E879F9',
+    borderClass: 'border-fuchsia-400',
+    badgeClass: 'border-fuchsia-400/70 bg-fuchsia-500/20 text-fuchsia-200',
+    motifLabel: 'Nebula Tapestry & Twin Starlight Swans',
+  },
+  {
+    id: 'banner-moonlit-sakura-bridge',
+    name: 'Moonlit Sakura Footbridge',
+    rarity: 'Epic',
+    rarityOrder: 2,
+    description:
+      'Arched vermilion garden bridge beneath cascading cherry blossom boughs and a glowing harvest moon.',
+    emblem: '🌸🏮',
+    costCoins: 380,
+    acquisitionSource: 'chest',
+    artworkPattern: 'moonlit_sakura_bridge',
+    primaryColor: '#4C0519',
+    secondaryColor: '#581C87',
+    accentColor: '#F472B6',
+    borderClass: 'border-fuchsia-400',
+    badgeClass: 'border-fuchsia-400/70 bg-fuchsia-500/20 text-fuchsia-200',
+    motifLabel: 'Sakura Canopy & Vermilion Bridge',
+  },
+
+  // 3. RARE BANNERS
+  {
+    id: 'banner-twilight-lantern-harbor',
+    name: 'Twilight Lantern Harbor',
+    rarity: 'Rare',
+    rarityOrder: 3,
+    description:
+      'Paper festival lanterns drifting across deep indigo harbor waves with warm amber reflections.',
+    emblem: '🏮🌊',
+    costCoins: 240,
+    acquisitionSource: 'shop',
+    artworkPattern: 'river_lantern_festival',
+    primaryColor: '#0C4A6E',
+    secondaryColor: '#134E4A',
+    accentColor: '#38BDF8',
+    borderClass: 'border-sky-400',
+    badgeClass: 'border-sky-400/70 bg-sky-500/20 text-sky-200',
+    motifLabel: 'Harbor Waves & Floating Lanterns',
+  },
+  {
+    id: 'banner-compass-rose-observatory',
+    name: 'Starlight Compass Chart',
+    rarity: 'Rare',
+    rarityOrder: 3,
+    description:
+      'Hand-inked nautical and celestial meridian map with a golden compass rose and Polaris coordinates.',
+    emblem: '🧭🗺️',
+    costCoins: 220,
+    acquisitionSource: 'chest',
+    artworkPattern: 'celestial_compass_chart',
+    primaryColor: '#1E1B4B',
+    secondaryColor: '#0F172A',
+    accentColor: '#60A5FA',
+    borderClass: 'border-sky-400',
+    badgeClass: 'border-sky-400/70 bg-sky-500/20 text-sky-200',
+    motifLabel: 'Nautical Meridians & Compass Rose',
+  },
+
+  // 4. UNCOMMON BANNERS
+  {
+    id: 'banner-pressed-clover-conservatory',
+    name: 'Pressed Clover Conservatory',
+    rarity: 'Uncommon',
+    rarityOrder: 4,
+    description:
+      'Botanical field journal page with pressed four-leaf clovers, fern fronds, and sage green linen tape.',
+    emblem: '🍀🌿',
+    costCoins: 130,
+    acquisitionSource: 'shop',
+    artworkPattern: 'pressed_clover_herbarium',
+    primaryColor: '#064E3B',
+    secondaryColor: '#14532D',
+    accentColor: '#34D399',
+    borderClass: 'border-emerald-400',
+    badgeClass: 'border-emerald-400/70 bg-emerald-500/20 text-emerald-200',
+    motifLabel: 'Pressed Fern & Four-Leaf Clovers',
+  },
+  {
+    id: 'banner-strawberry-postmark-parlor',
+    name: 'Strawberry Airmail Postcard',
+    rarity: 'Uncommon',
+    rarityOrder: 4,
+    description:
+      'Vintage airmail stationery with diagonal coral-and-cream stripes, postmark cancellation lines, and a berry wax seal.',
+    emblem: '🍓📮',
+    costCoins: 115,
+    acquisitionSource: 'chest',
+    artworkPattern: 'strawberry_airmail_parlor',
+    primaryColor: '#4C1D24',
+    secondaryColor: '#3F2E21',
+    accentColor: '#FB7185',
+    borderClass: 'border-emerald-400',
+    badgeClass: 'border-emerald-400/70 bg-emerald-500/20 text-emerald-200',
+    motifLabel: 'Vintage Airmail Stripes & Berry Seal',
+  },
+
+  // 5. COMMON BANNERS
+  {
+    id: 'banner-warm-sketchbook',
+    name: 'Warm Sketchbook Working Sheet',
+    rarity: 'Common',
+    rarityOrder: 5,
+    description:
+      'Default cozy dot-grid sketchbook sheet with hand-ruled pencil margin lines and masking tape tabs.',
+    emblem: '📓✏️',
+    costCoins: 0,
+    acquisitionSource: 'starter',
+    artworkPattern: 'warm_sketchbook_grid',
+    primaryColor: '#292524',
+    secondaryColor: '#44403C',
+    accentColor: '#D6D3D1',
+    borderClass: 'border-stone-500',
+    badgeClass: 'border-stone-500/70 bg-stone-500/20 text-stone-200',
+    motifLabel: 'Dot-Grid Sheet & Masking Tape',
+  },
+  {
+    id: 'banner-kraft-twine-parcel',
+    name: 'Kraft Parcel & Baker’s Twine',
+    rarity: 'Common',
+    rarityOrder: 5,
+    description:
+      'Warm kraft wrapping paper tied crosswise with red-and-cream baker’s twine and a stamped keepsake tag.',
+    emblem: '📦🧵',
+    costCoins: 55,
+    acquisitionSource: 'shop',
+    artworkPattern: 'kraft_twine_postscript',
+    primaryColor: '#3E2C1C',
+    secondaryColor: '#292524',
+    accentColor: '#FBBF24',
+    borderClass: 'border-stone-500',
+    badgeClass: 'border-stone-500/70 bg-stone-500/20 text-stone-200',
+    motifLabel: 'Kraft Paper & Crossed Baker’s Twine',
+  },
+];
+
+// Map legacy couple banner aliases so existing couple records resolve cleanly
+const LEGACY_BANNER_ALIASES: Record<string, string> = {
+  'twilight-lanterns': 'banner-twilight-lantern-harbor',
+  'compass-rose-banner': 'banner-compass-rose-observatory',
+  'banner-none': 'banner-warm-sketchbook',
+  'banner-sketchbook-grid': 'banner-warm-sketchbook',
+};
+
+export function getBannerById(bannerId: string | undefined | null): ArcadeBannerDef {
+  const normalizedId = bannerId ? LEGACY_BANNER_ALIASES[bannerId] || bannerId : undefined;
+  return (
+    (normalizedId ? ARCADE_BANNERS.find((b) => b.id === normalizedId) : undefined) ||
+    ARCADE_BANNERS.find((b) => b.id === 'banner-warm-sketchbook')!
+  );
+}
+
+/* ============================================================================
+   CUSTOM KEY DESIGNS & 5-RARITY PROGRESSION
+   ============================================================================ */
+
+export interface ArcadeKeyDef {
+  id: string;
+  tier: SkinRarity;
+  rarityOrder: number;
+  name: string;
+  unlocksChestTier: SkinRarity;
+  unlocksChestName: string;
+  materialLabel: string;
+  visualDescription: string;
+  challengeSourceLabel: string;
+  primaryColor: string;
+  secondaryColor: string;
+  glowColor: string;
+}
+
+export const ARCADE_KEYS: ArcadeKeyDef[] = [
+  {
+    id: 'key-legendary',
+    tier: 'Legendary',
+    rarityOrder: 1,
+    name: 'Legendary Key',
+    unlocksChestTier: 'Legendary',
+    unlocksChestName: 'Legendary Chest',
+    materialLabel: 'Sunforged Gold, Ruby Core & Solar Halo Filigree',
+    visualDescription:
+      'Ornate sovereign key crowned with a blazing solar-eclipse astrolabe bow, twin winged crests, and radiant starlight teeth.',
+    challengeSourceLabel: 'Earned from Monthly (Hard · 1m) Challenges',
+    primaryColor: '#F59E0B',
+    secondaryColor: '#EF4444',
+    glowColor: 'rgba(245, 158, 11, 0.55)',
+  },
+  {
+    id: 'key-epic',
+    tier: 'Epic',
+    rarityOrder: 2,
+    name: 'Epic Key',
+    unlocksChestTier: 'Epic',
+    unlocksChestName: 'Epic Chest',
+    materialLabel: 'Amethyst Crystal, Rose-Gold Lacquer & Glowing Runes',
+    visualDescription:
+      'Crescent-moon and sakura-blossom bow inlaid with a pulsing amethyst core and etched astral runes along the shaft.',
+    challengeSourceLabel: 'Earned from Weekly (Medium · 7d) 2v2 & Victory Challenges',
+    primaryColor: '#D946EF',
+    secondaryColor: '#8B5CF6',
+    glowColor: 'rgba(217, 70, 239, 0.48)',
+  },
+  {
+    id: 'key-rare',
+    tier: 'Rare',
+    rarityOrder: 3,
+    name: 'Rare Key',
+    unlocksChestTier: 'Rare',
+    unlocksChestName: 'Rare Chest',
+    materialLabel: 'Celestial Sapphire, Brushed Silver & Compass Rose',
+    visualDescription:
+      'Nautical compass-rose bow with a faceted sapphire cabochon, silver meridian engravings, and precision warded bit.',
+    challengeSourceLabel: 'Earned from Weekly (Medium · 7d) Strategy & Solo Challenges',
+    primaryColor: '#0EA5E9',
+    secondaryColor: '#38BDF8',
+    glowColor: 'rgba(14, 165, 233, 0.42)',
+  },
+  {
+    id: 'key-uncommon',
+    tier: 'Uncommon',
+    rarityOrder: 4,
+    name: 'Uncommon Key',
+    unlocksChestTier: 'Uncommon',
+    unlocksChestName: 'Uncommon Chest',
+    materialLabel: 'Antiqued Botanical Brass & Verdigris Clover Inlay',
+    visualDescription:
+      'Four-leaf clover bow forged in warm botanical brass with twisted vine detailing and a double-notched bit.',
+    challengeSourceLabel: 'Earned from Daily (Easy · 24h) Co-Op & Puzzle Challenges',
+    primaryColor: '#10B981',
+    secondaryColor: '#84CC16',
+    glowColor: 'rgba(16, 185, 129, 0.35)',
+  },
+  {
+    id: 'key-common',
+    tier: 'Common',
+    rarityOrder: 5,
+    name: 'Common Key',
+    unlocksChestTier: 'Common',
+    unlocksChestName: 'Common Chest',
+    materialLabel: 'Hand-Forged Graphite Iron & Baker’s Twine Tag',
+    visualDescription:
+      'Simple, sturdy sketchbook diary key with a circular iron bow, clean single-tooth bit, and tied twine loop.',
+    challengeSourceLabel: 'Earned from Daily (Easy · 24h) Chess & Pet Care Challenges',
+    primaryColor: '#A8A29E',
+    secondaryColor: '#78716C',
+    glowColor: 'rgba(168, 162, 158, 0.25)',
+  },
+];
+
+export function getKeyByTier(tier: SkinRarity): ArcadeKeyDef {
+  return ARCADE_KEYS.find((k) => k.tier === tier) || ARCADE_KEYS[ARCADE_KEYS.length - 1];
+}
+
+/* ============================================================================
+   5-TIER COLLECTIBLE CHEST CATALOG & DROP PROBABILITIES
+   ============================================================================ */
+
+export const DUPLICATE_COSMETIC_COIN_PAYOUT: Record<SkinRarity, number> = {
+  Common: 35,
+  Uncommon: 75,
+  Rare: 160,
+  Epic: 320,
+  Legendary: 650,
+};
+
+export interface ArcadeChestDef {
+  id: string;
+  tier: SkinRarity;
+  rarityOrder: number;
+  name: string;
+  subtitle: string;
+  description: string;
+  costCoins: number;
+  compatibleKeyTier: SkinRarity;
+  compatibleKeyName: string;
+  rarityProbabilities: Record<SkinRarity, number>; // Percentages summing to 100
+  openingAnimationStyle: string;
+  openingAnimationDescription: string;
+  primaryColor: string;
+  secondaryColor: string;
+  accentColor: string;
+}
+
+export const ARCADE_CHESTS: ArcadeChestDef[] = [
+  {
+    id: 'chest-legendary',
+    tier: 'Legendary',
+    rarityOrder: 1,
+    name: 'Legendary Chest',
+    subtitle: 'Sovereign Solar Reliquary',
+    description:
+      'Gilded celestial reliquary forged in sun-gold and crimson velvet. Guarantees an Epic or Legendary cosmetic Skin or Profile Banner.',
+    costCoins: 1500,
+    compatibleKeyTier: 'Legendary',
+    compatibleKeyName: 'Legendary Key',
+    rarityProbabilities: {
+      Legendary: 75,
+      Epic: 25,
+      Rare: 0,
+      Uncommon: 0,
+      Common: 0,
+    },
+    openingAnimationStyle: 'Solar Eclipse Levitation & Triple-Orbital Prism Draw',
+    openingAnimationDescription:
+      'Levitates with golden shockwaves, shatters the solar astrolabe seal into starlight, converges three orbital rings, and unveils a radiant prism card.',
+    primaryColor: '#F59E0B',
+    secondaryColor: '#991B1B',
+    accentColor: '#FDE047',
+  },
+  {
+    id: 'chest-epic',
+    tier: 'Epic',
+    rarityOrder: 2,
+    name: 'Epic Chest',
+    subtitle: 'Moonlit Lacquer Coffer',
+    description:
+      'Plum-lacquer coffer inlaid with mother-of-pearl sakura blossoms and amethyst clasps. High probability of Epic and Legendary cosmetics.',
+    costCoins: 850,
+    compatibleKeyTier: 'Epic',
+    compatibleKeyName: 'Epic Key',
+    rarityProbabilities: {
+      Legendary: 12,
+      Epic: 68,
+      Rare: 20,
+      Uncommon: 0,
+      Common: 0,
+    },
+    openingAnimationStyle: 'Twin Lacquer Doors & Sakura Vortex Tarot Flip',
+    openingAnimationDescription:
+      'Parts double lacquer doors amidst swirling sakura petals and violet comet trails, elevating a glowing tarot card with a shockwave flip.',
+    primaryColor: '#D946EF',
+    secondaryColor: '#581C87',
+    accentColor: '#F0ABFC',
+  },
+  {
+    id: 'chest-rare',
+    tier: 'Rare',
+    rarityOrder: 3,
+    name: 'Rare Chest',
+    subtitle: 'Starlight Astrolabe Trunk',
+    description:
+      'Deep sapphire navigator’s trunk bound in brushed silver and brass compass dials. Contains Rare, Epic, and Legendary Skins & Banners.',
+    costCoins: 450,
+    compatibleKeyTier: 'Rare',
+    compatibleKeyName: 'Rare Key',
+    rarityProbabilities: {
+      Legendary: 3,
+      Epic: 17,
+      Rare: 65,
+      Uncommon: 15,
+      Common: 0,
+    },
+    openingAnimationStyle: '180° Compass Lock Rotation & Sapphire Beam Spiral',
+    openingAnimationDescription:
+      'Rotates the brass compass dial 180°, projects a sapphire meridian beam, and spirals the drawn card to center stage.',
+    primaryColor: '#0EA5E9',
+    secondaryColor: '#0C4A6E',
+    accentColor: '#7DD3FC',
+  },
+  {
+    id: 'chest-uncommon',
+    tier: 'Uncommon',
+    rarityOrder: 4,
+    name: 'Uncommon Chest',
+    subtitle: 'Botanical Conservatory Satchel',
+    description:
+      'Cedarwood herbarium box clasped with antiqued brass clover hardware and sage linen straps.',
+    costCoins: 220,
+    compatibleKeyTier: 'Uncommon',
+    compatibleKeyName: 'Uncommon Key',
+    rarityProbabilities: {
+      Legendary: 0,
+      Epic: 3,
+      Rare: 17,
+      Uncommon: 50,
+      Common: 30,
+    },
+    openingAnimationStyle: 'Botanical Clasp Snap & Leaf Burst Card Lift',
+    openingAnimationDescription:
+      'Snaps open the brass clover clasp with a burst of botanical leaves and lifts the reward card in a crisp vertical arc.',
+    primaryColor: '#10B981',
+    secondaryColor: '#064E3B',
+    accentColor: '#6EE7B7',
+  },
+  {
+    id: 'chest-common',
+    tier: 'Common',
+    rarityOrder: 5,
+    name: 'Common Chest',
+    subtitle: 'Sketchbook Keepsake Parcel',
+    description:
+      'Cozy archival parcel wrapped in kraft paper and baker’s twine. A welcoming way to collect Common, Uncommon, and Rare keepsakes.',
+    costCoins: 100,
+    compatibleKeyTier: 'Common',
+    compatibleKeyName: 'Common Key',
+    rarityProbabilities: {
+      Legendary: 0,
+      Epic: 0,
+      Rare: 5,
+      Uncommon: 25,
+      Common: 70,
+    },
+    openingAnimationStyle: 'Twine Untie & Sketchbook Card Slide',
+    openingAnimationDescription:
+      'Unties the baker’s twine bow, unfolds the kraft parcel flaps, and smoothly slides out a hand-stamped keepsake card.',
+    primaryColor: '#A8A29E',
+    secondaryColor: '#44403C',
+    accentColor: '#E7E5E4',
+  },
+];
+
+export function getChestByTier(tier: SkinRarity): ArcadeChestDef {
+  return ARCADE_CHESTS.find((c) => c.tier === tier) || ARCADE_CHESTS[ARCADE_CHESTS.length - 1];
+}
+
+export interface ChestRewardPoolItem {
+  id: string;
+  name: string;
+  category: 'skin' | 'banner';
+  rarity: SkinRarity;
+  emblem: string;
+  description: string;
+}
+
+export function getRewardPoolForChest(chestTier: SkinRarity): ChestRewardPoolItem[] {
+  const chest = getChestByTier(chestTier);
+  const eligibleRarities = SKIN_RARITY_ORDER.filter(
+    (r) => (chest.rarityProbabilities[r] || 0) > 0
+  );
+
+  const skinItems: ChestRewardPoolItem[] = ARCADE_SKINS.filter(
+    (s) =>
+      s.acquisitionSource !== 'starter' &&
+      eligibleRarities.includes(s.rarity)
+  ).map((s) => ({
+    id: s.id,
+    name: s.name,
+    category: 'skin' as const,
+    rarity: s.rarity,
+    emblem: s.emblem,
+    description: s.description,
+  }));
+
+  // Also include starter/common skins if Common rarity is in pool so Common tier has both skins & banners
+  const commonSkins: ChestRewardPoolItem[] = eligibleRarities.includes('Common')
+    ? ARCADE_SKINS.filter((s) => s.rarity === 'Common').map((s) => ({
+        id: s.id,
+        name: s.name,
+        category: 'skin' as const,
+        rarity: s.rarity,
+        emblem: s.emblem,
+        description: s.description,
+      }))
+    : [];
+
+  const bannerItems: ChestRewardPoolItem[] = ARCADE_BANNERS.filter((b) =>
+    eligibleRarities.includes(b.rarity)
+  ).map((b) => ({
+    id: b.id,
+    name: b.name,
+    category: 'banner' as const,
+    rarity: b.rarity,
+    emblem: b.emblem,
+    description: b.description,
+  }));
+
+  const deduped = new Map<string, ChestRewardPoolItem>();
+  for (const item of [...skinItems, ...commonSkins, ...bannerItems]) {
+    deduped.set(`${item.category}:${item.id}`, item);
+  }
+  return Array.from(deduped.values());
+}
+
+export type TierCountMap = Record<SkinRarity, number>;
+
+export const EMPTY_TIER_COUNT_MAP: TierCountMap = {
+  Legendary: 0,
+  Epic: 0,
+  Rare: 0,
+  Uncommon: 0,
+  Common: 0,
+};
+
+export function parseTierCountMap(raw: unknown): TierCountMap {
+  if (!raw) return { ...EMPTY_TIER_COUNT_MAP };
+  try {
+    const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    if (!parsed || typeof parsed !== 'object') return { ...EMPTY_TIER_COUNT_MAP };
+    return {
+      Legendary: Math.max(0, Number((parsed as Record<string, unknown>).Legendary) || 0),
+      Epic: Math.max(0, Number((parsed as Record<string, unknown>).Epic) || 0),
+      Rare: Math.max(0, Number((parsed as Record<string, unknown>).Rare) || 0),
+      Uncommon: Math.max(0, Number((parsed as Record<string, unknown>).Uncommon) || 0),
+      Common: Math.max(0, Number((parsed as Record<string, unknown>).Common) || 0),
+    };
+  } catch {
+    return { ...EMPTY_TIER_COUNT_MAP };
+  }
+}
