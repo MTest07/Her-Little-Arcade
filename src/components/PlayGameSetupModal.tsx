@@ -5,17 +5,11 @@ import {
   X,
   Swords,
   Users,
-  Search,
   Send,
-  Copy,
-  Check,
-  Share2,
   Globe,
   Lock,
-  ShieldCheck,
   Sparkles,
   Trophy,
-  Play,
   Loader2,
   Clock,
   CheckCircle2,
@@ -23,13 +17,18 @@ import {
   AlertCircle,
   Heart,
   UserCheck,
-  UserPlus,
+  PartyPopper,
 } from 'lucide-react';
-import { MULTIPLAYER_GAMES, ARCADE_SKINS, getSkinById } from '@/src/lib/arcade-data';
+import {
+  ALL_ARCADE_GAMES,
+  MULTIPLAYER_GAMES,
+  ARCADE_SKINS,
+  getSkinById,
+} from '@/src/lib/arcade-data';
 import {
   MultiplayerRoomState,
-  RoomPendingRequest,
 } from '@/src/components/VoiceAndLobbyDock';
+import { AnimatedSkinnedAvatar } from '@/src/components/CosmeticAvatarAndBanner';
 import {
   useGsapModalTransition,
   animateButtonPress,
@@ -40,9 +39,11 @@ interface CouplePartnerSummary {
   username: string;
   email?: string;
   avatar: string;
+  customPhotoUrl?: string;
   level?: number;
   xp?: number;
   equippedSkin?: string;
+  equippedBanner?: string;
   isOnline?: boolean;
   presenceStatus?: string;
 }
@@ -62,22 +63,6 @@ interface ActiveCoupleSummary {
   partnerProfile: CouplePartnerSummary | null;
 }
 
-interface SearchedPlayerItem {
-  uid: string;
-  username: string;
-  avatar: string;
-  equippedSkin: string;
-  level: number;
-  isOnline: boolean;
-  presenceStatus: string;
-  isPairedPartner: boolean;
-  hasActiveCouple: boolean;
-  coupleName: string;
-  coupleTrophies: number;
-  alreadyInvited?: boolean;
-  pendingRoomCode?: string;
-}
-
 interface OutgoingInvitationItem {
   id: number;
   inviteType: string;
@@ -87,8 +72,9 @@ interface OutgoingInvitationItem {
   targetCoupleName: string;
   gameId: string;
   roomCode: string;
-  status: 'pending' | 'accepted' | 'declined' | 'expired' | string;
+  status: 'pending' | 'accepted' | 'declined' | 'expired' | 'cancelled' | string;
   createdAt?: string;
+  updatedAt?: string;
 }
 
 export interface CoupleTeamLobbyState {
@@ -114,6 +100,8 @@ export interface CoupleTeamLobbyState {
     equippedSkin: string;
     isOnline: boolean;
     ready: boolean;
+    shieldCards?: number;
+    shieldCardArmed?: boolean;
   };
   partnerProfile: {
     uid: string;
@@ -122,6 +110,8 @@ export interface CoupleTeamLobbyState {
     equippedSkin: string;
     isOnline: boolean;
     ready: boolean;
+    shieldCards?: number;
+    shieldCardArmed?: boolean;
   };
 }
 
@@ -140,15 +130,30 @@ interface MatchmakingQueueEntry {
   allowedTrophyRange: number;
 }
 
+interface PublicPartyRoomItem {
+  roomCode: string;
+  gameId: string;
+  gameTitle: string;
+  hostName: string;
+  currentPlayers: number;
+  maxPlayers: number;
+  currentCouples?: number;
+  maxCouples?: number;
+}
+
 interface PlayGameSetupModalProps {
   isOpen: boolean;
   initialGameId: string;
-  mode: '1v1' | '2v2';
+  mode: '1v1' | '2v2' | 'party';
   currentUser: {
     uid: string;
     username: string;
     avatar: string;
+    customPhotoUrl?: string;
     equippedSkin?: string;
+    equippedBanner?: string;
+    shieldCards?: number;
+    shieldCardArmed?: boolean;
   };
   activeCouple: ActiveCoupleSummary | null;
   activeRoom: MultiplayerRoomState | null;
@@ -157,6 +162,7 @@ interface PlayGameSetupModalProps {
   onRoomJoinedOrCreated: (room: MultiplayerRoomState, autoLaunchGame?: boolean) => void;
   onOpenCouplePairing: () => void;
   onSwitchMode?: (mode: '1v1' | '2v2') => void;
+  onShieldCardUpdated?: () => void;
 }
 
 function parseRoomPayload(dbRoom: Record<string, unknown>): MultiplayerRoomState {
@@ -169,14 +175,24 @@ function parseRoomPayload(dbRoom: Record<string, unknown>): MultiplayerRoomState
     }
   };
 
+  const resolvedMode =
+    dbRoom.mode === 'party'
+      ? 'party'
+      : dbRoom.mode === '2v2'
+      ? '2v2'
+      : '1v1';
+
   return {
     roomCode: String(dbRoom.roomCode || ''),
     gameId: String(dbRoom.gameId || 'chess'),
-    mode: dbRoom.mode === '2v2' ? '2v2' : '1v1',
+    mode: resolvedMode,
     visibility: dbRoom.visibility === 'private' ? 'private' : 'public',
     joinPolicy:
       dbRoom.joinPolicy === 'approval_required' ? 'approval_required' : 'immediate',
-    maxPlayers: Number(dbRoom.maxPlayers || (dbRoom.mode === '2v2' ? 4 : 2)),
+    maxPlayers: Number(
+      dbRoom.maxPlayers ||
+        (resolvedMode === 'party' ? 20 : resolvedMode === '2v2' ? 4 : 2)
+    ),
     hostUid: String(dbRoom.hostUid || ''),
     hostName: String(dbRoom.hostName || 'Player'),
     hostAvatar: String(dbRoom.hostAvatar || '🦊'),
@@ -209,31 +225,23 @@ export function PlayGameSetupModal({
   onRoomJoinedOrCreated,
   onOpenCouplePairing,
   onSwitchMode,
+  onShieldCardUpdated,
 }: PlayGameSetupModalProps) {
   const backdropRef = useRef<HTMLDivElement | null>(null);
   const panelRef = useRef<HTMLDivElement | null>(null);
 
   const [selectedGameId, setSelectedGameId] = useState(initialGameId);
-  const [active1v1Option, setActive1v1Option] = useState<'invite' | 'create_room'>('invite');
 
-  // 1v1 Invite Partner / Player state
-  const [searchQuery, setSearchQuery] = useState('');
-  const [searchedPlayers, setSearchedPlayers] = useState<SearchedPlayerItem[]>([]);
-  const [searchingPlayers, setSearchingPlayers] = useState(false);
+  // 1v1 Partner-Only Challenge state
   const [sendingInviteUid, setSendingInviteUid] = useState<string | null>(null);
+  const [cancellingInviteId, setCancellingInviteId] = useState<number | null>(null);
   const [outgoingInvitations, setOutgoingInvitations] = useState<OutgoingInvitationItem[]>([]);
 
-  // 1v1 Create Room state
-  const [roomVisibility, setRoomVisibility] = useState<'public' | 'private'>('public');
-  const [roomJoinPolicy, setRoomJoinPolicy] = useState<'immediate' | 'approval_required'>(
-    'immediate'
-  );
-  const [roundFormat, setRoundFormat] = useState('Standard Match (Best of 3)');
-  const [includePairedPartnerIn1v1Room, setIncludePairedPartnerIn1v1Room] = useState(false);
-  const [creatingRoom, setCreatingRoom] = useState(false);
-  const [copiedCode, setCopiedCode] = useState(false);
-  const [copiedLink, setCopiedLink] = useState(false);
-  const [respondingRequestUid, setRespondingRequestUid] = useState<string | null>(null);
+  // Party Room setup state (3–10 Couples)
+  const [partyVisibility, setPartyVisibility] = useState<'public' | 'private'>('public');
+  const [creatingPartyRoom, setCreatingPartyRoom] = useState(false);
+  const [publicPartyRooms, setPublicPartyRooms] = useState<PublicPartyRoomItem[]>([]);
+  const [joiningPartyCode, setJoiningPartyCode] = useState('');
 
   // 2v2 Team & Matchmaking state
   const [teamLobby, setTeamLobby] = useState<CoupleTeamLobbyState | null>(null);
@@ -243,6 +251,8 @@ export function PlayGameSetupModal({
   const [queueEntry, setQueueEntry] = useState<MatchmakingQueueEntry | null>(null);
   const [enqueuingMatch, setEnqueuingMatch] = useState(false);
   const [cancellingMatch, setCancellingMatch] = useState(false);
+  const [togglingShieldCard, setTogglingShieldCard] = useState(false);
+  const [confirmShieldPrompt, setConfirmShieldPrompt] = useState<boolean | null>(null);
 
   const [statusBanner, setStatusBanner] = useState<{
     type: 'info' | 'success' | 'error';
@@ -261,11 +271,11 @@ export function PlayGameSetupModal({
     backdropRef,
     panelRef,
     isOpen,
-    `${mode}-${selectedGameId}-${active1v1Option}`
+    `${mode}-${selectedGameId}`
   );
 
   const selectedGame =
-    MULTIPLAYER_GAMES.find((g) => g.id === selectedGameId) || MULTIPLAYER_GAMES[0];
+    ALL_ARCADE_GAMES.find((g) => g.id === selectedGameId) || MULTIPLAYER_GAMES[0];
 
   const pairedPartner: CouplePartnerSummary | null = activeCouple
     ? (activeCouple.requesterUid === currentUser.uid
@@ -289,37 +299,6 @@ export function PlayGameSetupModal({
       .join(' ');
   };
 
-  const runPlayerSearch = useCallback(
-    async (queryText: string) => {
-      if (!currentUser.uid || mode !== '1v1') return;
-      setSearchingPlayers(true);
-      try {
-        const res = await authFetcher(
-          `/api/arcade?searchUsername=${encodeURIComponent(
-            queryText.trim()
-          )}&inviteType=1v1&uid=${encodeURIComponent(currentUser.uid)}`
-        );
-        const data = await res.json();
-        if (res.ok) {
-          setSearchedPlayers(Array.isArray(data.players) ? data.players : []);
-        }
-      } catch {
-        // ignore transient search error
-      } finally {
-        setSearchingPlayers(false);
-      }
-    },
-    [authFetcher, currentUser.uid, mode]
-  );
-
-  useEffect(() => {
-    if (!isOpen || mode !== '1v1') return;
-    const timer = window.setTimeout(() => {
-      runPlayerSearch(searchQuery);
-    }, 240);
-    return () => window.clearTimeout(timer);
-  }, [isOpen, mode, searchQuery, runPlayerSearch]);
-
   // Poll matchmaking, outgoing 1v1 invitations, and 2v2 Couple Team Lobby while modal is open
   const pollModalLiveState = useCallback(async () => {
     if (!isOpen || !currentUser.uid) return;
@@ -332,7 +311,7 @@ export function PlayGameSetupModal({
 
       if (Array.isArray(data.outgoingInvitations)) {
         setOutgoingInvitations(data.outgoingInvitations);
-        // Check if an outgoing 1v1 invitation for this session was just accepted
+        // Check if an outgoing 1v1 invitation for this session was just accepted by the paired partner
         const accepted1v1 = (data.outgoingInvitations as OutgoingInvitationItem[]).find(
           (inv) =>
             inv.inviteType === '1v1' &&
@@ -350,6 +329,18 @@ export function PlayGameSetupModal({
             onRoomJoinedOrCreated(parsed, true);
             return;
           }
+        }
+      }
+
+      if (mode === 'party') {
+        const pubRes = await authFetcher(
+          `/api/arcade?publicRooms=1&mode=party&gameId=${encodeURIComponent(
+            selectedGameId
+          )}&uid=${encodeURIComponent(currentUser.uid)}`
+        );
+        if (pubRes.ok) {
+          const pubData = await pubRes.json();
+          setPublicPartyRooms(Array.isArray(pubData.publicRooms) ? pubData.publicRooms : []);
         }
       }
 
@@ -389,6 +380,7 @@ export function PlayGameSetupModal({
     authFetcher,
     selectedGameId,
     activeRoom,
+    mode,
     onRoomJoinedOrCreated,
   ]);
 
@@ -401,15 +393,15 @@ export function PlayGameSetupModal({
     return () => window.clearInterval(interval);
   }, [isOpen, pollModalLiveState]);
 
-  const handleSend1v1Invite = async (targetUsername: string, targetUid: string) => {
-    if (!activeCouple || activeCouple.status !== 'active') {
+  const handleSend1v1PartnerChallenge = async () => {
+    if (!activeCouple || activeCouple.status !== 'active' || !pairedPartner) {
       setStatusBanner({
         type: 'error',
-        text: 'Couple pairing is required before sending a 1v1 invitation.',
+        text: 'Couple pairing is required before challenging your partner to a 1v1 match.',
       });
       return;
     }
-    setSendingInviteUid(targetUid);
+    setSendingInviteUid(pairedPartner.uid);
     setStatusBanner(null);
     try {
       const res = await authFetcher('/api/arcade', {
@@ -418,13 +410,13 @@ export function PlayGameSetupModal({
         body: JSON.stringify({
           action: 'send_game_invitation',
           inviteType: '1v1',
-          targetUsername,
+          targetUsername: pairedPartner.username,
           gameId: selectedGameId,
         }),
       });
       const data = await res.json();
       if (!res.ok) {
-        throw new Error(data.error || 'Could not send 1v1 invitation.');
+        throw new Error(data.error || 'Could not send 1v1 challenge to partner.');
       }
       if (data.room) {
         const parsedRoom = parseRoomPayload(data.room);
@@ -432,29 +424,59 @@ export function PlayGameSetupModal({
       }
       setStatusBanner({
         type: 'success',
-        text: `1v1 invitation sent to @${targetUsername}! Waiting for acceptance...`,
+        text: `1v1 Challenge sent to your partner @${pairedPartner.username}! Match begins as soon as they accept.`,
       });
       await pollModalLiveState();
-      await runPlayerSearch(searchQuery);
     } catch (err: unknown) {
       setStatusBanner({
         type: 'error',
-        text: err instanceof Error ? err.message : 'Failed to send invitation.',
+        text: err instanceof Error ? err.message : 'Failed to send challenge.',
       });
     } finally {
       setSendingInviteUid(null);
     }
   };
 
-  const handleCreate1v1Room = async () => {
+  const handleCancel1v1Challenge = async (invitationId: number) => {
+    setCancellingInviteId(invitationId);
+    setStatusBanner(null);
+    try {
+      const res = await authFetcher('/api/arcade', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'cancel_game_invitation',
+          invitationId,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Could not cancel challenge.');
+      }
+      setStatusBanner({
+        type: 'info',
+        text: '1v1 partner challenge cancelled.',
+      });
+      await pollModalLiveState();
+    } catch (err: unknown) {
+      setStatusBanner({
+        type: 'error',
+        text: err instanceof Error ? err.message : 'Failed to cancel challenge.',
+      });
+    } finally {
+      setCancellingInviteId(null);
+    }
+  };
+
+  const handleCreatePartyRoom = async () => {
     if (!activeCouple || activeCouple.status !== 'active') {
       setStatusBanner({
         type: 'error',
-        text: 'Active Couple Pairing is required before creating a multiplayer room.',
+        text: 'Active Couple Pairing is required to host a Party Game (3–10 Couples).',
       });
       return;
     }
-    setCreatingRoom(true);
+    setCreatingPartyRoom(true);
     setStatusBanner(null);
     try {
       const res = await authFetcher('/api/arcade', {
@@ -463,101 +485,62 @@ export function PlayGameSetupModal({
         body: JSON.stringify({
           action: 'create_room',
           gameId: selectedGameId,
-          mode: '1v1',
-          visibility: roomVisibility,
-          joinPolicy: roomVisibility === 'public' ? roomJoinPolicy : 'immediate',
-          includePairedPartner: includePairedPartnerIn1v1Room,
+          mode: 'party',
+          visibility: partyVisibility,
+          joinPolicy: 'immediate',
+          includePairedPartner: false,
           settings: {
-            format: roundFormat,
-            createdFromPlayFlow: true,
+            minCouples: 3,
+            maxCouples: 10,
+            partyRounds: selectedGame.partyRounds || 4,
           },
         }),
       });
       const data = await res.json();
       if (!res.ok || !data.room) {
-        throw new Error(data.error || 'Failed to create room.');
+        throw new Error(data.error || 'Could not create Party Room.');
       }
       const parsed = parseRoomPayload(data.room);
-      onRoomJoinedOrCreated(parsed, false);
-      setStatusBanner({
-        type: 'success',
-        text: `${
-          parsed.visibility === 'private' ? 'Private' : 'Public'
-        } Room #${parsed.roomCode} created for ${selectedGame.title}!`,
-      });
+      onRoomJoinedOrCreated(parsed, true);
     } catch (err: unknown) {
       setStatusBanner({
         type: 'error',
-        text: err instanceof Error ? err.message : 'Could not create room.',
+        text: err instanceof Error ? err.message : 'Failed to create Party Room.',
       });
     } finally {
-      setCreatingRoom(false);
+      setCreatingPartyRoom(false);
     }
   };
 
-  const handleRespondJoinRequest = async (requesterUid: string, approve: boolean) => {
-    if (!activeRoom) return;
-    setRespondingRequestUid(requesterUid);
+  const handleJoinPartyRoomByCode = async (codeToJoin: string) => {
+    const clean = codeToJoin.trim().toUpperCase();
+    if (!clean) return;
+    setCreatingPartyRoom(true);
+    setStatusBanner(null);
     try {
       const res = await authFetcher('/api/arcade', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          action: 'respond_join_request',
-          roomCode: activeRoom.roomCode,
-          requesterUid,
-          approve,
+          action: 'join_room',
+          roomCode: clean,
+          includePairedPartner: false,
+          viaDirectCodeOrInvite: true,
         }),
       });
       const data = await res.json();
       if (!res.ok || !data.room) {
-        throw new Error(data.error || 'Failed to process join request.');
+        throw new Error(data.error || 'Could not join Party Room.');
       }
       const parsed = parseRoomPayload(data.room);
-      onRoomJoinedOrCreated(parsed, false);
-      setStatusBanner({
-        type: 'info',
-        text: approve ? 'Player approved and added to room!' : 'Join request declined.',
-      });
+      onRoomJoinedOrCreated(parsed, true);
     } catch (err: unknown) {
       setStatusBanner({
         type: 'error',
-        text: err instanceof Error ? err.message : 'Failed to respond to request.',
+        text: err instanceof Error ? err.message : 'Failed to join Party Room.',
       });
     } finally {
-      setRespondingRequestUid(null);
-    }
-  };
-
-  const handleStartRoomMatchNow = async () => {
-    if (!activeRoom) return;
-    if (activeRoom.players.length < activeRoom.maxPlayers) {
-      setStatusBanner({
-        type: 'error',
-        text: `Waiting for ${activeRoom.maxPlayers - activeRoom.players.length} more player(s) to join before starting.`,
-      });
-      return;
-    }
-    try {
-      const res = await authFetcher('/api/arcade', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'sync_room',
-          ...activeRoom,
-          status: 'playing',
-        }),
-      });
-      const data = await res.json();
-      if (res.ok && data.room) {
-        const parsed = parseRoomPayload(data.room);
-        onRoomJoinedOrCreated(parsed, true);
-      }
-    } catch {
-      setStatusBanner({
-        type: 'error',
-        text: 'Failed to launch room match.',
-      });
+      setCreatingPartyRoom(false);
     }
   };
 
@@ -723,31 +706,42 @@ export function PlayGameSetupModal({
     }
   };
 
-  const copyRoomCode = (code: string) => {
-    navigator.clipboard.writeText(code);
-    setCopiedCode(true);
-    window.setTimeout(() => setCopiedCode(false), 1800);
-  };
-
-  const copyShareLink = (code: string) => {
-    const url =
-      typeof window !== 'undefined'
-        ? `${window.location.origin}${window.location.pathname}?room=${encodeURIComponent(
-            code
-          )}`
-        : code;
-    navigator.clipboard.writeText(url);
-    setCopiedLink(true);
-    window.setTimeout(() => setCopiedLink(false), 1800);
+  const handleToggleShieldCard = async (targetArmed: boolean) => {
+    setTogglingShieldCard(true);
+    setStatusBanner(null);
+    try {
+      const res = await authFetcher('/api/arcade', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'toggle_shield_card',
+          armed: targetArmed,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Could not update Ranked Shield Card.');
+      }
+      setConfirmShieldPrompt(null);
+      setStatusBanner({
+        type: 'success',
+        text: targetArmed
+          ? '🛡️ Ranked Shield Card ARMED! Your personal XP is protected on your next 2v2 loss.'
+          : 'Ranked Shield Card disarmed and returned to standby.',
+      });
+      await pollModalLiveState();
+      onShieldCardUpdated?.();
+    } catch (err: unknown) {
+      setStatusBanner({
+        type: 'error',
+        text: err instanceof Error ? err.message : 'Failed to toggle Ranked Shield Card.',
+      });
+    } finally {
+      setTogglingShieldCard(false);
+    }
   };
 
   if (!isOpen) return null;
-
-  const isRoomForSelectedGame =
-    activeRoom &&
-    activeRoom.status === 'lobby' &&
-    activeRoom.gameId === selectedGameId &&
-    activeRoom.mode === mode;
 
   const myReadyIn2v2 =
     teamLobby?.hostUid === currentUser.uid
@@ -760,6 +754,12 @@ export function PlayGameSetupModal({
     teamLobby!.hostReady &&
     teamLobby!.partnerReady &&
     teamLobby!.bothOnline;
+
+  const latestPartner1v1Invite = outgoingInvitations.find(
+    (inv) =>
+      inv.inviteType === '1v1' &&
+      (!pairedPartner || inv.targetUid === pairedPartner.uid)
+  );
 
   return (
     <div
@@ -779,6 +779,8 @@ export function PlayGameSetupModal({
             <div className="w-11 h-11 rounded-2xl bg-white border-2 border-[#2C2523] shadow-[2px_2px_0px_#2C2523] flex items-center justify-center shrink-0">
               {mode === '1v1' ? (
                 <Swords className="w-5 h-5 text-[#2C2523]" />
+              ) : mode === 'party' ? (
+                <PartyPopper className="w-5 h-5 text-[#E11D48]" />
               ) : (
                 <Users className="w-5 h-5 text-[#2C2523]" />
               )}
@@ -786,11 +788,17 @@ export function PlayGameSetupModal({
             <div className="min-w-0">
               <div className="flex items-center gap-2 flex-wrap">
                 <span className="px-2.5 py-0.5 rounded-lg bg-[#2C2523] text-white text-[10px] font-black uppercase tracking-wider">
-                  {mode === '1v1' ? '1v1 Duel Setup' : '2v2 Team & Matchmaking'}
+                  {mode === '1v1'
+                    ? '1v1 Partner Duel'
+                    : mode === 'party'
+                    ? 'Party Games (3–10 Couples)'
+                    : '2v2 Team & Matchmaking'}
                 </span>
                 <span className="px-2.5 py-0.5 rounded-lg bg-white/90 border border-[#2C2523] text-[10px] font-bold text-[#2C2523]">
                   {mode === '1v1'
-                    ? 'XP Only · 0 Coins · 0 Trophies'
+                    ? 'Paired Partner Only · XP Only · 0 Coins · 0 Trophies'
+                    : mode === 'party'
+                    ? '6–20 Players · Placement XP Only · 0 Coins · 0 Trophies'
                     : 'XP + Coins + Couple Trophies 🏆'}
                 </span>
               </div>
@@ -801,7 +809,7 @@ export function PlayGameSetupModal({
           </div>
 
           <div className="flex items-center gap-2 shrink-0">
-            {selectedGame.supports2v2 && onSwitchMode && (
+            {mode !== 'party' && selectedGame.supports2v2 && onSwitchMode && (
               <div className="hidden sm:flex items-center rounded-xl border-2 border-[#2C2523] bg-white p-0.5 shadow-[2px_2px_0px_#2C2523]">
                 <button
                   type="button"
@@ -812,7 +820,7 @@ export function PlayGameSetupModal({
                       : 'text-[#2C2523] hover:bg-[#F3EFE6]'
                   }`}
                 >
-                  1v1 Mode
+                  1v1 Partner
                 </button>
                 <button
                   type="button"
@@ -857,7 +865,7 @@ export function PlayGameSetupModal({
                     Active Couple Pairing Required
                   </p>
                   <p className="text-xs text-[#6B5E58]">
-                    Both 1v1 and 2v2 modes require an active couple pairing with your partner first.
+                    All multiplayer modes (1v1 Partner Duels, 2v2 Couples, and Party Games) require an active couple pairing with your partner first.
                   </p>
                 </div>
               </div>
@@ -894,595 +902,395 @@ export function PlayGameSetupModal({
           )}
 
           {/* ================================================================
-              MODE A: 1V1 PLAY GAME FLOW (Option 1: Invite Player | Option 2: Create Room)
+              MODE A: PARTNER-ONLY 1V1 DUEL FLOW (You VS Your Partner)
              ================================================================ */}
           {mode === '1v1' && (
             <div className="space-y-5">
-              {/* Two Main 1v1 Mode Tabs */}
+              {/* Main You VS Your Partner Duel Arena Card */}
               <div
                 data-gsap-modal-item
-                className="grid grid-cols-1 sm:grid-cols-2 gap-3"
+                className="bg-white border-2 border-[#2C2523] rounded-3xl p-5 sm:p-6 shadow-[4px_4px_0px_#2C2523] space-y-5"
               >
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    animateButtonPress(e.currentTarget);
-                    setActive1v1Option('invite');
-                  }}
-                  className={`p-4 rounded-2xl border-2 border-[#2C2523] text-left transition-all flex items-start gap-3 ${
-                    active1v1Option === 'invite'
-                      ? 'bg-[#E3E8FF] shadow-[4px_4px_0px_#2C2523] -translate-y-0.5'
-                      : 'bg-white hover:bg-[#F3EFE6]'
-                  }`}
-                >
-                  <div className="w-10 h-10 rounded-xl bg-white border-2 border-[#2C2523] flex items-center justify-center shrink-0">
-                    <UserPlus className="w-5 h-5 text-[#3B4CCA]" />
-                  </div>
+                <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b-2 border-dashed border-[#2C2523]/15">
                   <div>
-                    <div className="text-[10px] font-black uppercase tracking-wider text-[#3B4CCA]">
-                      Option 1
-                    </div>
-                    <div className="font-serif text-base font-bold text-[#2C2523]">
-                      Invite Partner / Player
-                    </div>
-                    <p className="text-xs text-[#6B5E58] mt-0.5">
-                      Search by unique @username, check online status, and start immediately when accepted.
-                    </p>
+                    <span className="text-[10px] font-black uppercase tracking-widest text-[#E11D48]">
+                      Exclusive Couple 1v1 Matchup
+                    </span>
+                    <h3 className="font-serif text-lg sm:text-xl font-bold text-[#2C2523]">
+                      Compete Head-to-Head Against Your Paired Partner
+                    </h3>
                   </div>
-                </button>
+                  <span className="px-3 py-1 rounded-xl bg-[#FDFBF7] border-2 border-[#2C2523] text-xs font-bold text-[#2C2523]">
+                    Individual XP Only · 0 Coins · 0 Trophies
+                  </span>
+                </div>
 
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    animateButtonPress(e.currentTarget);
-                    setActive1v1Option('create_room');
-                  }}
-                  className={`p-4 rounded-2xl border-2 border-[#2C2523] text-left transition-all flex items-start gap-3 ${
-                    active1v1Option === 'create_room'
-                      ? 'bg-[#FFE4E6] shadow-[4px_4px_0px_#2C2523] -translate-y-0.5'
-                      : 'bg-white hover:bg-[#F3EFE6]'
-                  }`}
-                >
-                  <div className="w-10 h-10 rounded-xl bg-white border-2 border-[#2C2523] flex items-center justify-center shrink-0">
-                    <Globe className="w-5 h-5 text-[#E11D48]" />
-                  </div>
-                  <div>
-                    <div className="text-[10px] font-black uppercase tracking-wider text-[#E11D48]">
-                      Option 2
+                {/* You VS Your Partner Split Display */}
+                <div className="grid grid-cols-1 md:grid-cols-11 gap-4 items-center">
+                  {/* Left Card: YOU (Your account) */}
+                  <div className="md:col-span-5 p-4 rounded-2xl bg-[#FDFBF7] border-2 border-[#2C2523] shadow-[3px_3px_0px_#2C2523] flex flex-col items-center text-center space-y-2.5">
+                    <span className="px-2.5 py-0.5 rounded-md bg-[#2C2523] text-white text-[10px] font-black uppercase tracking-wider">
+                      You · Your Account
+                    </span>
+                    <AnimatedSkinnedAvatar
+                      avatarId={currentUser.avatar || '🦊'}
+                      customPhotoUrl={currentUser.customPhotoUrl}
+                      skinId={currentUser.equippedSkin}
+                      size="lg"
+                    />
+                    <div>
+                      <div className="font-serif text-lg font-bold text-[#2C2523]">
+                        @{currentUser.username}
+                      </div>
+                      <div className="text-xs font-bold text-[#6B5E58] mt-0.5">
+                        Skin: {getSkinName(currentUser.equippedSkin)}
+                      </div>
                     </div>
-                    <div className="font-serif text-base font-bold text-[#2C2523]">
-                      Create Room ({selectedGame.title})
-                    </div>
-                    <p className="text-xs text-[#6B5E58] mt-0.5">
-                      Choose Public or Private visibility, generate a unique room code, and host your lobby.
-                    </p>
+                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-[#DEF7EC] border border-[#2C2523] text-[11px] font-black text-[#03543F]">
+                      <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                      Online & Ready
+                    </span>
                   </div>
-                </button>
-              </div>
 
-              {/* OPTION 1 PANEL: INVITE PARTNER / PLAYER */}
-              {active1v1Option === 'invite' && (
-                <div
-                  data-gsap-modal-item
-                  className="bg-white border-2 border-[#2C2523] rounded-2xl p-4 sm:p-5 shadow-[4px_4px_0px_#2C2523] space-y-4"
-                >
-                  {/* Paired Partner Quick Invite Card */}
-                  {pairedPartner && (
-                    <div className="p-3.5 rounded-2xl bg-[#FDFBF7] border-2 border-[#2C2523] flex flex-wrap items-center justify-between gap-3">
-                      <div className="flex items-center gap-3">
-                        <div className="w-11 h-11 rounded-xl bg-[#FFE4E6] border-2 border-[#2C2523] flex items-center justify-center text-xl">
-                          {pairedPartner.avatar || '🐼'}
-                        </div>
+                  {/* Center VS Emblem */}
+                  <div className="md:col-span-1 flex flex-col items-center justify-center py-1">
+                    <div className="w-12 h-12 rounded-2xl bg-[#FFE4E6] border-2 border-[#2C2523] shadow-[3px_3px_0px_#2C2523] flex items-center justify-center font-serif text-base font-black text-[#E11D48]">
+                      VS
+                    </div>
+                  </div>
+
+                  {/* Right Card: YOUR PARTNER (Paired account) */}
+                  <div className="md:col-span-5 p-4 rounded-2xl bg-[#FDFBF7] border-2 border-[#2C2523] shadow-[3px_3px_0px_#2C2523] flex flex-col items-center text-center space-y-2.5">
+                    <span className="px-2.5 py-0.5 rounded-md bg-[#E11D48] text-white text-[10px] font-black uppercase tracking-wider">
+                      Your Partner · Paired Account
+                    </span>
+                    {pairedPartner ? (
+                      <>
+                        <AnimatedSkinnedAvatar
+                          avatarId={pairedPartner.avatar || '🐼'}
+                          customPhotoUrl={pairedPartner.customPhotoUrl}
+                          skinId={pairedPartner.equippedSkin}
+                          size="lg"
+                        />
                         <div>
-                          <div className="flex items-center gap-2">
-                            <span className="font-bold text-sm text-[#2C2523]">
-                              @{pairedPartner.username}
-                            </span>
-                            <span className="px-2 py-0.5 rounded-md bg-[#FFE4E6] border border-[#2C2523] text-[10px] font-black text-[#E11D48]">
-                              Paired Partner
-                            </span>
-                            <span
-                              className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold border border-[#2C2523] ${
-                                pairedPartner.isOnline
-                                  ? 'bg-[#DEF7EC] text-[#03543F]'
-                                  : 'bg-gray-100 text-gray-600'
-                              }`}
-                            >
-                              <span
-                                className={`w-1.5 h-1.5 rounded-full ${
-                                  pairedPartner.isOnline ? 'bg-emerald-500' : 'bg-gray-400'
-                                }`}
-                              />
-                              {pairedPartner.isOnline ? 'Online' : 'Offline'}
-                            </span>
+                          <div className="font-serif text-lg font-bold text-[#2C2523]">
+                            @{pairedPartner.username}
                           </div>
-                          <p className="text-xs text-[#6B5E58] mt-0.5">
-                            Invite your partner directly to a 1v1 duel in{' '}
-                            <span className="font-semibold text-[#2C2523]">
-                              {selectedGame.title}
-                            </span>
-                          </p>
+                          <div className="text-xs font-bold text-[#6B5E58] mt-0.5">
+                            Skin: {getSkinName(pairedPartner.equippedSkin)}
+                          </div>
                         </div>
-                      </div>
-
-                      <button
-                        type="button"
-                        disabled={sendingInviteUid === pairedPartner.uid}
-                        onClick={(e) => {
-                          animateButtonPress(e.currentTarget);
-                          handleSend1v1Invite(pairedPartner.username, pairedPartner.uid);
-                        }}
-                        className="px-4 py-2 rounded-xl bg-[#3B4CCA] hover:bg-[#2F3EA8] text-white text-xs font-bold border-2 border-[#2C2523] shadow-[2px_2px_0px_#2C2523] flex items-center gap-1.5 disabled:opacity-50"
-                      >
-                        {sendingInviteUid === pairedPartner.uid ? (
-                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                        ) : (
-                          <Send className="w-3.5 h-3.5" />
-                        )}
-                        Invite Partner
-                      </button>
-                    </div>
-                  )}
-
-                  {/* Search Input by Unique Username */}
-                  <div>
-                    <label className="block text-xs font-black uppercase tracking-wider text-[#2C2523] mb-1.5">
-                      Search Registered Player by Unique @Username
-                    </label>
-                    <div className="relative">
-                      <Search className="w-4 h-4 text-[#6B5E58] absolute left-3.5 top-1/2 -translate-y-1/2" />
-                      <input
-                        type="text"
-                        value={searchQuery}
-                        onChange={(e) => setSearchQuery(e.target.value)}
-                        placeholder="Type @username to find paired players..."
-                        className="w-full pl-10 pr-4 py-2.5 rounded-xl bg-[#FDFBF7] border-2 border-[#2C2523] text-sm font-medium focus:outline-none focus:bg-white"
-                      />
-                    </div>
-                  </div>
-
-                  {/* Matching Player Profiles List */}
-                  <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
-                    {searchingPlayers ? (
-                      <div className="py-6 flex items-center justify-center gap-2 text-xs font-bold text-[#6B5E58]">
-                        <Loader2 className="w-4 h-4 animate-spin" />
-                        Searching registered players...
-                      </div>
-                    ) : searchedPlayers.length === 0 ? (
-                      <div className="py-6 text-center text-xs text-[#6B5E58] bg-[#FDFBF7] rounded-xl border border-dashed border-[#2C2523]/40">
-                        No matching players found. Try another @username.
-                      </div>
-                    ) : (
-                      searchedPlayers.map((player) => (
-                        <div
-                          key={player.uid}
-                          className="p-3 rounded-xl bg-[#FDFBF7] border-2 border-[#2C2523] flex items-center justify-between gap-3"
+                        <span
+                          className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-[#2C2523] text-[11px] font-black ${
+                            pairedPartner.isOnline
+                              ? 'bg-[#DEF7EC] text-[#03543F]'
+                              : 'bg-gray-100 text-gray-600'
+                          }`}
                         >
-                          <div className="flex items-center gap-3 min-w-0">
-                            <div className="w-10 h-10 rounded-xl bg-white border-2 border-[#2C2523] flex items-center justify-center text-lg shrink-0">
-                              {player.avatar || '🦊'}
-                            </div>
-                            <div className="min-w-0">
-                              <div className="flex items-center gap-1.5 flex-wrap">
-                                <span className="font-bold text-sm text-[#2C2523] truncate">
-                                  @{player.username}
-                                </span>
-                                <span
-                                  className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold border border-[#2C2523] ${
-                                    player.isOnline
-                                      ? 'bg-[#DEF7EC] text-[#03543F]'
-                                      : 'bg-gray-100 text-gray-600'
-                                  }`}
-                                >
-                                  <span
-                                    className={`w-1.5 h-1.5 rounded-full ${
-                                      player.isOnline ? 'bg-emerald-500' : 'bg-gray-400'
-                                    }`}
-                                  />
-                                  {player.isOnline ? 'Online' : 'Offline'}
-                                </span>
-                                {player.isPairedPartner && (
-                                  <span className="px-1.5 py-0.5 rounded bg-[#FFE4E6] border border-[#2C2523] text-[10px] font-bold text-[#E11D48]">
-                                    Your Partner
-                                  </span>
-                                )}
-                              </div>
-                              <div className="text-[11px] text-[#6B5E58] truncate">
-                                {player.hasActiveCouple
-                                  ? `Paired Couple: ${player.coupleName} · Lv.${player.level}`
-                                  : 'Unpaired (Must pair with a partner before 1v1)'}
-                              </div>
-                            </div>
-                          </div>
-
-                          <button
-                            type="button"
-                            disabled={
-                              !player.hasActiveCouple ||
-                              sendingInviteUid === player.uid ||
-                              Boolean(player.alreadyInvited)
-                            }
-                            onClick={(e) => {
-                              animateButtonPress(e.currentTarget);
-                              handleSend1v1Invite(player.username, player.uid);
-                            }}
-                            className="px-3.5 py-2 rounded-xl bg-[#2C2523] hover:bg-[#433936] text-white text-xs font-bold border-2 border-[#2C2523] flex items-center gap-1.5 shrink-0 disabled:opacity-45"
-                          >
-                            {sendingInviteUid === player.uid ? (
-                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                            ) : (
-                              <Send className="w-3.5 h-3.5" />
-                            )}
-                            {player.alreadyInvited ? 'Invited' : 'Send Invite'}
-                          </button>
+                          <span
+                            className={`w-2 h-2 rounded-full ${
+                              pairedPartner.isOnline ? 'bg-emerald-500 animate-pulse' : 'bg-gray-400'
+                            }`}
+                          />
+                          {pairedPartner.isOnline ? 'Online' : 'Offline · Unavailable'}
+                        </span>
+                      </>
+                    ) : (
+                      <div className="py-6 space-y-2">
+                        <div className="text-sm font-bold text-[#2C2523]">
+                          No Paired Partner Yet
                         </div>
-                      ))
+                        <p className="text-xs text-[#6B5E58] max-w-xs">
+                          Pair with your partner in Profile & Couple to unlock 1v1 Partner Duels.
+                        </p>
+                      </div>
                     )}
                   </div>
+                </div>
 
-                  {/* Outgoing 1v1 Invitation States (Pending / Accepted / Declined / Expired) */}
-                  {outgoingInvitations.filter((i) => i.inviteType === '1v1').length > 0 && (
-                    <div className="pt-3 border-t-2 border-dashed border-[#2C2523]/20 space-y-2">
-                      <div className="text-xs font-black uppercase tracking-wider text-[#2C2523] flex items-center gap-1.5">
-                        <Clock className="w-3.5 h-3.5" />
-                        Recent 1v1 Invitations Sent
-                      </div>
-                      <div className="space-y-1.5 max-h-36 overflow-y-auto">
-                        {outgoingInvitations
-                          .filter((i) => i.inviteType === '1v1')
-                          .slice(0, 5)
-                          .map((inv) => {
-                            const statusStyle =
-                              inv.status === 'accepted'
-                                ? 'bg-[#DEF7EC] text-[#03543F]'
-                                : inv.status === 'declined'
-                                ? 'bg-[#FDE8E8] text-[#9B1C1C]'
-                                : inv.status === 'expired'
-                                ? 'bg-gray-200 text-gray-700'
-                                : 'bg-[#FEF3C7] text-[#92400E]';
-                            return (
-                              <div
-                                key={inv.id}
-                                className="px-3 py-2 rounded-xl bg-[#FDFBF7] border border-[#2C2523] flex items-center justify-between gap-2 text-xs"
-                              >
-                                <div className="truncate">
-                                  <span className="font-bold text-[#2C2523]">
-                                    @{inv.targetUsername}
-                                  </span>{' '}
-                                  <span className="text-[#6B5E58]">
-                                    · Room #{inv.roomCode}
-                                  </span>
-                                </div>
+                {/* Partner Offline Warning */}
+                {pairedPartner && !pairedPartner.isOnline && (
+                  <div className="p-3.5 rounded-2xl bg-[#FEF3C7] border-2 border-[#2C2523] flex items-center justify-between gap-3 text-xs font-bold text-[#92400E]">
+                    <span>
+                      @{pairedPartner.username} is currently offline. You can still send a 1v1 challenge invitation — your partner must come online and accept before the match begins.
+                    </span>
+                  </div>
+                )}
+
+                {/* Challenge Your Partner CTA Section */}
+                <div className="p-4 rounded-2xl bg-[#F3EFE6] border-2 border-[#2C2523] flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                  <div>
+                    <div className="text-xs font-black uppercase tracking-wider text-[#2C2523]">
+                      Challenge Your Partner
+                    </div>
+                    <p className="text-xs text-[#6B5E58] mt-0.5">
+                      Send a direct 1v1 invitation for{' '}
+                      <strong className="text-[#2C2523]">{selectedGame.title}</strong> to{' '}
+                      {pairedPartner ? `@${pairedPartner.username}` : 'your paired partner'}. The match starts automatically once your partner accepts.
+                    </p>
+                  </div>
+
+                  <div className="flex items-center gap-2 w-full sm:w-auto shrink-0">
+                    {latestPartner1v1Invite &&
+                      latestPartner1v1Invite.status === 'pending' &&
+                      latestPartner1v1Invite.gameId === selectedGameId && (
+                        <button
+                          type="button"
+                          disabled={cancellingInviteId === latestPartner1v1Invite.id}
+                          onClick={(e) => {
+                            animateButtonPress(e.currentTarget);
+                            handleCancel1v1Challenge(latestPartner1v1Invite.id);
+                          }}
+                          className="px-4 py-3 rounded-2xl bg-white hover:bg-[#FDE8E8] text-[#9B1C1C] text-xs font-bold border-2 border-[#2C2523] shadow-[2px_2px_0px_#2C2523] flex items-center gap-1.5 disabled:opacity-50"
+                        >
+                          {cancellingInviteId === latestPartner1v1Invite.id ? (
+                            <Loader2 className="w-4 h-4 animate-spin" />
+                          ) : (
+                            <X className="w-4 h-4" />
+                          )}
+                          Cancel Challenge
+                        </button>
+                      )}
+
+                    <button
+                      type="button"
+                      disabled={
+                        !pairedPartner ||
+                        !activeCouple ||
+                        activeCouple.status !== 'active' ||
+                        sendingInviteUid === pairedPartner?.uid
+                      }
+                      onClick={(e) => {
+                        animateButtonPress(e.currentTarget);
+                        handleSend1v1PartnerChallenge();
+                      }}
+                      className="w-full sm:w-auto px-5 py-3 rounded-2xl bg-[#D96B43] hover:bg-[#C25934] text-white text-sm font-bold border-2 border-[#2C2523] shadow-[4px_4px_0px_#2C2523] flex items-center justify-center gap-2 disabled:opacity-45"
+                    >
+                      {sendingInviteUid === pairedPartner?.uid ? (
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                      ) : (
+                        <Swords className="w-4 h-4" />
+                      )}
+                      {latestPartner1v1Invite &&
+                      latestPartner1v1Invite.status === 'pending' &&
+                      latestPartner1v1Invite.gameId === selectedGameId
+                        ? 'Resend 1v1 Challenge'
+                        : 'Challenge Your Partner'}
+                    </button>
+                  </div>
+                </div>
+
+                {/* Outgoing 1v1 Partner Invitation States (pending, accepted, declined, expired, cancelled) */}
+                {outgoingInvitations.filter((i) => i.inviteType === '1v1').length > 0 && (
+                  <div className="pt-3 border-t-2 border-dashed border-[#2C2523]/20 space-y-2.5">
+                    <div className="text-xs font-black uppercase tracking-wider text-[#2C2523] flex items-center gap-1.5">
+                      <Clock className="w-3.5 h-3.5" />
+                      Partner 1v1 Invitation States
+                    </div>
+                    <div className="space-y-2 max-h-44 overflow-y-auto">
+                      {outgoingInvitations
+                        .filter((i) => i.inviteType === '1v1')
+                        .slice(0, 6)
+                        .map((inv) => {
+                          const statusStyle =
+                            inv.status === 'accepted'
+                              ? 'bg-[#DEF7EC] text-[#03543F]'
+                              : inv.status === 'declined'
+                              ? 'bg-[#FDE8E8] text-[#9B1C1C]'
+                              : inv.status === 'cancelled'
+                              ? 'bg-[#F3EFE6] text-[#6B5E58]'
+                              : inv.status === 'expired'
+                              ? 'bg-gray-200 text-gray-700'
+                              : 'bg-[#FEF3C7] text-[#92400E]';
+                          const gameObj = ALL_ARCADE_GAMES.find((g) => g.id === inv.gameId);
+                          return (
+                            <div
+                              key={inv.id}
+                              className="px-3.5 py-2.5 rounded-xl bg-[#FDFBF7] border-2 border-[#2C2523] flex flex-wrap items-center justify-between gap-2 text-xs"
+                            >
+                              <div className="flex items-center gap-2 min-w-0">
+                                <span className="font-bold text-[#2C2523]">
+                                  @{inv.targetUsername}
+                                </span>
+                                <span className="text-[#6B5E58]">
+                                  · {gameObj?.title || inv.gameId} · Room #{inv.roomCode}
+                                </span>
+                              </div>
+                              <div className="flex items-center gap-2">
                                 <span
-                                  className={`px-2 py-0.5 rounded-md border border-[#2C2523] text-[10px] font-black uppercase ${statusStyle}`}
+                                  className={`px-2.5 py-0.5 rounded-md border border-[#2C2523] text-[10px] font-black uppercase ${statusStyle}`}
                                 >
                                   {inv.status}
                                 </span>
+                                {inv.status === 'pending' && (
+                                  <button
+                                    type="button"
+                                    disabled={cancellingInviteId === inv.id}
+                                    onClick={() => handleCancel1v1Challenge(inv.id)}
+                                    className="px-2 py-0.5 rounded-md bg-white hover:bg-[#FDE8E8] border border-[#2C2523] text-[10px] font-bold text-[#9B1C1C]"
+                                  >
+                                    Cancel
+                                  </button>
+                                )}
                               </div>
-                            );
-                          })}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {/* OPTION 2 PANEL: CREATE ROOM (Selected Game Automatically Carried Over) */}
-              {active1v1Option === 'create_room' && (
-                <div
-                  data-gsap-modal-item
-                  className="bg-white border-2 border-[#2C2523] rounded-2xl p-4 sm:p-5 shadow-[4px_4px_0px_#2C2523] space-y-4"
-                >
-                  {!isRoomForSelectedGame ? (
-                    <>
-                      <div className="flex items-center justify-between gap-2 pb-3 border-b border-[#2C2523]/15">
-                        <div>
-                          <div className="text-[11px] font-black uppercase tracking-wider text-[#6B5E58]">
-                            Selected Game (Carried Over Automatically)
-                          </div>
-                          <div className="font-serif text-lg font-bold text-[#2C2523]">
-                            {selectedGame.title} · 1v1 Duel Room
-                          </div>
-                        </div>
-                        <span className="px-3 py-1 rounded-xl bg-[#F3EFE6] border-2 border-[#2C2523] text-xs font-bold">
-                          2 Players Max
-                        </span>
-                      </div>
-
-                      {/* Visibility Selector: Public vs Private */}
-                      <div>
-                        <label className="block text-xs font-black uppercase tracking-wider text-[#2C2523] mb-2">
-                          Room Visibility
-                        </label>
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                          <button
-                            type="button"
-                            onClick={() => setRoomVisibility('public')}
-                            className={`p-3.5 rounded-2xl border-2 border-[#2C2523] text-left transition-all flex items-start gap-3 ${
-                              roomVisibility === 'public'
-                                ? 'bg-[#DEF7EC] shadow-[3px_3px_0px_#2C2523]'
-                                : 'bg-[#FDFBF7] hover:bg-[#F3EFE6]'
-                            }`}
-                          >
-                            <Globe className="w-5 h-5 text-[#03543F] shrink-0 mt-0.5" />
-                            <div>
-                              <div className="font-bold text-sm text-[#2C2523]">
-                                Public Room
-                              </div>
-                              <p className="text-xs text-[#6B5E58] mt-0.5">
-                                Listed in the Public Room Browser. Players can discover and join or use your room code.
-                              </p>
-                            </div>
-                          </button>
-
-                          <button
-                            type="button"
-                            onClick={() => setRoomVisibility('private')}
-                            className={`p-3.5 rounded-2xl border-2 border-[#2C2523] text-left transition-all flex items-start gap-3 ${
-                              roomVisibility === 'private'
-                                ? 'bg-[#E3E8FF] shadow-[3px_3px_0px_#2C2523]'
-                                : 'bg-[#FDFBF7] hover:bg-[#F3EFE6]'
-                            }`}
-                          >
-                            <Lock className="w-5 h-5 text-[#3B4CCA] shrink-0 mt-0.5" />
-                            <div>
-                              <div className="font-bold text-sm text-[#2C2523]">
-                                Private Room
-                              </div>
-                              <p className="text-xs text-[#6B5E58] mt-0.5">
-                                Hidden from the public browser. Only players with the room code or invitation can enter.
-                              </p>
-                            </div>
-                          </button>
-                        </div>
-                      </div>
-
-                      {/* Public Room Join Policy Toggle */}
-                      {roomVisibility === 'public' && (
-                        <div className="p-3.5 rounded-2xl bg-[#FDFBF7] border-2 border-[#2C2523] flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                          <div className="flex items-start gap-2.5">
-                            <ShieldCheck className="w-4 h-4 text-[#03543F] shrink-0 mt-0.5" />
-                            <div>
-                              <div className="text-xs font-bold text-[#2C2523]">
-                                Public Browser Join Policy
-                              </div>
-                              <p className="text-[11px] text-[#6B5E58]">
-                                Choose whether players from the Public Room Browser join immediately or require your approval.
-                              </p>
-                            </div>
-                          </div>
-                          <div className="flex items-center gap-2 shrink-0">
-                            <button
-                              type="button"
-                              onClick={() => setRoomJoinPolicy('immediate')}
-                              className={`px-3 py-1.5 rounded-xl border-2 border-[#2C2523] text-xs font-bold ${
-                                roomJoinPolicy === 'immediate'
-                                  ? 'bg-[#2C2523] text-white'
-                                  : 'bg-white text-[#2C2523]'
-                              }`}
-                            >
-                              Immediate Join
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => setRoomJoinPolicy('approval_required')}
-                              className={`px-3 py-1.5 rounded-xl border-2 border-[#2C2523] text-xs font-bold ${
-                                roomJoinPolicy === 'approval_required'
-                                  ? 'bg-[#2C2523] text-white'
-                                  : 'bg-white text-[#2C2523]'
-                              }`}
-                            >
-                              Require Approval
-                            </button>
-                          </div>
-                        </div>
-                      )}
-
-                      {/* Format & Partner Seating */}
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                        <div>
-                          <label className="block text-xs font-black uppercase tracking-wider text-[#2C2523] mb-1">
-                            Match Format
-                          </label>
-                          <select
-                            value={roundFormat}
-                            onChange={(e) => setRoundFormat(e.target.value)}
-                            className="w-full px-3 py-2 rounded-xl bg-[#FDFBF7] border-2 border-[#2C2523] text-xs font-bold"
-                          >
-                            <option value="Quick Match (1 Round)">Quick Match (1 Round)</option>
-                            <option value="Standard Match (Best of 3)">
-                              Standard Match (Best of 3)
-                            </option>
-                            <option value="Championship Set (Best of 5)">
-                              Championship Set (Best of 5)
-                            </option>
-                          </select>
-                        </div>
-
-                        <div className="flex items-end">
-                          <label className="w-full p-2.5 rounded-xl bg-[#FDFBF7] border-2 border-[#2C2523] flex items-center gap-2.5 cursor-pointer text-xs font-bold text-[#2C2523]">
-                            <input
-                              type="checkbox"
-                              checked={includePairedPartnerIn1v1Room}
-                              onChange={(e) =>
-                                setIncludePairedPartnerIn1v1Room(e.target.checked)
-                              }
-                              className="w-4 h-4 accent-[#D96B43]"
-                            />
-                            <span>Auto-seat my paired partner in Slot 2</span>
-                          </label>
-                        </div>
-                      </div>
-
-                      <button
-                        type="button"
-                        disabled={creatingRoom}
-                        onClick={(e) => {
-                          animateButtonPress(e.currentTarget);
-                          handleCreate1v1Room();
-                        }}
-                        className="w-full py-3 rounded-2xl bg-[#D96B43] hover:bg-[#C25934] text-white font-bold text-sm border-2 border-[#2C2523] shadow-[4px_4px_0px_#2C2523] flex items-center justify-center gap-2 disabled:opacity-50"
-                      >
-                        {creatingRoom ? (
-                          <Loader2 className="w-4 h-4 animate-spin" />
-                        ) : (
-                          <Sparkles className="w-4 h-4" />
-                        )}
-                        Generate Unique Room Code & Enter Lobby
-                      </button>
-                    </>
-                  ) : (
-                    /* Active Created Room Lobby View */
-                    <div className="space-y-4">
-                      <div className="p-4 rounded-2xl bg-[#FDFBF7] border-2 border-[#2C2523] flex flex-wrap items-center justify-between gap-3">
-                        <div>
-                          <div className="flex items-center gap-2">
-                            <span className="px-2 py-0.5 rounded-md bg-[#2C2523] text-white text-[10px] font-black uppercase">
-                              {activeRoom.visibility === 'private'
-                                ? 'Private Room'
-                                : 'Public Room'}
-                            </span>
-                            {activeRoom.visibility === 'public' && (
-                              <span className="px-2 py-0.5 rounded-md bg-white border border-[#2C2523] text-[10px] font-bold">
-                                {activeRoom.joinPolicy === 'approval_required'
-                                  ? 'Host Approval Required'
-                                  : 'Immediate Join'}
-                              </span>
-                            )}
-                          </div>
-                          <div className="font-mono text-2xl font-black tracking-widest text-[#2C2523] mt-1">
-                            #{activeRoom.roomCode}
-                          </div>
-                          <p className="text-xs text-[#6B5E58]">
-                            Share this code or link with your opponent to join {selectedGame.title}.
-                          </p>
-                        </div>
-
-                        <div className="flex items-center gap-2">
-                          <button
-                            type="button"
-                            onClick={() => copyRoomCode(activeRoom.roomCode)}
-                            className="px-3.5 py-2 rounded-xl bg-white hover:bg-[#F3EFE6] border-2 border-[#2C2523] shadow-[2px_2px_0px_#2C2523] text-xs font-bold flex items-center gap-1.5"
-                          >
-                            {copiedCode ? (
-                              <Check className="w-3.5 h-3.5 text-emerald-600" />
-                            ) : (
-                              <Copy className="w-3.5 h-3.5" />
-                            )}
-                            {copiedCode ? 'Copied!' : 'Copy Code'}
-                          </button>
-
-                          <button
-                            type="button"
-                            onClick={() => copyShareLink(activeRoom.roomCode)}
-                            className="px-3.5 py-2 rounded-xl bg-[#E3E8FF] hover:bg-[#D0D8FF] border-2 border-[#2C2523] shadow-[2px_2px_0px_#2C2523] text-xs font-bold flex items-center gap-1.5"
-                          >
-                            {copiedLink ? (
-                              <Check className="w-3.5 h-3.5 text-emerald-600" />
-                            ) : (
-                              <Share2 className="w-3.5 h-3.5" />
-                            )}
-                            {copiedLink ? 'Link Copied!' : 'Share Invite Link'}
-                          </button>
-                        </div>
-                      </div>
-
-                      {/* Seated Players in Lobby */}
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                        {[0, 1].map((slotIdx) => {
-                          const p = activeRoom.players[slotIdx];
-                          return (
-                            <div
-                              key={slotIdx}
-                              className="p-3.5 rounded-2xl bg-[#FDFBF7] border-2 border-[#2C2523] flex items-center justify-between gap-3"
-                            >
-                              {p ? (
-                                <div className="flex items-center gap-3">
-                                  <div className="w-10 h-10 rounded-xl bg-white border-2 border-[#2C2523] flex items-center justify-center text-lg">
-                                    {p.avatar || '🦊'}
-                                  </div>
-                                  <div>
-                                    <div className="font-bold text-sm text-[#2C2523]">
-                                      @{p.username}
-                                    </div>
-                                    <div className="text-[11px] text-[#6B5E58]">
-                                      Slot {slotIdx + 1} · Ready
-                                    </div>
-                                  </div>
-                                </div>
-                              ) : (
-                                <div className="text-xs font-bold text-[#6B5E58]">
-                                  Slot {slotIdx + 1} · Waiting for opponent...
-                                </div>
-                              )}
                             </div>
                           );
                         })}
-                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
 
-                      {/* Pending Join Requests (If Host Approval Required) */}
-                      {activeRoom.hostUid === currentUser.uid &&
-                        Array.isArray(activeRoom.pendingRequests) &&
-                        activeRoom.pendingRequests.length > 0 && (
-                          <div className="p-3.5 rounded-2xl bg-[#FEF3C7] border-2 border-[#2C2523] space-y-2">
-                            <div className="text-xs font-black uppercase tracking-wider text-[#92400E]">
-                              Pending Join Requests ({activeRoom.pendingRequests.length})
-                            </div>
-                            {activeRoom.pendingRequests.map((req: RoomPendingRequest) => (
-                              <div
-                                key={req.uid}
-                                className="p-2.5 rounded-xl bg-white border border-[#2C2523] flex items-center justify-between gap-2"
-                              >
-                                <div className="flex items-center gap-2 text-xs font-bold">
-                                  <span>{req.avatar || '🦊'}</span>
-                                  <span>@{req.username}</span>
-                                  {req.coupleName && (
-                                    <span className="text-[10px] text-[#6B5E58]">
-                                      ({req.coupleName})
-                                    </span>
-                                  )}
-                                </div>
-                                <div className="flex items-center gap-1.5">
-                                  <button
-                                    type="button"
-                                    disabled={respondingRequestUid === req.uid}
-                                    onClick={() => handleRespondJoinRequest(req.uid, true)}
-                                    className="px-2.5 py-1 rounded-lg bg-[#DEF7EC] border border-[#2C2523] text-[11px] font-bold text-[#03543F]"
-                                  >
-                                    Approve
-                                  </button>
-                                  <button
-                                    type="button"
-                                    disabled={respondingRequestUid === req.uid}
-                                    onClick={() => handleRespondJoinRequest(req.uid, false)}
-                                    className="px-2.5 py-1 rounded-lg bg-[#FDE8E8] border border-[#2C2523] text-[11px] font-bold text-[#9B1C1C]"
-                                  >
-                                    Decline
-                                  </button>
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        )}
+          {/* ================================================================
+              MODE C: PARTY GAMES SETUP (3-10 Couples · 6-20 Players)
+             ================================================================ */}
+          {mode === 'party' && (
+            <div className="space-y-5">
+              <div
+                data-gsap-modal-item
+                className="bg-white border-2 border-[#2C2523] rounded-3xl p-5 sm:p-6 shadow-[4px_4px_0px_#2C2523] space-y-5"
+              >
+                <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b-2 border-dashed border-[#2C2523]/15">
+                  <div>
+                    <span className="text-[10px] font-black uppercase tracking-widest text-[#E11D48]">
+                      Multi-Couple Party Session · 3 to 10 Couples (6–20 Players)
+                    </span>
+                    <h3 className="font-serif text-lg sm:text-xl font-bold text-[#2C2523]">
+                      {selectedGame.title} · Party Room Setup
+                    </h3>
+                  </div>
+                  <span className="px-3 py-1 rounded-xl bg-[#FDFBF7] border-2 border-[#2C2523] text-xs font-bold text-[#2C2523]">
+                    1st: +60 XP · 2nd: +45 XP · 3rd: +35 XP · 0 Coins · 0 Trophies
+                  </span>
+                </div>
+
+                {/* Create Party Room Controls */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="p-4 rounded-2xl bg-[#FDFBF7] border-2 border-[#2C2523] shadow-[3px_3px_0px_#2C2523] space-y-3.5">
+                    <div className="text-xs font-black uppercase tracking-wider text-[#2C2523]">
+                      Option 1 · Host a New Party Room
+                    </div>
+                    <p className="text-xs text-[#6B5E58]">
+                      Creates a 3–10 couple Party Room for <strong>{selectedGame.title}</strong> and automatically invites your paired partner ({pairedPartner ? `@${pairedPartner.username}` : 'partner'}) to your couple team slot.
+                    </p>
+
+                    <div className="grid grid-cols-2 gap-2.5">
+                      <button
+                        type="button"
+                        onClick={() => setPartyVisibility('public')}
+                        className={`p-3 rounded-xl border-2 border-[#2C2523] text-left transition-all ${
+                          partyVisibility === 'public'
+                            ? 'bg-[#DEF7EC] shadow-[2px_2px_0px_#2C2523]'
+                            : 'bg-white hover:bg-[#F3EFE6]'
+                        }`}
+                      >
+                        <div className="flex items-center gap-1.5 font-bold text-xs text-[#2C2523]">
+                          <Globe className="w-3.5 h-3.5 text-[#03543F]" />
+                          Public Party
+                        </div>
+                        <p className="text-[10px] text-[#6B5E58] mt-0.5">
+                          Listed in Public Party Browser
+                        </p>
+                      </button>
 
                       <button
                         type="button"
-                        disabled={activeRoom.players.length < 2}
-                        onClick={(e) => {
-                          animateButtonPress(e.currentTarget);
-                          handleStartRoomMatchNow();
-                        }}
-                        className="w-full py-3 rounded-2xl bg-[#2E7D32] hover:bg-[#1B5E20] text-white font-bold text-sm border-2 border-[#2C2523] shadow-[4px_4px_0px_#2C2523] flex items-center justify-center gap-2 disabled:opacity-50"
+                        onClick={() => setPartyVisibility('private')}
+                        className={`p-3 rounded-xl border-2 border-[#2C2523] text-left transition-all ${
+                          partyVisibility === 'private'
+                            ? 'bg-[#E3E8FF] shadow-[2px_2px_0px_#2C2523]'
+                            : 'bg-white hover:bg-[#F3EFE6]'
+                        }`}
                       >
-                        <Play className="w-4 h-4" />
-                        {activeRoom.players.length >= 2
-                          ? `Start ${selectedGame.title} Now`
-                          : 'Waiting for Opponent (1/2 Seated)...'}
+                        <div className="flex items-center gap-1.5 font-bold text-xs text-[#2C2523]">
+                          <Lock className="w-3.5 h-3.5 text-[#3B4CCA]" />
+                          Private Party
+                        </div>
+                        <p className="text-[10px] text-[#6B5E58] mt-0.5">
+                          Join via Room Code only
+                        </p>
                       </button>
                     </div>
-                  )}
+
+                    <button
+                      type="button"
+                      disabled={creatingPartyRoom || !activeCouple || activeCouple.status !== 'active'}
+                      onClick={(e) => {
+                        animateButtonPress(e.currentTarget);
+                        handleCreatePartyRoom();
+                      }}
+                      className="w-full py-3 rounded-2xl bg-[#E11D48] hover:bg-[#BE123C] text-white font-bold text-xs border-2 border-[#2C2523] shadow-[3px_3px_0px_#2C2523] flex items-center justify-center gap-2 disabled:opacity-45"
+                    >
+                      {creatingPartyRoom ? (
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                      ) : (
+                        <Sparkles className="w-4 h-4" />
+                      )}
+                      Create Party Room & Auto-Invite Partner
+                    </button>
+                  </div>
+
+                  {/* Option 2: Join Existing Party Room by Code or Public List */}
+                  <div className="p-4 rounded-2xl bg-[#FDFBF7] border-2 border-[#2C2523] shadow-[3px_3px_0px_#2C2523] space-y-3.5">
+                    <div className="text-xs font-black uppercase tracking-wider text-[#2C2523]">
+                      Option 2 · Join Existing Party Room
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="text"
+                        value={joiningPartyCode}
+                        onChange={(e) => setJoiningPartyCode(e.target.value.toUpperCase())}
+                        placeholder="Enter 6-char Party Code..."
+                        className="flex-1 px-3 py-2 rounded-xl bg-white border-2 border-[#2C2523] text-xs font-mono font-bold uppercase"
+                      />
+                      <button
+                        type="button"
+                        disabled={creatingPartyRoom || !joiningPartyCode.trim()}
+                        onClick={() => handleJoinPartyRoomByCode(joiningPartyCode)}
+                        className="px-4 py-2 rounded-xl bg-[#2C2523] text-white text-xs font-bold border-2 border-[#2C2523] disabled:opacity-45"
+                      >
+                        {creatingPartyRoom ? 'Joining...' : 'Join Code'}
+                      </button>
+                    </div>
+
+                    <div className="space-y-2 max-h-40 overflow-y-auto">
+                      <div className="text-[11px] font-black uppercase text-[#6B5E58]">
+                        Open Public Party Rooms ({publicPartyRooms.length})
+                      </div>
+                      {publicPartyRooms.length === 0 ? (
+                        <div className="p-3 rounded-xl bg-white border border-dashed border-[#2C2523]/30 text-xs text-[#6B5E58] text-center">
+                          No open public party rooms right now. Create one on the left!
+                        </div>
+                      ) : (
+                        publicPartyRooms.map((room) => (
+                          <div
+                            key={room.roomCode}
+                            className="p-2.5 rounded-xl bg-white border-2 border-[#2C2523] flex items-center justify-between gap-2 text-xs"
+                          >
+                            <div>
+                              <div className="font-bold text-[#2C2523]">
+                                #{room.roomCode} · {room.gameTitle}
+                              </div>
+                              <div className="text-[10px] text-[#6B5E58]">
+                                Host: @{room.hostName} · {room.currentCouples ?? 1}/10 Couples
+                              </div>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => handleJoinPartyRoomByCode(room.roomCode)}
+                              className="px-3 py-1.5 rounded-lg bg-[#DEF7EC] border border-[#2C2523] text-[11px] font-bold text-[#03543F]"
+                            >
+                              Join Party
+                            </button>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
                 </div>
-              )}
+              </div>
             </div>
           )}
 
@@ -1632,6 +1440,95 @@ export function PlayGameSetupModal({
                     )}
                   </div>
                 </div>
+
+                {/* Ranked Shield Card Pre-Equip Bar in 2v2 Lobby */}
+                {(() => {
+                  const myLobbyProfile =
+                    teamLobby?.hostUid === currentUser.uid
+                      ? teamLobby?.hostProfile
+                      : teamLobby?.partnerUid === currentUser.uid
+                      ? teamLobby?.partnerProfile
+                      : null;
+                  const myShieldCount =
+                    myLobbyProfile?.shieldCards ?? currentUser.shieldCards ?? 0;
+                  const myShieldArmed =
+                    myLobbyProfile?.shieldCardArmed ??
+                    Boolean(currentUser.shieldCardArmed);
+
+                  return (
+                    <div className="mt-4 rounded-2xl border-2 border-[#2C2523] bg-white p-3.5 shadow-[2px_2px_0px_#2C2523]">
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div className="flex items-start gap-2.5">
+                          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border-2 border-[#2C2523] bg-[#E0F2FE] text-lg">
+                            🛡️
+                          </div>
+                          <div>
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="text-xs font-black uppercase tracking-wider text-[#2C2523]">
+                                Ranked Shield Card (2v2 Loss XP Protection)
+                              </span>
+                              <span className="rounded-md border border-[#2C2523] bg-[#FEF3C7] px-2 py-0.5 font-mono text-[10px] font-black text-[#92400E]">
+                                Owned: {myShieldCount}
+                              </span>
+                              {myShieldArmed && (
+                                <span className="rounded-md border border-[#2C2523] bg-[#DEF7EC] px-2 py-0.5 text-[10px] font-black uppercase text-[#03543F]">
+                                  ARMED FOR NEXT LOSS ✓
+                                </span>
+                              )}
+                            </div>
+                            <p className="mt-0.5 text-[11px] text-[#6B5E58]">
+                              Prevents your personal <strong>-25 XP penalty</strong> on your next 2v2 defeat. Consumed only when a 2v2 loss occurs (does not protect partner XP or couple trophies).
+                            </p>
+                          </div>
+                        </div>
+
+                        <div>
+                          {confirmShieldPrompt !== null ? (
+                            <div className="flex items-center gap-1.5">
+                              <button
+                                type="button"
+                                disabled={togglingShieldCard}
+                                onClick={() => handleToggleShieldCard(confirmShieldPrompt)}
+                                className="rounded-xl border-2 border-[#2C2523] bg-[#03543F] px-3 py-1.5 text-xs font-bold text-white shadow-[2px_2px_0px_#2C2523] disabled:opacity-50"
+                              >
+                                {togglingShieldCard
+                                  ? 'Updating...'
+                                  : confirmShieldPrompt
+                                  ? 'Confirm Pre-Equip'
+                                  : 'Confirm Disarm'}
+                              </button>
+                              <button
+                                type="button"
+                                disabled={togglingShieldCard}
+                                onClick={() => setConfirmShieldPrompt(null)}
+                                className="rounded-xl border-2 border-[#2C2523] bg-white px-2.5 py-1.5 text-xs font-bold text-[#2C2523]"
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                          ) : (
+                            <button
+                              type="button"
+                              disabled={(!myShieldArmed && myShieldCount <= 0) || togglingShieldCard}
+                              onClick={() => setConfirmShieldPrompt(!myShieldArmed)}
+                              className={`rounded-xl border-2 border-[#2C2523] px-3.5 py-2 text-xs font-bold shadow-[2px_2px_0px_#2C2523] transition-colors disabled:opacity-45 ${
+                                myShieldArmed
+                                  ? 'bg-[#DEF7EC] text-[#03543F] hover:bg-[#BCF0DA]'
+                                  : 'bg-[#E0F2FE] text-[#1E429F] hover:bg-[#BAE6FD]'
+                              }`}
+                            >
+                              {myShieldArmed
+                                ? '🛡️ Shield Armed (Click to Disarm)'
+                                : myShieldCount > 0
+                                ? 'Pre-Equip Ranked Shield Card'
+                                : '0 Shield Cards (Drop from Rare+ Chests)'}
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })()}
               </div>
 
               {/* Two Main 2v2 Actions Side-by-Side on the Same Screen */}

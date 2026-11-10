@@ -25,7 +25,7 @@ import {
   ShieldCheck,
   RefreshCw,
 } from 'lucide-react';
-import { MULTIPLAYER_GAMES, getSkinById } from '@/src/lib/arcade-data';
+import { MULTIPLAYER_GAMES, PARTY_GAMES, getSkinById } from '@/src/lib/arcade-data';
 import { EnrichedCouplePairing } from './CouplePairingPanel';
 import { ArcadeCircularLoader, ArcadeInlineSpinner } from './ArcadeLoader';
 import { soundFX } from '@/src/lib/sound';
@@ -100,14 +100,17 @@ export interface RoomChatMessage {
 export interface MultiplayerRoomState {
   roomCode: string;
   gameId: string;
-  mode: '1v1' | '2v2';
+  gameTitle?: string;
+  mode: '1v1' | '2v2' | 'party';
   visibility?: 'public' | 'private';
   joinPolicy?: 'immediate' | 'approval_required';
   maxPlayers: number;
   hostUid: string;
   hostName: string;
+  hostUsername?: string;
   hostAvatar?: string;
   status: 'lobby' | 'playing' | 'finished' | 'expired';
+  sessionSeed?: number;
   settings: Record<string, unknown>;
   players: RoomParticipant[];
   teams: RoomCoupleTeam[];
@@ -124,7 +127,7 @@ export interface PublicRoomSummaryItem {
   roomCode: string;
   gameId: string;
   gameName: string;
-  mode: '1v1' | '2v2';
+  mode: '1v1' | '2v2' | 'party';
   visibility: 'public' | 'private';
   joinPolicy: 'immediate' | 'approval_required';
   hostUid: string;
@@ -146,7 +149,7 @@ interface RoomInspectionResult {
   room: {
     roomCode: string;
     gameId: string;
-    mode: '1v1' | '2v2';
+    mode: '1v1' | '2v2' | 'party';
     visibility?: 'public' | 'private';
     joinPolicy?: 'immediate' | 'approval_required';
     maxPlayers: number;
@@ -220,26 +223,36 @@ function getAvatarEmoji(avatarCode?: string) {
 }
 
 export function parseRawDatabaseRoom(raw: Record<string, unknown>): MultiplayerRoomState {
+  const modeVal =
+    raw.mode === 'party' ? 'party' : raw.mode === '2v2' ? '2v2' : '1v1';
   return {
     roomCode: String(raw.roomCode || ''),
     gameId: String(raw.gameId || 'chess'),
-    mode: raw.mode === '2v2' ? '2v2' : '1v1',
+    gameTitle: String(raw.gameTitle || raw.gameName || ''),
+    mode: modeVal,
     visibility: raw.visibility === 'private' ? 'private' : 'public',
     joinPolicy:
       raw.joinPolicy === 'approval_required' ? 'approval_required' : 'immediate',
-    maxPlayers: Number(raw.maxPlayers || (raw.mode === '2v2' ? 4 : 2)),
+    maxPlayers: Number(
+      raw.maxPlayers || (modeVal === 'party' ? 20 : modeVal === '2v2' ? 4 : 2)
+    ),
     hostUid: String(raw.hostUid || ''),
-    hostName: String(raw.hostName || 'Host'),
+    hostName: String(raw.hostName || raw.hostUsername || 'Host'),
+    hostUsername: String(raw.hostUsername || raw.hostName || 'Host'),
     hostAvatar: String(raw.hostAvatar || '🦊'),
     status: (raw.status as MultiplayerRoomState['status']) || 'lobby',
-    settings: safeParse(raw.settingsJson, {}),
-    players: safeParse(raw.playersJson, []),
-    teams: safeParse(raw.teamsJson, []),
-    pendingRequests: safeParse(raw.pendingRequestsJson, []),
-    invitedUids: safeParse(raw.invitedUidsJson, []),
-    gameState: safeParse(raw.gameStateJson, {}),
-    chat: safeParse(raw.chatJson, []),
-    voiceParticipants: safeParse(raw.voiceParticipantsJson, []),
+    sessionSeed: typeof raw.sessionSeed === 'number' ? raw.sessionSeed : undefined,
+    settings: safeParse(raw.settingsJson ?? raw.settings, {}),
+    players: safeParse(raw.playersJson ?? raw.players, []),
+    teams: safeParse(raw.teamsJson ?? raw.teams, []),
+    pendingRequests: safeParse(raw.pendingRequestsJson ?? raw.pendingRequests, []),
+    invitedUids: safeParse(raw.invitedUidsJson ?? raw.invitedUids, []),
+    gameState: safeParse(raw.gameStateJson ?? raw.gameState, {}),
+    chat: safeParse(raw.chatJson ?? raw.chat, []),
+    voiceParticipants: safeParse(
+      raw.voiceParticipantsJson ?? raw.voiceParticipants,
+      []
+    ),
   };
 }
 
@@ -284,8 +297,8 @@ export function VoiceAndLobbyDock({
   );
   const selectedGameDef =
     MULTIPLAYER_GAMES.find((g) => g.id === selectedGameId) || MULTIPLAYER_GAMES[0];
-  const [selectedMode, setSelectedMode] = useState<'1v1' | '2v2'>(
-    preferredMode || '1v1'
+  const [selectedMode, setSelectedMode] = useState<'1v1' | '2v2' | 'party'>(
+    preferredMode || '2v2'
   );
   const [roundSetting, setRoundSetting] = useState<string>('Standard Match (Best of 3)');
   const [includePartnerInRoom, setIncludePartnerInRoom] = useState<boolean>(true);
@@ -298,7 +311,7 @@ export function VoiceAndLobbyDock({
   const [publicRooms, setPublicRooms] = useState<PublicRoomSummaryItem[]>([]);
   const [loadingPublicRooms, setLoadingPublicRooms] = useState(false);
   const [publicFilterGameId, setPublicFilterGameId] = useState<string>('all');
-  const [publicFilterMode, setPublicFilterMode] = useState<'all' | '1v1' | '2v2'>('all');
+  const [publicFilterMode, setPublicFilterMode] = useState<'all' | '2v2' | 'party'>('all');
 
   useEffect(() => {
     if (!preferredMode) return;
@@ -527,10 +540,16 @@ export function VoiceAndLobbyDock({
     };
   }, []);
 
-  async function handleSearchInviteTargets(queryOverride?: string, modeOverride?: '1v1' | '2v2') {
+  async function handleSearchInviteTargets(
+    queryOverride?: string,
+    modeOverride?: '1v1' | '2v2' | 'party'
+  ) {
     const q = queryOverride !== undefined ? queryOverride : inviteSearchQuery;
+    const resolvedOverride: '1v1' | '2v2' | undefined =
+      modeOverride === 'party' ? '2v2' : modeOverride;
+    const fallbackMode: '1v1' | '2v2' = selectedMode === '1v1' ? '1v1' : '2v2';
     const effectiveInviteType: '1v1' | '2v2' =
-      modeOverride || (selectedGameDef.supports2v2 ? selectedMode : '1v1');
+      resolvedOverride || (selectedGameDef.supports2v2 ? fallbackMode : '1v1');
     setIsSearchingInviteTargets(true);
     setInviteSearchError(null);
     try {
@@ -596,8 +615,9 @@ export function VoiceAndLobbyDock({
   // Debounced username search when on the Invite tab
   useEffect(() => {
     if (lobbyTab !== 'invite' || !currentUser.uid) return;
+    const fallbackMode: '1v1' | '2v2' = selectedMode === '1v1' ? '1v1' : '2v2';
     const effectiveInviteType: '1v1' | '2v2' = selectedGameDef.supports2v2
-      ? selectedMode
+      ? fallbackMode
       : '1v1';
     const timer = setTimeout(() => {
       handleSearchInviteTargets(inviteSearchQuery, effectiveInviteType);
@@ -826,7 +846,7 @@ export function VoiceAndLobbyDock({
   async function handleCreateRoomSubmit() {
     setRoomErrorMsg(null);
     setRoomStatusMsg(null);
-    const effectiveMode = selectedGameDef.supports2v2 ? selectedMode : '1v1';
+    const effectiveMode = selectedMode === 'party' ? 'party' : '2v2';
     if (!activeCouple) {
       setRoomErrorMsg(
         `Couple pairing is mandatory for ${effectiveMode.toUpperCase()} multiplayer. Pair with your partner in Profile & Couple first.`
@@ -845,7 +865,10 @@ export function VoiceAndLobbyDock({
         },
         body: JSON.stringify({
           action: 'create_room',
-          gameId: selectedGameId,
+          gameId:
+            effectiveMode === 'party' && !selectedGameId.startsWith('party-')
+              ? PARTY_GAMES[0].id
+              : selectedGameId,
           mode: effectiveMode,
           visibility: roomVisibility,
           joinPolicy: roomVisibility === 'public' ? roomJoinPolicy : 'immediate',
@@ -1551,7 +1574,7 @@ export function VoiceAndLobbyDock({
                 </button>
 
                 <div className="flex items-center justify-between border-t border-stone-800 pt-2 text-[11px] text-stone-400">
-                  <span>Want to play a 1v1 match?</span>
+                  <span>Want to challenge your paired partner in 1v1?</span>
                   <div className="flex gap-2">
                     <button
                       type="button"
@@ -1562,18 +1585,7 @@ export function VoiceAndLobbyDock({
                       }}
                       className="font-semibold text-amber-300 hover:underline"
                     >
-                      Invite by Username
-                    </button>
-                    <span>·</span>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setSelectedMode('1v1');
-                        setLobbyTab('create');
-                      }}
-                      className="font-semibold text-teal-300 hover:underline"
-                    >
-                      Create 1v1 Room
+                      Challenge Your Partner (1v1)
                     </button>
                   </div>
                 </div>
@@ -1937,40 +1949,43 @@ export function VoiceAndLobbyDock({
           </div>
         )}
 
-        {/* TAB 1: CREATE ROOM */}
+        {/* TAB 1: CREATE ROOM (2v2 Couple & 3-10 Couple Party Rooms; 1v1 is Partner-Only Duel) */}
         {lobbyTab === 'create' && (
           <div className="mt-3 space-y-3 rounded-xl border border-stone-800 bg-stone-950 p-3 text-xs">
             <div>
               <span className="block font-medium text-stone-300">
-                1. Select Multiplayer Mode (Couple Pairing Mandatory)
+                1. Select Room Format (1v1 uses Direct Partner Challenge)
               </span>
               <div className="mt-1 grid grid-cols-2 gap-1.5">
                 <button
                   type="button"
-                  onClick={() => setSelectedMode('1v1')}
-                  className={`rounded-lg border py-1.5 text-xs font-bold transition-colors ${
-                    selectedMode === '1v1'
-                      ? 'border-amber-500 bg-amber-500/20 text-amber-200'
-                      : 'border-stone-800 bg-stone-900 text-stone-400'
-                  }`}
-                >
-                  1v1 Mode (14 Games)
-                </button>
-                <button
-                  type="button"
                   onClick={() => {
                     setSelectedMode('2v2');
-                    if (!selectedGameDef.supports2v2) {
+                    if (selectedGameId.startsWith('party-') || !selectedGameDef.supports2v2) {
                       setSelectedGameId('quiz-battle');
                     }
                   }}
                   className={`rounded-lg border py-1.5 text-xs font-bold transition-colors ${
-                    selectedMode === '2v2'
+                    selectedMode !== 'party'
                       ? 'border-rose-400 bg-rose-500/20 text-rose-200'
                       : 'border-stone-800 bg-stone-900 text-stone-400'
                   }`}
                 >
                   2v2 Couple Mode (10 Games)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSelectedMode('party');
+                    setSelectedGameId(PARTY_GAMES[0].id);
+                  }}
+                  className={`rounded-lg border py-1.5 text-xs font-bold transition-colors ${
+                    selectedMode === 'party'
+                      ? 'border-amber-500 bg-amber-500/20 text-amber-200'
+                      : 'border-stone-800 bg-stone-900 text-stone-400'
+                  }`}
+                >
+                  Party Games (3–10 Couples)
                 </button>
               </div>
             </div>
@@ -2052,28 +2067,25 @@ export function VoiceAndLobbyDock({
 
             <div>
               <label htmlFor="create-room-game-select" className="block font-medium text-stone-300">
-                {selectedMode === '2v2'
-                  ? '3. Select 2v2 Couple Mode Game (10 Games)'
-                  : '3. Select 1v1 Mode Game (14 Games)'}
+                {selectedMode === 'party'
+                  ? '3. Select Party Game (12 Games · 3–10 Couples)'
+                  : '3. Select 2v2 Couple Mode Game (10 Games)'}
               </label>
               <select
                 id="create-room-game-select"
-                value={
-                  selectedMode === '2v2' && !selectedGameDef.supports2v2
-                    ? 'quiz-battle'
-                    : selectedGameId
-                }
-                onChange={(e) => {
-                  const nextId = e.target.value;
-                  setSelectedGameId(nextId);
-                  const def = MULTIPLAYER_GAMES.find((g) => g.id === nextId);
-                  if (!def?.supports2v2 && selectedMode === '2v2') {
-                    setSelectedMode('1v1');
-                  }
-                }}
+                value={selectedGameId}
+                onChange={(e) => setSelectedGameId(e.target.value)}
                 className="mt-1 w-full rounded-lg border border-stone-800 bg-stone-900 px-2.5 py-1.5 text-xs text-stone-100 focus:border-amber-500 focus:outline-none"
               >
-                {selectedMode === '2v2' ? (
+                {selectedMode === 'party' ? (
+                  <optgroup label="Party Games (3–10 Couples · 6–20 Players · Placement XP)">
+                    {PARTY_GAMES.map((g, idx) => (
+                      <option key={g.id} value={g.id}>
+                        {String(idx + 1).padStart(2, '0')}. {g.title} (Party · +XP)
+                      </option>
+                    ))}
+                  </optgroup>
+                ) : (
                   <>
                     <optgroup label="2v2 Party, Trivia, Word & Drawing (6 Games)">
                       {MULTIPLAYER_GAMES.filter((g) => g.supports2v2 && g.category !== 'cooperative').map((g) => (
@@ -2090,23 +2102,6 @@ export function VoiceAndLobbyDock({
                       ))}
                     </optgroup>
                   </>
-                ) : (
-                  <>
-                    <optgroup label="1v1 Exclusive Board & Strategy Duels (4 Games)">
-                      {MULTIPLAYER_GAMES.filter((g) => !g.supports2v2).map((g) => (
-                        <option key={g.id} value={g.id}>
-                          {String(g.number).padStart(2, '0')}. {g.title} (1v1 Only · +XP)
-                        </option>
-                      ))}
-                    </optgroup>
-                    <optgroup label="1v1 Party, Trivia, Word & Co-Op Duels (10 Games)">
-                      {MULTIPLAYER_GAMES.filter((g) => g.supports2v2).map((g) => (
-                        <option key={g.id} value={g.id}>
-                          {String(g.number).padStart(2, '0')}. {g.title} (1v1 Mode · +XP)
-                        </option>
-                      ))}
-                    </optgroup>
-                  </>
                 )}
               </select>
               <div className="mt-2 rounded-lg border border-stone-800 bg-stone-900 p-2 text-[11px]">
@@ -2119,14 +2114,14 @@ export function VoiceAndLobbyDock({
                       className="accent-amber-500"
                     />
                     <span>
-                      {selectedMode === '2v2' && selectedGameDef.supports2v2
-                        ? `Seat our Couple (${activeCouple.coupleName}) as Team 1`
-                        : `Seat paired partner (${pairedPartnerProfile?.username || 'Partner'}) as 1v1 Opponent`}
+                      {selectedMode === 'party'
+                        ? `Auto-invite paired partner to Couple Team #1 (${activeCouple.coupleName})`
+                        : `Seat our Couple (${activeCouple.coupleName}) as Team 1`}
                     </span>
                   </label>
                 ) : (
                   <span className="text-amber-300">
-                    Mandatory: Pair with your partner in Profile first to create a 1v1 or 2v2 room.
+                    Mandatory: Pair with your partner in Profile first to create a room.
                   </span>
                 )}
               </div>
@@ -2321,7 +2316,7 @@ export function VoiceAndLobbyDock({
                 </select>
 
                 <div className="grid grid-cols-3 gap-1 rounded-lg border border-stone-800 bg-stone-900 p-0.5">
-                  {(['all', '1v1', '2v2'] as const).map((m) => (
+                  {(['all', '2v2', 'party'] as const).map((m) => (
                     <button
                       key={m}
                       type="button"

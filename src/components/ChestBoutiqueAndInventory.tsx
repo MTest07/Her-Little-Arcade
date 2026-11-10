@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import gsap from 'gsap';
 import {
   Sparkles,
@@ -18,6 +18,13 @@ import {
   ShieldAlert,
   Camera,
   Heart,
+  Shield,
+  SlidersHorizontal,
+  ArrowUpDown,
+  User,
+  Edit3,
+  RefreshCw,
+  Upload,
 } from 'lucide-react';
 import {
   ARCADE_SKINS,
@@ -25,14 +32,16 @@ import {
   ARCADE_CHESTS,
   ARCADE_KEYS,
   DUPLICATE_COSMETIC_COIN_PAYOUT,
+  RENAME_CARD_COST_COINS,
+  isDirectCoinPurchaseAllowed,
   SkinRarity,
+  SKIN_RARITY_ORDER,
+  SKIN_RARITY_META,
   ArcadeChestDef,
   getSkinById,
   getBannerById,
-  getKeyByTier,
   getChestByTier,
   getRewardPoolForChest,
-  parseTierCountMap,
 } from '@/src/lib/arcade-data';
 import {
   AnimatedSkinnedAvatar,
@@ -42,24 +51,97 @@ import {
   CustomKeyArtwork,
   getRarityBadgeClasses,
 } from './CosmeticAvatarAndBanner';
+import { CustomArcadeCoinSvg } from './ProgressionHud';
+
+export type DedicatedShopOrInventoryPage =
+  | 'shop-profile'
+  | 'shop-banners'
+  | 'shop-avatars'
+  | 'shop-chests'
+  | 'shop-keys'
+  | 'inventory';
 
 export interface ChestOpeningResultPayload {
   id?: number;
   chestTier: SkinRarity;
   chestName: string;
   openMethod: 'coins' | 'key' | 'inventory';
-  rewardCategory: 'skin' | 'banner';
+  rewardCategory: 'skin' | 'banner' | 'consumable';
   rewardId: string;
   rewardName: string;
   rewardRarity: SkinRarity;
   rewardDescription?: string;
   wasDuplicate: boolean;
   duplicateCoinsAwarded: number;
+  coinsOverflowClipped?: number;
   createdAt?: string | Date;
 }
 
 /* ============================================================================
-   1. GSAP 5-TIER CHEST-OPENING & CARD-DRAWING REVEAL MODAL
+   CUSTOM RANKED SHIELD CARD ARTWORK
+   ============================================================================ */
+
+export function RankedShieldCardArtwork({ size = 84 }: { size?: number }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 96 96"
+      fill="none"
+      xmlns="http://www.w3.org/2000/svg"
+      aria-hidden="true"
+    >
+      <defs>
+        <linearGradient id="shieldCardGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stopColor="#38BDF8" />
+          <stop offset="50%" stopColor="#2563EB" />
+          <stop offset="100%" stopColor="#1E1B4B" />
+        </linearGradient>
+        <linearGradient id="shieldGoldTrim" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stopColor="#FEF08A" />
+          <stop offset="50%" stopColor="#F59E0B" />
+          <stop offset="100%" stopColor="#B45309" />
+        </linearGradient>
+      </defs>
+      {/* Outer card frame */}
+      <rect
+        x="12"
+        y="8"
+        width="72"
+        height="80"
+        rx="12"
+        fill="#0F172A"
+        stroke="url(#shieldGoldTrim)"
+        strokeWidth="3"
+      />
+      {/* Inner celestial shield crest */}
+      <path
+        d="M48 18L72 28V47C72 63.5 61.6 76.2 48 81C34.4 76.2 24 63.5 24 47V28L48 18Z"
+        fill="url(#shieldCardGrad)"
+        stroke="url(#shieldGoldTrim)"
+        strokeWidth="3"
+        strokeLinejoin="round"
+      />
+      {/* Inner chevron */}
+      <path
+        d="M48 27L63 34V46.5C63 57.5 56.5 66.2 48 70C39.5 66.2 33 57.5 33 46.5V34L48 27Z"
+        stroke="#E0F2FE"
+        strokeOpacity="0.65"
+        strokeWidth="1.5"
+      />
+      {/* Center XP protection star */}
+      <path
+        d="M48 34L51.1 41.8L59.5 42.4L53.1 47.9L55.1 56L48 51.6L40.9 56L42.9 47.9L36.5 42.4L44.9 41.8L48 34Z"
+        fill="#FEF08A"
+        stroke="#92400E"
+        strokeWidth="1.2"
+      />
+    </svg>
+  );
+}
+
+/* ============================================================================
+   1. GSAP 5-TIER CHEST-OPENING, DUPLICATE CONVERSION & CARD-DRAWING MODAL
    ============================================================================ */
 
 interface ChestOpeningCeremonyModalProps {
@@ -69,7 +151,7 @@ interface ChestOpeningCeremonyModalProps {
   playerAvatarId?: string;
   playerCustomPhotoUrl?: string;
   onClose: () => void;
-  onEquipReward?: (category: 'skin' | 'banner', itemId: string) => Promise<void>;
+  onEquipReward?: (category: 'skin' | 'banner' | 'consumable', itemId: string) => Promise<void>;
 }
 
 export function ChestOpeningCeremonyModal({
@@ -81,15 +163,17 @@ export function ChestOpeningCeremonyModal({
   onClose,
   onEquipReward,
 }: ChestOpeningCeremonyModalProps) {
-  const [phase, setPhase] = useState<'animating' | 'revealed'>('animating');
+  const [phase, setPhase] = useState<'animating' | 'duplicate_morph' | 'revealed'>('animating');
   const [equipping, setEquipping] = useState(false);
   const [equippedSuccess, setEquippedSuccess] = useState(false);
+  const [animatedDupCoins, setAnimatedDupCoins] = useState(0);
 
   const stageRef = useRef<HTMLDivElement | null>(null);
   const chestWrapRef = useRef<HTMLDivElement | null>(null);
   const ringsRef = useRef<HTMLDivElement | null>(null);
   const raysRef = useRef<HTMLDivElement | null>(null);
   const cardWrapRef = useRef<HTMLDivElement | null>(null);
+  const dupCoinBurstRef = useRef<HTMLDivElement | null>(null);
   const timelineRef = useRef<gsap.core.Timeline | null>(null);
 
   const chestDef = getChestByTier(chestTier) || ARCADE_CHESTS[0];
@@ -103,6 +187,11 @@ export function ChestOpeningCeremonyModal({
 
     Promise.resolve().then(() => {
       setEquippedSuccess(false);
+      setAnimatedDupCoins(
+        prefersReducedMotion && openingResult.wasDuplicate
+          ? openingResult.duplicateCoinsAwarded
+          : 0
+      );
       setPhase(prefersReducedMotion ? 'revealed' : 'animating');
     });
 
@@ -114,6 +203,9 @@ export function ChestOpeningCeremonyModal({
       const tl = gsap.timeline({
         onComplete: () => {
           setPhase('revealed');
+          if (openingResult.wasDuplicate) {
+            setAnimatedDupCoins(openingResult.duplicateCoinsAwarded);
+          }
         },
       });
       timelineRef.current = tl;
@@ -132,6 +224,13 @@ export function ChestOpeningCeremonyModal({
         rotationY: 180,
         opacity: 0,
       });
+      if (dupCoinBurstRef.current) {
+        gsap.set(dupCoinBurstRef.current, {
+          scale: 0.5,
+          opacity: 0,
+          y: 12,
+        });
+      }
 
       // Stage 1: Chest Entrance
       tl.to(chestWrapRef.current, {
@@ -144,7 +243,6 @@ export function ChestOpeningCeremonyModal({
 
       // Stage 2: Tier-Unique Chest Opening Choreography
       if (chestTier === 'Common') {
-        // Quick kraft parcel tremble & slide
         tl.to(chestWrapRef.current, {
           rotation: 4,
           duration: 0.08,
@@ -157,7 +255,6 @@ export function ChestOpeningCeremonyModal({
           ease: 'power2.out',
         });
       } else if (chestTier === 'Uncommon') {
-        // Brass clasp snap + botanical bloom
         tl.to(chestWrapRef.current, {
           y: -12,
           scale: 1.1,
@@ -181,7 +278,6 @@ export function ChestOpeningCeremonyModal({
             repeat: 5,
           });
       } else if (chestTier === 'Rare') {
-        // 180-degree compass dial spin + sapphire beam
         tl.to(
           ringsRef.current,
           {
@@ -210,7 +306,6 @@ export function ChestOpeningCeremonyModal({
             duration: 0.4,
           });
       } else if (chestTier === 'Epic') {
-        // Crimson lacquer doors + sakura storm vortex
         tl.to(ringsRef.current, {
           opacity: 0.95,
           scale: 1.35,
@@ -238,7 +333,6 @@ export function ChestOpeningCeremonyModal({
             ease: 'power3.out',
           });
       } else {
-        // Legendary: Solar Eclipse Levitation, Shattered Lock & 3 Astrolabe Rings
         tl.to(chestWrapRef.current, {
           y: -28,
           scale: 1.22,
@@ -298,6 +392,42 @@ export function ChestOpeningCeremonyModal({
         },
         '-=0.2'
       );
+
+      // Stage 4: Special Duplicate-to-Coin Conversion Animation
+      if (openingResult.wasDuplicate && openingResult.duplicateCoinsAwarded > 0) {
+        const counterObj = { val: 0 };
+        tl.call(() => setPhase('duplicate_morph'))
+          .to(cardWrapRef.current, {
+            scale: 1.06,
+            duration: 0.2,
+            yoyo: true,
+            repeat: 1,
+            ease: 'power2.inOut',
+          })
+          .to(
+            dupCoinBurstRef.current,
+            {
+              scale: 1,
+              opacity: 1,
+              y: 0,
+              duration: 0.45,
+              ease: 'back.out(1.7)',
+            },
+            '-=0.1'
+          )
+          .to(
+            counterObj,
+            {
+              val: openingResult.duplicateCoinsAwarded,
+              duration: 0.75,
+              ease: 'power2.out',
+              onUpdate: () => {
+                setAnimatedDupCoins(Math.round(counterObj.val));
+              },
+            },
+            '-=0.3'
+          );
+      }
     }, stageRef);
 
     return () => {
@@ -311,6 +441,9 @@ export function ChestOpeningCeremonyModal({
   const handleSkipAnimation = () => {
     if (timelineRef.current) {
       timelineRef.current.progress(1);
+    }
+    if (openingResult.wasDuplicate) {
+      setAnimatedDupCoins(openingResult.duplicateCoinsAwarded);
     }
     setPhase('revealed');
   };
@@ -340,7 +473,7 @@ export function ChestOpeningCeremonyModal({
               {chestDef.name} · {chestDef.openingAnimationStyle}
             </span>
           </div>
-          {phase === 'animating' ? (
+          {phase !== 'revealed' ? (
             <button
               type="button"
               onClick={handleSkipAnimation}
@@ -361,7 +494,7 @@ export function ChestOpeningCeremonyModal({
         </div>
 
         {/* Animation & Card-Drawing Stage */}
-        <div className="relative min-h-[310px] flex flex-col items-center justify-center py-6">
+        <div className="relative min-h-[340px] flex flex-col items-center justify-center py-6">
           {/* Orbital Astrolabe Rings */}
           <div
             ref={ringsRef}
@@ -380,7 +513,9 @@ export function ChestOpeningCeremonyModal({
           {/* Chest Vessel */}
           <div
             ref={chestWrapRef}
-            className={`${phase === 'revealed' ? 'hidden' : 'flex'} flex-col items-center justify-center z-10`}
+            className={`${
+              phase === 'revealed' || phase === 'duplicate_morph' ? 'hidden' : 'flex'
+            } flex-col items-center justify-center z-10`}
           >
             <CustomChestArtwork
               tier={chestTier}
@@ -392,11 +527,13 @@ export function ChestOpeningCeremonyModal({
             </p>
           </div>
 
-          {/* Drawn Cosmetic Reward Card */}
+          {/* Drawn Cosmetic or Consumable Reward Card */}
           <div
             ref={cardWrapRef}
             className={`${
-              phase === 'revealed' ? 'opacity-100 scale-100' : ''
+              phase === 'revealed' || phase === 'duplicate_morph'
+                ? 'opacity-100 scale-100'
+                : ''
             } w-full max-w-sm z-20`}
           >
             <div className="sketch-scrap p-5 border-2 border-[#38352f] bg-[#fcf8ef] shadow-lg space-y-4">
@@ -404,7 +541,9 @@ export function ChestOpeningCeremonyModal({
                 <span className="text-[11px] font-mono uppercase tracking-wider text-[#514d44]">
                   {openingResult.rewardCategory === 'skin'
                     ? 'Animated Avatar Frame Skin'
-                    : 'Profile Backdrop Banner'}
+                    : openingResult.rewardCategory === 'banner'
+                    ? 'Profile Backdrop Banner'
+                    : '2v2 Ranked Consumable'}
                 </span>
                 <span
                   className={`px-2 py-0.5 text-xs font-mono font-bold uppercase rounded border ${getRarityBadgeClasses(
@@ -415,8 +554,8 @@ export function ChestOpeningCeremonyModal({
                 </span>
               </div>
 
-              {/* Visual Preview of Drawn Skin or Banner */}
-              <div className="py-3 flex flex-col items-center justify-center">
+              {/* Visual Preview of Drawn Skin, Banner, or Ranked Shield Card */}
+              <div className="py-3 flex flex-col items-center justify-center relative">
                 {openingResult.rewardCategory === 'skin' ? (
                   <AnimatedSkinnedAvatar
                     avatarId={playerAvatarId}
@@ -424,7 +563,7 @@ export function ChestOpeningCeremonyModal({
                     skinId={openingResult.rewardId}
                     size="xl"
                   />
-                ) : (
+                ) : openingResult.rewardCategory === 'banner' ? (
                   <ProfileBannerBackdrop
                     bannerId={openingResult.rewardId}
                     className="w-full h-28 flex items-center justify-center p-3"
@@ -436,6 +575,10 @@ export function ChestOpeningCeremonyModal({
                       size="md"
                     />
                   </ProfileBannerBackdrop>
+                ) : (
+                  <div className="p-3 rounded-2xl bg-sky-950/20 border border-sky-500/40 flex flex-col items-center">
+                    <RankedShieldCardArtwork size={96} />
+                  </div>
                 )}
               </div>
 
@@ -450,25 +593,37 @@ export function ChestOpeningCeremonyModal({
                 )}
               </div>
 
-              {/* Duplicate Conversion Notice OR New Item Badge */}
+              {/* Duplicate Conversion Transformation Banner OR New Item Badge */}
               {openingResult.wasDuplicate ? (
-                <div className="p-3 rounded bg-[#f0dfa0]/80 border border-[#38352f] text-xs text-[#38352f] space-y-1">
-                  <div className="font-bold flex items-center justify-center gap-1.5">
-                    <Coins className="w-4 h-4 text-[#9e3a2e]" />
+                <div
+                  ref={dupCoinBurstRef}
+                  className="p-3.5 rounded-xl bg-gradient-to-r from-amber-200/90 via-yellow-100 to-amber-200/90 border-2 border-[#38352f] text-xs text-[#38352f] space-y-1.5 shadow-md"
+                >
+                  <div className="flex items-center justify-center gap-2 text-xs font-mono uppercase tracking-wider text-[#9e3a2e] font-bold">
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    <span>Duplicate Item Transformed into Coins</span>
+                  </div>
+                  <div className="text-lg font-black flex items-center justify-center gap-2 text-[#38352f]">
+                    <CustomArcadeCoinSvg className="w-6 h-6" />
                     <span>
-                      Duplicate {openingResult.rewardRarity} Converted: +
-                      {openingResult.duplicateCoinsAwarded} Coins!
+                      +{animatedDupCoins.toLocaleString()} Coins Received!
                     </span>
                   </div>
                   <p className="text-[11px] text-[#514d44]">
-                    You already own this {openingResult.rewardCategory}, so the arcade
-                    automatically credited rarity-scaled Coins to your balance.
+                    {openingResult.rewardRarity} duplicate compensation (+
+                    {openingResult.duplicateCoinsAwarded.toLocaleString()} Coins) was
+                    automatically credited without adding a duplicate item to your
+                    inventory.
                   </p>
                 </div>
               ) : (
                 <div className="p-2.5 rounded bg-emerald-500/15 border border-emerald-700/40 text-xs font-bold text-emerald-900 dark:text-emerald-200 flex items-center justify-center gap-1.5">
                   <CheckCircle2 className="w-4 h-4" />
-                  <span>New Cosmetic Added to Your Inventory!</span>
+                  <span>
+                    {openingResult.rewardCategory === 'consumable'
+                      ? 'Ranked Shield Card Added to Inventory → Consumables!'
+                      : 'New Cosmetic Added to Your Inventory!'}
+                  </span>
                 </div>
               )}
             </div>
@@ -478,7 +633,7 @@ export function ChestOpeningCeremonyModal({
         {/* Footer Buttons */}
         {phase === 'revealed' && (
           <div className="pt-3 border-t border-[#b3ac9d] flex items-center justify-center gap-3">
-            {onEquipReward && !equippedSuccess && (
+            {onEquipReward && !equippedSuccess && !openingResult.wasDuplicate && (
               <button
                 type="button"
                 disabled={equipping}
@@ -489,6 +644,8 @@ export function ChestOpeningCeremonyModal({
                 <span>
                   {equipping
                     ? 'Equipping...'
+                    : openingResult.rewardCategory === 'consumable'
+                    ? 'Arm Shield for Next 2v2 Match'
                     : `Equip ${
                         openingResult.rewardCategory === 'skin' ? 'Skin Frame' : 'Banner'
                       } Now`}
@@ -515,7 +672,21 @@ export function ChestOpeningCeremonyModal({
 }
 
 /* ============================================================================
-   2. UNIFIED COSMETIC BOUTIQUE (CHESTS, SKINS, BANNERS) & 4-CATEGORY INVENTORY
+   2. PURCHASE CONFIRMATION MODAL & SHIELD EQUIP CONFIRMATION MODAL
+   ============================================================================ */
+
+interface PendingPurchaseOrder {
+  kind: 'skin' | 'banner' | 'chest_store' | 'chest_open' | 'rename_card';
+  itemId: string;
+  itemName: string;
+  rarity: SkinRarity;
+  costCoins: number;
+  description: string;
+  chestTier?: SkinRarity;
+}
+
+/* ============================================================================
+   3. DEDICATED SHOP PAGES (PROFILE, BANNERS, AVATARS, CHESTS, KEYS) & 5-TAB INVENTORY
    ============================================================================ */
 
 interface CosmeticChestShopAndInventorySuiteProps {
@@ -526,6 +697,9 @@ interface CosmeticChestShopAndInventorySuiteProps {
     customPhotoUrl?: string;
     coins: number;
     level: number;
+    renameCards?: number;
+    shieldCards?: number;
+    shieldCardArmed?: boolean;
     equippedSkin?: string;
     equippedBanner?: string;
     unlockedItems: string[];
@@ -551,8 +725,10 @@ interface CosmeticChestShopAndInventorySuiteProps {
     duplicateCoinsAwarded: number;
     createdAt?: string;
   }>;
+  activePage?: DedicatedShopOrInventoryPage;
+  onNavigatePage?: (page: DedicatedShopOrInventoryPage) => void;
   initialSection?: 'chests' | 'skins' | 'banners' | 'inventory';
-  onOpenPhotoStudio?: () => void;
+  onOpenPhotoStudio?: (mode?: 'upload' | 'camera') => void;
   onBuyChest: (chestTier: SkinRarity) => Promise<void>;
   onOpenChest: (
     chestTier: SkinRarity,
@@ -562,12 +738,17 @@ interface CosmeticChestShopAndInventorySuiteProps {
   onEquipSkin: (skinId: string, applyToCouple?: boolean) => Promise<void>;
   onPurchaseBanner: (bannerId: string) => Promise<void>;
   onEquipBanner: (bannerId: string, applyToCouple?: boolean) => Promise<void>;
+  onToggleShieldCard?: (armed: boolean) => Promise<void>;
+  onPurchaseRenameCard?: () => Promise<void>;
+  onUseRenameCard?: (newUsername: string) => Promise<void>;
 }
 
 export function CosmeticChestShopAndInventorySuite({
   player,
   activeCouple,
   chestOpenings = [],
+  activePage,
+  onNavigatePage,
   initialSection = 'chests',
   onOpenPhotoStudio,
   onBuyChest,
@@ -576,18 +757,51 @@ export function CosmeticChestShopAndInventorySuite({
   onEquipSkin,
   onPurchaseBanner,
   onEquipBanner,
+  onToggleShieldCard,
+  onPurchaseRenameCard,
+  onUseRenameCard,
 }: CosmeticChestShopAndInventorySuiteProps) {
-  const [activeTab, setActiveTab] = useState<'chests' | 'skins' | 'banners' | 'inventory'>(
-    initialSection
+  const mapLegacyInitialSection = (
+    sec: 'chests' | 'skins' | 'banners' | 'inventory'
+  ): DedicatedShopOrInventoryPage => {
+    if (sec === 'skins') return 'shop-avatars';
+    if (sec === 'banners') return 'shop-banners';
+    if (sec === 'inventory') return 'inventory';
+    return 'shop-chests';
+  };
+
+  const [internalPage, setInternalPage] = useState<DedicatedShopOrInventoryPage>(
+    activePage || mapLegacyInitialSection(initialSection)
   );
-  const [inventoryCategory, setInventoryCategory] = useState<
-    'all' | 'skins' | 'banners' | 'chests' | 'keys'
-  >('all');
+
+  const currentPage: DedicatedShopOrInventoryPage = activePage || internalPage;
+
+  const handleSelectPage = (nextPage: DedicatedShopOrInventoryPage) => {
+    setInternalPage(nextPage);
+    if (onNavigatePage) {
+      onNavigatePage(nextPage);
+    }
+  };
+
+  // Dedicated 5-Tab Inventory state
+  const [inventoryTab, setInventoryTab] = useState<
+    'avatars' | 'banners' | 'chests' | 'keys' | 'consumables'
+  >('avatars');
+
+  // Filtering & Sorting state across Shop & Inventory pages
+  const [rarityFilter, setRarityFilter] = useState<'ALL' | SkinRarity>('ALL');
+  const [ownershipFilter, setOwnershipFilter] = useState<
+    'ALL' | 'OWNED' | 'PURCHASABLE' | 'CHEST_EXCLUSIVE'
+  >('ALL');
+  const [sortBy, setSortBy] = useState<
+    'rarity_desc' | 'rarity_asc' | 'price_asc' | 'price_desc' | 'name_asc'
+  >('rarity_desc');
+
   const [previewSkinId, setPreviewSkinId] = useState<string>(
     player.equippedSkin || 'skin-classic-notebook'
   );
   const [previewBannerId, setPreviewBannerId] = useState<string>(
-    player.equippedBanner || 'banner-sketchbook-grid'
+    player.equippedBanner || 'banner-warm-sketchbook'
   );
   const [applyToCouple, setApplyToCouple] = useState<boolean>(false);
   const [expandedPoolTier, setExpandedPoolTier] = useState<SkinRarity | null>(null);
@@ -597,41 +811,158 @@ export function CosmeticChestShopAndInventorySuite({
     text: string;
   } | null>(null);
 
+  // Purchase Confirmation Modal state
+  const [pendingPurchase, setPendingPurchase] = useState<PendingPurchaseOrder | null>(
+    null
+  );
+
+  // Ranked Shield Card Pre-Equip Confirmation Modal state
+  const [pendingShieldConfirm, setPendingShieldConfirm] = useState<boolean | null>(
+    null
+  );
+
+  // Rename username input on Shop -> Profile or Inventory -> Consumables
+  const [newUsernameInput, setNewUsernameInput] = useState('');
+
   // Chest Ceremony Modal State
   const [ceremonyOpen, setCeremonyOpen] = useState(false);
   const [ceremonyTier, setCeremonyTier] = useState<SkinRarity>('Common');
   const [ceremonyResult, setCeremonyResult] =
     useState<ChestOpeningResultPayload | null>(null);
 
-  const chestInv = player.chestInventory || {
-    Common: 0,
-    Uncommon: 0,
-    Rare: 0,
-    Epic: 0,
-    Legendary: 0,
-  };
-  const keyInv = player.keyInventory || {
-    Common: 0,
-    Uncommon: 0,
-    Rare: 0,
-    Epic: 0,
-    Legendary: 0,
-  };
-  const unlockedSkins = Array.from(
-    new Set([
-      ...(player.unlockedItems || []),
-      ...ARCADE_SKINS.filter((s) => s.acquisitionSource === 'starter').map((s) => s.id),
-    ])
+  const chestInv = useMemo(
+    () =>
+      player.chestInventory || {
+        Common: 0,
+        Uncommon: 0,
+        Rare: 0,
+        Epic: 0,
+        Legendary: 0,
+      },
+    [player.chestInventory]
   );
-  const unlockedBanners = Array.from(
-    new Set([
-      ...(player.unlockedBanners || []).map((id) => getBannerById(id).id),
-      ...ARCADE_BANNERS.filter((b) => b.acquisitionSource === 'starter').map((b) => b.id),
-    ])
+  const keyInv = useMemo(
+    () =>
+      player.keyInventory || {
+        Common: 0,
+        Uncommon: 0,
+        Rare: 0,
+        Epic: 0,
+        Legendary: 0,
+      },
+    [player.keyInventory]
+  );
+
+  const unlockedSkins = useMemo(
+    () =>
+      Array.from(
+        new Set([
+          ...(player.unlockedItems || []),
+          ...ARCADE_SKINS.filter((s) => s.acquisitionSource === 'starter').map(
+            (s) => s.id
+          ),
+        ])
+      ),
+    [player.unlockedItems]
+  );
+
+  const unlockedBanners = useMemo(
+    () =>
+      Array.from(
+        new Set([
+          ...(player.unlockedBanners || []).map((id) => getBannerById(id).id),
+          ...ARCADE_BANNERS.filter((b) => b.acquisitionSource === 'starter').map(
+            (b) => b.id
+          ),
+        ])
+      ),
+    [player.unlockedBanners]
   );
 
   const totalKeysOwned = Object.values(keyInv).reduce((acc, v) => acc + (v || 0), 0);
-  const totalChestsOwned = Object.values(chestInv).reduce((acc, v) => acc + (v || 0), 0);
+  const totalChestsOwned = Object.values(chestInv).reduce(
+    (acc, v) => acc + (v || 0),
+    0
+  );
+  const shieldCardsOwned = Math.max(0, Number(player.shieldCards) || 0);
+  const shieldCardArmed = Boolean(shieldCardsOwned > 0 && player.shieldCardArmed);
+  const renameCardsOwned = Math.max(0, Number(player.renameCards) || 0);
+  const totalConsumablesOwned = shieldCardsOwned + renameCardsOwned;
+
+  // Filtered & sorted Skins for Shop -> Avatars
+  const filteredShopSkins = useMemo(() => {
+    return ARCADE_SKINS.filter((skin) => {
+      if (rarityFilter !== 'ALL' && skin.rarity !== rarityFilter) return false;
+      const isOwned =
+        unlockedSkins.includes(skin.id) || skin.acquisitionSource === 'starter';
+      const isChestOnly =
+        !skin.directPurchaseAllowed || !isDirectCoinPurchaseAllowed(skin.rarity);
+      if (ownershipFilter === 'OWNED' && !isOwned) return false;
+      if (ownershipFilter === 'PURCHASABLE' && (isOwned || isChestOnly)) return false;
+      if (ownershipFilter === 'CHEST_EXCLUSIVE' && !isChestOnly) return false;
+      return true;
+    }).sort((a, b) => {
+      if (sortBy === 'rarity_desc') return a.rarityOrder - b.rarityOrder;
+      if (sortBy === 'rarity_asc') return b.rarityOrder - a.rarityOrder;
+      if (sortBy === 'price_asc') return (a.costCoins || 999999) - (b.costCoins || 999999);
+      if (sortBy === 'price_desc') return b.costCoins - a.costCoins;
+      return a.name.localeCompare(b.name);
+    });
+  }, [rarityFilter, ownershipFilter, sortBy, unlockedSkins]);
+
+  // Filtered & sorted Banners for Shop -> Banners
+  const filteredShopBanners = useMemo(() => {
+    return ARCADE_BANNERS.filter((banner) => {
+      if (rarityFilter !== 'ALL' && banner.rarity !== rarityFilter) return false;
+      const isOwned =
+        unlockedBanners.includes(banner.id) || banner.acquisitionSource === 'starter';
+      const isChestOnly =
+        !banner.directPurchaseAllowed || !isDirectCoinPurchaseAllowed(banner.rarity);
+      if (ownershipFilter === 'OWNED' && !isOwned) return false;
+      if (ownershipFilter === 'PURCHASABLE' && (isOwned || isChestOnly)) return false;
+      if (ownershipFilter === 'CHEST_EXCLUSIVE' && !isChestOnly) return false;
+      return true;
+    }).sort((a, b) => {
+      if (sortBy === 'rarity_desc') return a.rarityOrder - b.rarityOrder;
+      if (sortBy === 'rarity_asc') return b.rarityOrder - a.rarityOrder;
+      if (sortBy === 'price_asc') return (a.costCoins || 999999) - (b.costCoins || 999999);
+      if (sortBy === 'price_desc') return b.costCoins - a.costCoins;
+      return a.name.localeCompare(b.name);
+    });
+  }, [rarityFilter, ownershipFilter, sortBy, unlockedBanners]);
+
+  // Strictly Owned Inventory lists
+  const ownedInventorySkins = useMemo(() => {
+    return ARCADE_SKINS.filter((s) => unlockedSkins.includes(s.id))
+      .filter((s) => (rarityFilter === 'ALL' ? true : s.rarity === rarityFilter))
+      .sort((a, b) => {
+        if (sortBy === 'rarity_asc') return b.rarityOrder - a.rarityOrder;
+        if (sortBy === 'name_asc') return a.name.localeCompare(b.name);
+        return a.rarityOrder - b.rarityOrder;
+      });
+  }, [unlockedSkins, rarityFilter, sortBy]);
+
+  const ownedInventoryBanners = useMemo(() => {
+    return ARCADE_BANNERS.filter((b) => unlockedBanners.includes(b.id))
+      .filter((b) => (rarityFilter === 'ALL' ? true : b.rarity === rarityFilter))
+      .sort((a, b) => {
+        if (sortBy === 'rarity_asc') return b.rarityOrder - a.rarityOrder;
+        if (sortBy === 'name_asc') return a.name.localeCompare(b.name);
+        return a.rarityOrder - b.rarityOrder;
+      });
+  }, [unlockedBanners, rarityFilter, sortBy]);
+
+  const ownedInventoryChests = useMemo(() => {
+    return ARCADE_CHESTS.filter((c) => (chestInv[c.tier] || 0) > 0).filter((c) =>
+      rarityFilter === 'ALL' ? true : c.tier === rarityFilter
+    );
+  }, [chestInv, rarityFilter]);
+
+  const ownedInventoryKeys = useMemo(() => {
+    return ARCADE_KEYS.filter((k) => (keyInv[k.tier] || 0) > 0).filter((k) =>
+      rarityFilter === 'ALL' ? true : k.tier === rarityFilter
+    );
+  }, [keyInv, rarityFilter]);
 
   const handleTriggerOpenChest = async (
     tier: SkinRarity,
@@ -656,136 +987,163 @@ export function CosmeticChestShopAndInventorySuite({
     }
   };
 
-  const handleTriggerBuyChest = async (tier: SkinRarity) => {
-    setBusyAction(`buy-${tier}`);
+  const handleExecuteConfirmedPurchase = async () => {
+    if (!pendingPurchase) return;
+    const order = pendingPurchase;
+    setPendingPurchase(null);
+    setBusyAction(`confirm-${order.kind}-${order.itemId}`);
     setFeedback(null);
+
     try {
-      await onBuyChest(tier);
-      setFeedback({
-        type: 'success',
-        text: `${tier} Chest added to your Inventory! You can open it anytime from Inventory → Chests.`,
-      });
+      if (order.kind === 'skin') {
+        await onPurchaseSkin(order.itemId);
+        setPreviewSkinId(order.itemId);
+        setFeedback({
+          type: 'success',
+          text: `Purchased and equipped "${order.itemName}" (${order.rarity})!`,
+        });
+      } else if (order.kind === 'banner') {
+        await onPurchaseBanner(order.itemId);
+        setPreviewBannerId(order.itemId);
+        setFeedback({
+          type: 'success',
+          text: `Purchased and equipped "${order.itemName}" (${order.rarity})!`,
+        });
+      } else if (order.kind === 'chest_store' && order.chestTier) {
+        await onBuyChest(order.chestTier);
+        setFeedback({
+          type: 'success',
+          text: `${order.itemName} added to your Inventory → Chests!`,
+        });
+      } else if (order.kind === 'chest_open' && order.chestTier) {
+        await handleTriggerOpenChest(order.chestTier, 'coins');
+      } else if (order.kind === 'rename_card' && onPurchaseRenameCard) {
+        await onPurchaseRenameCard();
+        setFeedback({
+          type: 'success',
+          text: 'Official Rename Card added to your Inventory → Consumables!',
+        });
+      }
     } catch (err: unknown) {
       setFeedback({
         type: 'error',
-        text: err instanceof Error ? err.message : 'Failed to buy chest.',
+        text: err instanceof Error ? err.message : 'Purchase failed.',
       });
     } finally {
       setBusyAction(null);
     }
   };
 
+  const handleConfirmShieldToggle = async () => {
+    if (pendingShieldConfirm === null || !onToggleShieldCard) return;
+    const nextArmed = pendingShieldConfirm;
+    setPendingShieldConfirm(null);
+    setBusyAction('toggle-shield');
+    setFeedback(null);
+    try {
+      await onToggleShieldCard(nextArmed);
+      setFeedback({
+        type: 'success',
+        text: nextArmed
+          ? 'Ranked Shield Card armed! Your XP is automatically protected on your next 2v2 Couple Mode loss.'
+          : 'Ranked Shield Card returned to your Inventory without being consumed.',
+      });
+    } catch (err: unknown) {
+      setFeedback({
+        type: 'error',
+        text:
+          err instanceof Error
+            ? err.message
+            : 'Could not update Ranked Shield Card status.',
+      });
+    } finally {
+      setBusyAction(null);
+    }
+  };
+
+  const isShopPage = currentPage !== 'inventory';
+
   return (
     <div className="space-y-6">
-      {/* Live 3-Layer Composite Preview Banner at Top */}
-      <div className="sketch-scrap p-4 sm:p-5 space-y-3">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div className="flex items-center gap-2">
-            <Layers className="w-4 h-4 text-[#9e3a2e]" />
-            <span className="text-xs font-mono uppercase tracking-wider font-bold text-[#514d44]">
-              Live 3-Layer Cosmetic Preview (Banner + Uploaded Photo + Animated Skin Frame)
-            </span>
-          </div>
-          {activeCouple && (
-            <label className="flex items-center gap-2 text-xs cursor-pointer select-none">
-              <input
-                type="checkbox"
-                checked={applyToCouple}
-                onChange={(e) => setApplyToCouple(e.target.checked)}
-                className="accent-[#9e3a2e]"
-              />
-              <Heart className="w-3.5 h-3.5 text-[#9e3a2e]" />
-              <span>Also apply equipped Skin/Banner to Couple ({activeCouple.coupleName})</span>
-            </label>
-          )}
-        </div>
-
-        <ThreeLayerProfileHeader
-          username={player.username || 'Player'}
-          titleOrSubtitle="Previewing your active or selected Banner + Profile Picture + Animated Frame"
-          avatarId={player.avatar}
-          customPhotoUrl={player.customPhotoUrl}
-          equippedSkinId={previewSkinId}
-          equippedBannerId={previewBannerId}
-          level={player.level}
-          coins={player.coins}
-          onOpenPhotoUpload={onOpenPhotoStudio}
-        />
-      </div>
-
-      {/* Navigation Tabs + Key & Coin Counters */}
-      <div className="flex flex-wrap items-center justify-between gap-3">
+      {/* ====================================================================
+          TOP NAVIGATION BAR: 5 DEDICATED SHOP PAGES + STANDALONE INVENTORY
+         ==================================================================== */}
+      <div className="sketch-scrap p-4 flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap items-center gap-2">
-          <button
-            type="button"
-            onClick={() => setActiveTab('chests')}
-            className={`px-3.5 py-2 text-xs font-bold border-[1.5px] border-[#38352f] flex items-center gap-1.5 ${
-              activeTab === 'chests'
-                ? 'bg-[#f0dfa0] text-[#38352f] shadow-[2px_2px_0px_#9e3a2e]'
-                : 'bg-[#fcf8ef] text-[#514d44]'
-            }`}
-          >
-            <Package className="w-4 h-4" />
-            <span>5-Tier Chests & Keys</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setActiveTab('skins')}
-            className={`px-3.5 py-2 text-xs font-bold border-[1.5px] border-[#38352f] flex items-center gap-1.5 ${
-              activeTab === 'skins'
-                ? 'bg-[#f0dfa0] text-[#38352f] shadow-[2px_2px_0px_#9e3a2e]'
-                : 'bg-[#fcf8ef] text-[#514d44]'
-            }`}
-          >
-            <Sparkles className="w-4 h-4" />
-            <span>Avatar Frames ({unlockedSkins.length}/{ARCADE_SKINS.length})</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setActiveTab('banners')}
-            className={`px-3.5 py-2 text-xs font-bold border-[1.5px] border-[#38352f] flex items-center gap-1.5 ${
-              activeTab === 'banners'
-                ? 'bg-[#f0dfa0] text-[#38352f] shadow-[2px_2px_0px_#9e3a2e]'
-                : 'bg-[#fcf8ef] text-[#514d44]'
-            }`}
-          >
-            <Award className="w-4 h-4" />
-            <span>Profile Banners ({unlockedBanners.length}/{ARCADE_BANNERS.length})</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setActiveTab('inventory')}
-            className={`px-3.5 py-2 text-xs font-bold border-[1.5px] border-[#38352f] flex items-center gap-1.5 ${
-              activeTab === 'inventory'
-                ? 'bg-[#f0dfa0] text-[#38352f] shadow-[2px_2px_0px_#9e3a2e]'
-                : 'bg-[#fcf8ef] text-[#514d44]'
-            }`}
-          >
-            <Key className="w-4 h-4" />
-            <span>
-              Inventory ({totalChestsOwned} Chests · {totalKeysOwned} Keys)
-            </span>
-          </button>
+          {(
+            [
+              {
+                id: 'shop-profile',
+                label: 'Profile',
+                sub: 'Appearance & Studio',
+                icon: User,
+              },
+              {
+                id: 'shop-banners',
+                label: 'Banners',
+                sub: `${unlockedBanners.length}/${ARCADE_BANNERS.length}`,
+                icon: Award,
+              },
+              {
+                id: 'shop-avatars',
+                label: 'Avatars',
+                sub: `${unlockedSkins.length}/${ARCADE_SKINS.length}`,
+                icon: Sparkles,
+              },
+              {
+                id: 'shop-chests',
+                label: 'Chests',
+                sub: '5 Tiers',
+                icon: Package,
+              },
+              {
+                id: 'shop-keys',
+                label: 'Keys',
+                sub: `${totalKeysOwned} Owned`,
+                icon: Key,
+              },
+            ] as const
+          ).map((pg) => {
+            const IconComp = pg.icon;
+            const active = currentPage === pg.id;
+            return (
+              <button
+                key={pg.id}
+                type="button"
+                onClick={() => handleSelectPage(pg.id)}
+                className={`px-3.5 py-2 text-xs font-bold border-[1.5px] border-[#38352f] flex items-center gap-2 transition-all ${
+                  active
+                    ? 'bg-[#f0dfa0] text-[#38352f] shadow-[2px_2px_0px_#9e3a2e]'
+                    : 'bg-[#fcf8ef] text-[#514d44] hover:bg-[#efe8d8]'
+                }`}
+              >
+                <IconComp className="w-4 h-4 text-[#9e3a2e]" />
+                <span>{pg.label}</span>
+                <span className="text-[10px] font-mono opacity-75">({pg.sub})</span>
+              </button>
+            );
+          })}
         </div>
 
-        {/* Owned Keys Strip */}
-        <div className="sketch-strip px-3 py-1.5 flex flex-wrap items-center gap-2.5 text-xs font-mono">
-          {ARCADE_KEYS.map((k) => (
-            <span
-              key={k.id}
-              title={`${k.name}: ${keyInv[k.tier] || 0} owned`}
-              className="inline-flex items-center gap-1"
-            >
-              <CustomKeyArtwork tier={k.tier} size={20} />
-              <strong className="text-[#38352f]">{keyInv[k.tier] || 0}</strong>
-            </span>
-          ))}
-        </div>
+        <button
+          type="button"
+          onClick={() => handleSelectPage('inventory')}
+          className={`px-4 py-2 text-xs font-bold border-[1.5px] border-[#38352f] flex items-center gap-2 ${
+            currentPage === 'inventory'
+              ? 'bg-[#9e3a2e] text-[#fcf8ef] shadow-[2px_2px_0px_#38352f]'
+              : 'bg-[#fcf8ef] text-[#38352f] hover:bg-[#f0dfa0]'
+          }`}
+        >
+          <Layers className="w-4 h-4" />
+          <span>
+            My Inventory ({unlockedSkins.length + unlockedBanners.length} Cosmetics ·{' '}
+            {totalChestsOwned} Chests · {totalKeysOwned} Keys · {totalConsumablesOwned}{' '}
+            Consumables)
+          </span>
+        </button>
       </div>
 
+      {/* Feedback Banner */}
       {feedback && (
         <div
           className={`p-3 rounded border text-xs flex items-center justify-between gap-2 ${
@@ -813,40 +1171,680 @@ export function CosmeticChestShopAndInventorySuite({
       )}
 
       {/* ====================================================================
-          TAB 1: 5-TIER CHESTS & CUSTOM KEYS BOUTIQUE
+          PAGE 1: SHOP -> PROFILE (Profile Customization & Appearance Settings)
          ==================================================================== */}
-      {activeTab === 'chests' && (
+      {currentPage === 'shop-profile' && (
         <div className="space-y-6">
-          {/* Challenge Key Progression Banner */}
-          <div className="sketch-strip p-4 grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
-            <div className="flex items-center gap-3">
-              <CustomKeyArtwork tier="Common" size={38} />
+          <div className="sketch-scrap p-5 space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#b3ac9d] pb-3">
               <div>
-                <p className="font-bold text-[#38352f]">Daily Challenges (24h)</p>
-                <p className="text-[#514d44]">
-                  Complete Daily Challenges to earn <strong>Common</strong> &{' '}
-                  <strong>Uncommon Keys</strong>.
+                <h3 className="text-xl font-bold text-[#38352f]">
+                  Shop · Profile Customization & Appearance Settings
+                </h3>
+                <p className="text-xs text-[#514d44]">
+                  Preview your three-layer profile banner, uploaded photo, and animated
+                  avatar frame, or acquire an Official Rename Card.
                 </p>
+              </div>
+              {activeCouple && (
+                <label className="flex items-center gap-2 text-xs cursor-pointer select-none bg-[#fcf8ef] px-3 py-1.5 rounded border border-[#b3ac9d]">
+                  <input
+                    type="checkbox"
+                    checked={applyToCouple}
+                    onChange={(e) => setApplyToCouple(e.target.checked)}
+                    className="accent-[#9e3a2e]"
+                  />
+                  <Heart className="w-3.5 h-3.5 text-[#9e3a2e]" />
+                  <span>Apply equipped cosmetics to Couple ({activeCouple.coupleName})</span>
+                </label>
+              )}
+            </div>
+
+            <ThreeLayerProfileHeader
+              username={player.username || 'Player'}
+              titleOrSubtitle={`Active Skin: ${
+                getSkinById(previewSkinId).name
+              } · Active Banner: ${getBannerById(previewBannerId).name}`}
+              avatarId={player.avatar}
+              customPhotoUrl={player.customPhotoUrl}
+              equippedSkinId={previewSkinId}
+              equippedBannerId={previewBannerId}
+              level={player.level}
+              coins={player.coins}
+              onOpenPhotoUpload={onOpenPhotoStudio}
+            />
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-2">
+              {/* Card 1: Profile Picture Options (Upload Photo & Take Photo) */}
+              <div className="sketch-strip p-4 flex flex-col justify-between space-y-3">
+                <div className="space-y-1.5">
+                  <div className="flex items-center gap-2 font-bold text-sm text-[#38352f]">
+                    <Camera className="w-4 h-4 text-[#9e3a2e]" />
+                    <span>Custom Profile Picture Studio</span>
+                  </div>
+                  <p className="text-xs text-[#514d44]">
+                    Select an existing image from your device or capture a new picture
+                    using your device camera. Crop, position, and preview it inside your
+                    equipped avatar frame and banner before saving.
+                  </p>
+                </div>
+                {onOpenPhotoStudio && (
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => onOpenPhotoStudio('upload')}
+                      className="py-2 px-3 text-xs font-bold bg-[#f0dfa0] text-[#38352f] border-[1.5px] border-[#38352f] flex items-center justify-center gap-1.5 hover:bg-[#e5d18e]"
+                    >
+                      <Upload className="w-3.5 h-3.5" />
+                      <span>Upload Photo</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onOpenPhotoStudio('camera')}
+                      className="py-2 px-3 text-xs font-bold bg-[#9e3a2e] text-[#fcf8ef] border-[1.5px] border-[#38352f] flex items-center justify-center gap-1.5 hover:opacity-95"
+                    >
+                      <Camera className="w-3.5 h-3.5" />
+                      <span>Take Photo</span>
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              {/* Card 2: Official Rename Card */}
+              <div className="sketch-strip p-4 flex flex-col justify-between space-y-3">
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2 font-bold text-sm text-[#38352f]">
+                      <Edit3 className="w-4 h-4 text-[#9e3a2e]" />
+                      <span>Official Rename Card</span>
+                    </div>
+                    <span className="text-xs font-mono font-bold text-[#9e3a2e]">
+                      {RENAME_CARD_COST_COINS.toLocaleString()} Coins
+                    </span>
+                  </div>
+                  <p className="text-xs text-[#514d44]">
+                    Single-use notarized pass allowing you to change your unique arcade
+                    username once. Owned: <strong>{renameCardsOwned}</strong>.
+                  </p>
+                </div>
+
+                <div className="space-y-2">
+                  {onPurchaseRenameCard && (
+                    <button
+                      type="button"
+                      disabled={
+                        busyAction !== null || player.coins < RENAME_CARD_COST_COINS
+                      }
+                      onClick={() =>
+                        setPendingPurchase({
+                          kind: 'rename_card',
+                          itemId: 'rename-card',
+                          itemName: 'Official Rename Card',
+                          rarity: 'Epic',
+                          costCoins: RENAME_CARD_COST_COINS,
+                          description:
+                            'Single-use pass to change your unique arcade username across leaderboards, couple profiles, and match history.',
+                        })
+                      }
+                      className="w-full py-2 px-3 text-xs font-bold bg-[#9e3a2e] text-[#fcf8ef] border-[1.5px] border-[#38352f] disabled:opacity-45 flex items-center justify-center gap-1.5"
+                    >
+                      <Coins className="w-3.5 h-3.5" />
+                      <span>
+                        Purchase Rename Card ({RENAME_CARD_COST_COINS.toLocaleString()}{' '}
+                        Coins)
+                      </span>
+                    </button>
+                  )}
+
+                  {renameCardsOwned > 0 && onUseRenameCard && (
+                    <div className="flex items-center gap-1.5 pt-1">
+                      <input
+                        type="text"
+                        value={newUsernameInput}
+                        onChange={(e) => setNewUsernameInput(e.target.value)}
+                        placeholder="New unique username..."
+                        maxLength={20}
+                        className="flex-1 px-2.5 py-1.5 text-xs bg-[#fcf8ef] border border-[#38352f] rounded"
+                      />
+                      <button
+                        type="button"
+                        disabled={
+                          busyAction !== null || newUsernameInput.trim().length < 3
+                        }
+                        onClick={async () => {
+                          setBusyAction('redeem-rename');
+                          try {
+                            await onUseRenameCard(newUsernameInput.trim());
+                            setNewUsernameInput('');
+                            setFeedback({
+                              type: 'success',
+                              text: 'Username updated across the arcade!',
+                            });
+                          } catch (err: unknown) {
+                            setFeedback({
+                              type: 'error',
+                              text:
+                                err instanceof Error
+                                  ? err.message
+                                  : 'Could not change username.',
+                            });
+                          } finally {
+                            setBusyAction(null);
+                          }
+                        }}
+                        className="px-3 py-1.5 text-xs font-bold bg-[#f0dfa0] text-[#38352f] border border-[#38352f] disabled:opacity-45"
+                      >
+                        Redeem
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Card 3: Ranked Shield Card Status */}
+              <div className="sketch-strip p-4 flex flex-col justify-between space-y-3">
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2 font-bold text-sm text-[#38352f]">
+                      <Shield className="w-4 h-4 text-sky-600" />
+                      <span>Ranked Shield Card</span>
+                    </div>
+                    <span className="text-[11px] font-mono px-2 py-0.5 rounded bg-sky-500/15 border border-sky-600/40 text-sky-900 dark:text-sky-200">
+                      Owned: {shieldCardsOwned}
+                    </span>
+                  </div>
+                  <p className="text-xs text-[#514d44]">
+                    Exclusively obtained from <strong>Rare (2%)</strong>,{' '}
+                    <strong>Epic (5%)</strong>, and <strong>Legendary (10%)</strong>{' '}
+                    Chests. Protects your XP on your next 2v2 Couple Mode loss when
+                    armed.
+                  </p>
+                </div>
+
+                {shieldCardsOwned > 0 && onToggleShieldCard ? (
+                  <button
+                    type="button"
+                    disabled={busyAction !== null}
+                    onClick={() => setPendingShieldConfirm(!shieldCardArmed)}
+                    className={`w-full py-2 px-3 text-xs font-bold border-[1.5px] border-[#38352f] flex items-center justify-center gap-1.5 ${
+                      shieldCardArmed
+                        ? 'bg-sky-500/25 text-[#38352f]'
+                        : 'bg-[#f0dfa0] text-[#38352f]'
+                    }`}
+                  >
+                    <Shield className="w-3.5 h-3.5" />
+                    <span>
+                      {shieldCardArmed
+                        ? 'Shield Armed for Next 2v2 (Click to Disarm)'
+                        : 'Pre-Equip Shield for Next 2v2 Match'}
+                    </span>
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => handleSelectPage('shop-chests')}
+                    className="w-full py-2 px-3 text-xs font-bold bg-[#fcf8ef] text-[#38352f] border border-[#38352f]"
+                  >
+                    Find in Rare / Epic / Legendary Chests
+                  </button>
+                )}
               </div>
             </div>
-            <div className="flex items-center gap-3">
-              <CustomKeyArtwork tier="Rare" size={38} />
-              <div>
-                <p className="font-bold text-[#38352f]">Weekly Challenges (7d)</p>
-                <p className="text-[#514d44]">
-                  Complete Weekly Challenges to earn <strong>Rare</strong> &{' '}
-                  <strong>Epic Keys</strong>.
-                </p>
+          </div>
+        </div>
+      )}
+
+      {/* ====================================================================
+          SHARED FILTER & SORT BAR FOR BANNERS & AVATARS SHOP PAGES
+         ==================================================================== */}
+      {(currentPage === 'shop-banners' || currentPage === 'shop-avatars') && (
+        <div className="sketch-scrap p-4 space-y-3">
+          {/* Live Preview Header */}
+          <ThreeLayerProfileHeader
+            username={player.username || 'Player'}
+            titleOrSubtitle={`Previewing Banner: ${
+              getBannerById(previewBannerId).name
+            } · Frame: ${getSkinById(previewSkinId).name}`}
+            avatarId={player.avatar}
+            customPhotoUrl={player.customPhotoUrl}
+            equippedSkinId={previewSkinId}
+            equippedBannerId={previewBannerId}
+            level={player.level}
+            coins={player.coins}
+            onOpenPhotoUpload={onOpenPhotoStudio}
+          />
+
+          {/* Rarity Acquisition Rule Notice + Filters */}
+          <div className="flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-[#b3ac9d]">
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="text-xs font-mono font-bold text-[#514d44] flex items-center gap-1 mr-1">
+                <SlidersHorizontal className="w-3.5 h-3.5" /> Rarity:
+              </span>
+              {(['ALL', ...SKIN_RARITY_ORDER] as const).map((r) => (
+                <button
+                  key={r}
+                  type="button"
+                  onClick={() => setRarityFilter(r)}
+                  className={`px-2.5 py-1 text-[11px] font-mono rounded border ${
+                    rarityFilter === r
+                      ? 'bg-[#f0dfa0] text-[#38352f] border-[#38352f] font-bold'
+                      : 'bg-[#fcf8ef] text-[#514d44] border-[#b3ac9d]'
+                  }`}
+                >
+                  {r === 'ALL' ? 'All Rarities' : r}
+                </button>
+              ))}
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <select
+                value={ownershipFilter}
+                onChange={(e) =>
+                  setOwnershipFilter(
+                    e.target.value as
+                      | 'ALL'
+                      | 'OWNED'
+                      | 'PURCHASABLE'
+                      | 'CHEST_EXCLUSIVE'
+                  )
+                }
+                aria-label="Filter by availability"
+                className="px-2.5 py-1 text-xs font-mono bg-[#fcf8ef] border border-[#38352f] rounded text-[#38352f]"
+              >
+                <option value="ALL">Status: All Items</option>
+                <option value="OWNED">Owned Only</option>
+                <option value="PURCHASABLE">Coin Purchasable (Common–Rare)</option>
+                <option value="CHEST_EXCLUSIVE">Chest-Exclusive (Epic & Legendary)</option>
+              </select>
+
+              <div className="flex items-center gap-1">
+                <ArrowUpDown className="w-3.5 h-3.5 text-[#514d44]" />
+                <select
+                  value={sortBy}
+                  onChange={(e) =>
+                    setSortBy(
+                      e.target.value as
+                        | 'rarity_desc'
+                        | 'rarity_asc'
+                        | 'price_asc'
+                        | 'price_desc'
+                        | 'name_asc'
+                    )
+                  }
+                  aria-label="Sort items"
+                  className="px-2.5 py-1 text-xs font-mono bg-[#fcf8ef] border border-[#38352f] rounded text-[#38352f]"
+                >
+                  <option value="rarity_desc">Sort: Rarity (Highest First)</option>
+                  <option value="rarity_asc">Sort: Rarity (Lowest First)</option>
+                  <option value="price_asc">Sort: Coin Price (Low → High)</option>
+                  <option value="price_desc">Sort: Coin Price (High → Low)</option>
+                  <option value="name_asc">Sort: Name (A → Z)</option>
+                </select>
               </div>
             </div>
-            <div className="flex items-center gap-3">
-              <CustomKeyArtwork tier="Legendary" size={38} />
-              <div>
-                <p className="font-bold text-[#38352f]">Monthly Challenges (1m)</p>
-                <p className="text-[#514d44]">
-                  Complete Monthly Challenges to earn <strong>Legendary Keys</strong>.
-                </p>
+          </div>
+        </div>
+      )}
+
+      {/* ====================================================================
+          PAGE 2: SHOP -> BANNERS (Browse & Purchase Profile Banners)
+         ==================================================================== */}
+      {currentPage === 'shop-banners' && (
+        <div className="space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h3 className="text-lg font-bold text-[#38352f]">
+                Shop · Profile Banners ({filteredShopBanners.length})
+              </h3>
+              <p className="text-xs text-[#514d44]">
+                Rare, Uncommon, and Common banners can be purchased with Coins or found in
+                Chests. Epic and Legendary banners are Chest-Exclusive.
+              </p>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+            {filteredShopBanners.map((banner) => {
+              const owned =
+                unlockedBanners.includes(banner.id) ||
+                banner.acquisitionSource === 'starter';
+              const equipped =
+                getBannerById(player.equippedBanner || 'banner-warm-sketchbook').id ===
+                banner.id;
+              const isPreviewing = previewBannerId === banner.id;
+              const isChestExclusive =
+                !banner.directPurchaseAllowed ||
+                !isDirectCoinPurchaseAllowed(banner.rarity);
+
+              return (
+                <div
+                  key={banner.id}
+                  className={`sketch-scrap p-4 flex flex-col justify-between space-y-3 ${
+                    equipped ? 'ring-2 ring-[#9e3a2e]' : ''
+                  }`}
+                >
+                  <div className="space-y-2.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <span
+                        className={`px-2 py-0.5 text-[10px] font-mono uppercase rounded border ${getRarityBadgeClasses(
+                          banner.rarity
+                        )}`}
+                      >
+                        {banner.rarity} Banner
+                      </span>
+                      {owned ? (
+                        <span className="inline-flex items-center gap-1 text-xs font-mono font-bold text-emerald-800">
+                          <CheckCircle2 className="w-3.5 h-3.5" /> Owned
+                        </span>
+                      ) : isChestExclusive ? (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-amber-500/15 border border-amber-600/50 text-[11px] font-mono font-bold text-[#9e3a2e]">
+                          <Lock className="w-3 h-3" /> Chest Exclusive
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 text-xs font-mono font-bold text-[#9e3a2e]">
+                          <Coins className="w-3.5 h-3.5" />
+                          {banner.costCoins.toLocaleString()} Coins
+                        </span>
+                      )}
+                    </div>
+
+                    <ProfileBannerBackdrop bannerId={banner.id} className="p-4">
+                      <div className="flex items-center gap-3">
+                        <AnimatedSkinnedAvatar
+                          avatarId={player.avatar}
+                          customPhotoUrl={player.customPhotoUrl}
+                          skinId={previewSkinId}
+                          size="md"
+                        />
+                        <div>
+                          <div
+                            className="text-sm font-bold"
+                            style={{ color: '#fcf8ef' }}
+                          >
+                            {player.username || 'Player'}
+                          </div>
+                          <div
+                            className="text-[11px] opacity-85"
+                            style={{ color: banner.accentColor }}
+                          >
+                            {banner.name}
+                          </div>
+                        </div>
+                      </div>
+                    </ProfileBannerBackdrop>
+
+                    <div>
+                      <h4 className="text-base font-bold">{banner.name}</h4>
+                      <p className="text-xs text-[#514d44]">{banner.description}</p>
+                    </div>
+                  </div>
+
+                  <div className="pt-2 border-t border-[#b3ac9d] flex items-center justify-between gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setPreviewBannerId(banner.id)}
+                      className={`px-2.5 py-1.5 text-xs font-mono border border-[#38352f] flex items-center gap-1 ${
+                        isPreviewing ? 'bg-[#f0dfa0] font-bold' : 'bg-[#fcf8ef]'
+                      }`}
+                    >
+                      <Eye className="w-3.5 h-3.5" />
+                      <span>{isPreviewing ? 'Previewing' : 'Preview'}</span>
+                    </button>
+
+                    {owned ? (
+                      <button
+                        type="button"
+                        disabled={busyAction !== null}
+                        onClick={async () => {
+                          setBusyAction(`banner-${banner.id}`);
+                          try {
+                            const target = equipped
+                              ? 'banner-warm-sketchbook'
+                              : banner.id;
+                            await onEquipBanner(target, applyToCouple);
+                            setPreviewBannerId(target);
+                          } finally {
+                            setBusyAction(null);
+                          }
+                        }}
+                        className={`px-3 py-1.5 text-xs font-bold border-[1.5px] border-[#38352f] ${
+                          equipped
+                            ? 'bg-[#f0dfa0] text-[#38352f]'
+                            : 'bg-[#9e3a2e] text-[#fcf8ef]'
+                        }`}
+                      >
+                        {equipped
+                          ? banner.id === 'banner-warm-sketchbook'
+                            ? 'Equipped'
+                            : 'Unequip'
+                          : 'Equip Banner'}
+                      </button>
+                    ) : isChestExclusive ? (
+                      <button
+                        type="button"
+                        onClick={() => handleSelectPage('shop-chests')}
+                        className="px-3 py-1.5 text-xs font-bold bg-[#fcf8ef] text-[#38352f] border-[1.5px] border-[#38352f] flex items-center gap-1"
+                      >
+                        <Package className="w-3.5 h-3.5 text-[#9e3a2e]" />
+                        <span>Obtain from Chests</span>
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        disabled={
+                          busyAction !== null || player.coins < banner.costCoins
+                        }
+                        onClick={() =>
+                          setPendingPurchase({
+                            kind: 'banner',
+                            itemId: banner.id,
+                            itemName: banner.name,
+                            rarity: banner.rarity,
+                            costCoins: banner.costCoins,
+                            description: banner.description,
+                          })
+                        }
+                        className="px-3 py-1.5 text-xs font-bold bg-[#9e3a2e] text-[#fcf8ef] border-[1.5px] border-[#38352f] disabled:opacity-45 flex items-center gap-1"
+                      >
+                        <Coins className="w-3.5 h-3.5" />
+                        <span>Buy · {banner.costCoins.toLocaleString()} Coins</span>
+                      </button>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* ====================================================================
+          PAGE 3: SHOP -> AVATARS (Avatar Skins, Frames & Animations)
+         ==================================================================== */}
+      {currentPage === 'shop-avatars' && (
+        <div className="space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h3 className="text-lg font-bold text-[#38352f]">
+                Shop · Avatar Skins, Frames & Animations ({filteredShopSkins.length})
+              </h3>
+              <p className="text-xs text-[#514d44]">
+                Every skin includes a custom animated frame. Rare, Uncommon, and Common
+                skins can be purchased with Coins or obtained from Chests; Epic and
+                Legendary skins are Chest-Exclusive.
+              </p>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+            {filteredShopSkins.map((skin) => {
+              const owned =
+                unlockedSkins.includes(skin.id) ||
+                skin.acquisitionSource === 'starter';
+              const equipped =
+                (player.equippedSkin || 'skin-classic-notebook') === skin.id;
+              const isPreviewing = previewSkinId === skin.id;
+              const isChestExclusive =
+                !skin.directPurchaseAllowed ||
+                !isDirectCoinPurchaseAllowed(skin.rarity);
+
+              return (
+                <div
+                  key={skin.id}
+                  className={`sketch-scrap p-4 flex flex-col justify-between space-y-4 ${
+                    equipped ? 'ring-2 ring-[#9e3a2e]' : ''
+                  }`}
+                >
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <span
+                        className={`px-2 py-0.5 text-[10px] font-mono uppercase rounded border ${getRarityBadgeClasses(
+                          skin.rarity
+                        )}`}
+                      >
+                        {skin.rarity}
+                      </span>
+                      {owned ? (
+                        <span className="inline-flex items-center gap-1 text-xs font-mono font-bold text-emerald-800">
+                          <CheckCircle2 className="w-3.5 h-3.5" /> Owned
+                        </span>
+                      ) : isChestExclusive ? (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-amber-500/15 border border-amber-600/50 text-[11px] font-mono font-bold text-[#9e3a2e]">
+                          <Lock className="w-3 h-3" /> Chest Exclusive
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 text-xs font-mono font-bold text-[#9e3a2e]">
+                          <Coins className="w-3.5 h-3.5" />
+                          {skin.costCoins.toLocaleString()} Coins
+                        </span>
+                      )}
+                    </div>
+
+                    <div className="py-4 flex flex-col items-center justify-center bg-[#efe8d8]/50 rounded-xl border border-[#b3ac9d]">
+                      <AnimatedSkinnedAvatar
+                        avatarId={player.avatar}
+                        customPhotoUrl={player.customPhotoUrl}
+                        skinId={skin.id}
+                        size="lg"
+                      />
+                      <span className="mt-2 text-[10px] font-mono text-[#514d44] px-2 text-center">
+                        {skin.animationLabel}
+                      </span>
+                    </div>
+
+                    <div>
+                      <h4 className="text-base font-bold">{skin.name}</h4>
+                      <p className="text-xs text-[#514d44] mt-0.5">{skin.description}</p>
+                    </div>
+                  </div>
+
+                  <div className="pt-2 border-t border-[#b3ac9d] flex items-center justify-between gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setPreviewSkinId(skin.id)}
+                      className={`px-2.5 py-1.5 text-xs font-mono border border-[#38352f] flex items-center gap-1 ${
+                        isPreviewing ? 'bg-[#f0dfa0] font-bold' : 'bg-[#fcf8ef]'
+                      }`}
+                    >
+                      <Eye className="w-3.5 h-3.5" />
+                      <span>{isPreviewing ? 'Previewing' : 'Preview'}</span>
+                    </button>
+
+                    {owned ? (
+                      <button
+                        type="button"
+                        disabled={busyAction !== null}
+                        onClick={async () => {
+                          setBusyAction(`skin-${skin.id}`);
+                          try {
+                            const target = equipped
+                              ? 'skin-classic-notebook'
+                              : skin.id;
+                            await onEquipSkin(target, applyToCouple);
+                            setPreviewSkinId(target);
+                          } finally {
+                            setBusyAction(null);
+                          }
+                        }}
+                        className={`px-3 py-1.5 text-xs font-bold border-[1.5px] border-[#38352f] ${
+                          equipped
+                            ? 'bg-[#f0dfa0] text-[#38352f]'
+                            : 'bg-[#9e3a2e] text-[#fcf8ef]'
+                        }`}
+                      >
+                        {equipped
+                          ? skin.id === 'skin-classic-notebook'
+                            ? 'Equipped'
+                            : 'Unequip'
+                          : 'Equip Frame'}
+                      </button>
+                    ) : isChestExclusive ? (
+                      <button
+                        type="button"
+                        onClick={() => handleSelectPage('shop-chests')}
+                        className="px-3 py-1.5 text-xs font-bold bg-[#fcf8ef] text-[#38352f] border-[1.5px] border-[#38352f] flex items-center gap-1"
+                      >
+                        <Package className="w-3.5 h-3.5 text-[#9e3a2e]" />
+                        <span>Obtain from Chests</span>
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        disabled={
+                          busyAction !== null || player.coins < skin.costCoins
+                        }
+                        onClick={() =>
+                          setPendingPurchase({
+                            kind: 'skin',
+                            itemId: skin.id,
+                            itemName: skin.name,
+                            rarity: skin.rarity,
+                            costCoins: skin.costCoins,
+                            description: skin.description,
+                          })
+                        }
+                        className="px-3 py-1.5 text-xs font-bold bg-[#9e3a2e] text-[#fcf8ef] border-[1.5px] border-[#38352f] disabled:opacity-45 flex items-center gap-1"
+                      >
+                        <Coins className="w-3.5 h-3.5" />
+                        <span>Buy · {skin.costCoins.toLocaleString()} Coins</span>
+                      </button>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* ====================================================================
+          PAGE 4: SHOP -> CHESTS (Purchase & Open Rarity-Based Chests)
+         ==================================================================== */}
+      {currentPage === 'shop-chests' && (
+        <div className="space-y-6">
+          {/* Duplicate-to-Coin & Ranked Shield Card Info Strip */}
+          <div className="sketch-strip p-4 flex flex-wrap items-center justify-between gap-3 text-xs">
+            <div className="space-y-0.5">
+              <div className="font-bold text-[#38352f]">
+                Automatic Duplicate Conversion & Ranked Shield Card Drops
               </div>
+              <p className="text-[#514d44]">
+                Epic & Legendary cosmetics are exclusively obtained from Chests. Rare
+                (2%), Epic (5%), and Legendary (10%) Chests can also drop a{' '}
+                <strong>Ranked Shield Card</strong>!
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-1.5 font-mono text-[11px]">
+              {(
+                ['Common', 'Uncommon', 'Rare', 'Epic', 'Legendary'] as SkinRarity[]
+              ).map((r) => (
+                <span
+                  key={r}
+                  className="px-2 py-0.5 rounded bg-[#fcf8ef] border border-[#b3ac9d]"
+                >
+                  {r} Dup: +{DUPLICATE_COSMETIC_COIN_PAYOUT[r].toLocaleString()} Coins
+                </span>
+              ))}
             </div>
           </div>
 
@@ -888,7 +1886,6 @@ export function CosmeticChestShopAndInventorySuite({
                       </div>
                     </div>
 
-                    {/* Chest & Matching Key Visual */}
                     <div className="py-3 px-4 rounded-xl bg-[#efe8d8]/60 border border-[#b3ac9d] flex items-center justify-around">
                       <CustomChestArtwork tier={chest.tier} size={88} />
                       <div className="flex flex-col items-center gap-1">
@@ -906,10 +1903,20 @@ export function CosmeticChestShopAndInventorySuite({
 
                     <p className="text-xs text-[#514d44]">{chest.description}</p>
 
+                    {chest.rankedShieldDropPercent > 0 && (
+                      <div className="px-2.5 py-1.5 rounded bg-sky-500/15 border border-sky-600/40 text-[11px] font-mono text-sky-950 dark:text-sky-200 flex items-center justify-between">
+                        <span className="flex items-center gap-1 font-bold">
+                          <Shield className="w-3.5 h-3.5 text-sky-500" />
+                          Ranked Shield Card Chance
+                        </span>
+                        <span className="font-bold">{chest.rankedShieldDropPercent}%</span>
+                      </div>
+                    )}
+
                     {/* Rarity Drop Probabilities Table */}
                     <div className="space-y-1.5 pt-1">
                       <div className="flex items-center justify-between text-[11px] font-mono text-[#514d44]">
-                        <span>Drop Probabilities</span>
+                        <span>Cosmetic Drop Rates</span>
                         <span>
                           Pool: {poolSkins.length} Skins · {poolBanners.length} Banners
                         </span>
@@ -953,6 +1960,14 @@ export function CosmeticChestShopAndInventorySuite({
 
                       {isPoolExpanded && (
                         <div className="mt-2 p-2.5 rounded bg-[#fcf8ef] border border-[#b3ac9d] max-h-40 overflow-y-auto text-[11px] space-y-1.5">
+                          {chest.rankedShieldDropPercent > 0 && (
+                            <div className="flex items-center justify-between font-bold text-sky-800 pb-1 border-b border-[#b3ac9d]/50">
+                              <span>🛡️ Ranked Shield Card (Consumable)</span>
+                              <span className="font-mono text-[10px]">
+                                {chest.rankedShieldDropPercent}%
+                              </span>
+                            </div>
+                          )}
                           <div className="font-bold text-[#38352f]">
                             Skins ({poolSkins.length}):
                           </div>
@@ -980,7 +1995,7 @@ export function CosmeticChestShopAndInventorySuite({
                     </div>
                   </div>
 
-                  {/* Chest Actions: Unlock with Key, Open Stored, or Buy with Coins */}
+                  {/* Chest Actions */}
                   <div className="space-y-2 pt-2 border-t border-[#b3ac9d]">
                     {keysOwned > 0 && (
                       <button
@@ -1012,16 +2027,36 @@ export function CosmeticChestShopAndInventorySuite({
                       <button
                         type="button"
                         disabled={busyAction !== null || !canAffordCoins}
-                        onClick={() => handleTriggerOpenChest(chest.tier, 'coins')}
+                        onClick={() =>
+                          setPendingPurchase({
+                            kind: 'chest_open',
+                            itemId: chest.id,
+                            itemName: `${chest.name} (Immediate Open)`,
+                            rarity: chest.tier,
+                            costCoins: chest.costCoins,
+                            description: chest.description,
+                            chestTier: chest.tier,
+                          })
+                        }
                         className="py-2 px-2.5 text-xs font-bold bg-[#9e3a2e] text-[#fcf8ef] border-[1.5px] border-[#38352f] disabled:opacity-45 flex items-center justify-center gap-1"
                       >
                         <Coins className="w-3.5 h-3.5" />
-                        <span>Buy & Open ({chest.costCoins})</span>
+                        <span>Buy & Open ({chest.costCoins.toLocaleString()})</span>
                       </button>
                       <button
                         type="button"
                         disabled={busyAction !== null || !canAffordCoins}
-                        onClick={() => handleTriggerBuyChest(chest.tier)}
+                        onClick={() =>
+                          setPendingPurchase({
+                            kind: 'chest_store',
+                            itemId: chest.id,
+                            itemName: `${chest.name} (Store in Inventory)`,
+                            rarity: chest.tier,
+                            costCoins: chest.costCoins,
+                            description: chest.description,
+                            chestTier: chest.tier,
+                          })
+                        }
                         className="py-2 px-2.5 text-xs font-medium bg-[#fcf8ef] text-[#38352f] border-[1.5px] border-[#38352f] disabled:opacity-45 flex items-center justify-center gap-1"
                       >
                         <Package className="w-3.5 h-3.5" />
@@ -1033,106 +2068,264 @@ export function CosmeticChestShopAndInventorySuite({
               );
             })}
           </div>
+        </div>
+      )}
 
-          {/* Duplicate-to-Coin Conversion Policy Bar */}
-          <div className="sketch-strip p-3.5 text-xs flex flex-wrap items-center justify-between gap-2">
-            <span className="font-bold text-[#38352f]">
-              Duplicate Protection (Automatic Coin Conversion):
-            </span>
-            <div className="flex flex-wrap items-center gap-2 font-mono text-[11px]">
-              {(
-                ['Common', 'Uncommon', 'Rare', 'Epic', 'Legendary'] as SkinRarity[]
-              ).map((r) => (
-                <span
-                  key={r}
-                  className="px-2 py-0.5 rounded bg-[#fcf8ef] border border-[#b3ac9d]"
-                >
-                  {r}: +{DUPLICATE_COSMETIC_COIN_PAYOUT[r]} Coins
-                </span>
-              ))}
+      {/* ====================================================================
+          PAGE 5: SHOP -> KEYS (View & Manage 5-Rarity Chest Keys)
+         ==================================================================== */}
+      {currentPage === 'shop-keys' && (
+        <div className="space-y-6">
+          <div className="sketch-strip p-4 flex flex-wrap items-center justify-between gap-2 text-xs">
+            <div>
+              <h3 className="text-base font-bold text-[#38352f]">
+                Shop · Chest Keys & Challenge Key Progression
+              </h3>
+              <p className="text-[#514d44]">
+                Each key unlocks its matching chest tier for free. Keys are earned by
+                completing Daily (24h), Weekly (7d), and Monthly (1m) Challenges.
+              </p>
             </div>
+            <span className="font-mono font-bold text-sm text-[#9e3a2e]">
+              Total Keys Owned: {totalKeysOwned}
+            </span>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+            {ARCADE_KEYS.map((keyDef) => {
+              const qty = keyInv[keyDef.tier] || 0;
+              return (
+                <div
+                  key={keyDef.id}
+                  className="sketch-scrap p-5 flex flex-col justify-between space-y-4"
+                >
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between">
+                      <span
+                        className={`px-2 py-0.5 text-[10px] font-mono uppercase rounded border ${getRarityBadgeClasses(
+                          keyDef.tier
+                        )}`}
+                      >
+                        {keyDef.tier} Key
+                      </span>
+                      <span className="text-xs font-mono font-bold text-[#38352f]">
+                        Owned: {qty}
+                      </span>
+                    </div>
+
+                    <div className="py-4 px-3 rounded-xl bg-[#efe8d8]/60 border border-[#b3ac9d] flex items-center justify-around">
+                      <CustomKeyArtwork tier={keyDef.tier} size={68} />
+                      <div className="text-center">
+                        <div className="text-[10px] font-mono uppercase text-[#514d44]">
+                          Compatible Chest
+                        </div>
+                        <CustomChestArtwork tier={keyDef.unlocksChestTier} size={56} />
+                        <div className="text-xs font-bold text-[#38352f] mt-1">
+                          {keyDef.unlocksChestName}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div>
+                      <h4 className="text-base font-bold text-[#38352f]">
+                        {keyDef.name}
+                      </h4>
+                      <div className="text-[11px] font-mono text-[#9e3a2e] mt-0.5">
+                        {keyDef.materialLabel}
+                      </div>
+                      <p className="text-xs text-[#514d44] mt-1">
+                        {keyDef.visualDescription}
+                      </p>
+                    </div>
+
+                    <div className="p-2.5 rounded bg-[#fcf8ef] border border-[#b3ac9d] text-[11px] font-mono text-[#38352f]">
+                      Source: <strong>{keyDef.challengeSourceLabel}</strong>
+                    </div>
+                  </div>
+
+                  <div className="pt-2 border-t border-[#b3ac9d]">
+                    {qty > 0 ? (
+                      <button
+                        type="button"
+                        disabled={busyAction !== null}
+                        onClick={() => handleTriggerOpenChest(keyDef.tier, 'key')}
+                        className="w-full py-2 px-3 text-xs font-bold bg-[#f0dfa0] text-[#38352f] border-[1.5px] border-[#38352f] flex items-center justify-center gap-1.5"
+                      >
+                        <Key className="w-3.5 h-3.5" />
+                        <span>
+                          Use 1 {keyDef.name} to Open {keyDef.unlocksChestName}
+                        </span>
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => handleSelectPage('shop-chests')}
+                        className="w-full py-2 px-3 text-xs font-mono bg-[#fcf8ef] text-[#514d44] border border-[#b3ac9d]"
+                      >
+                        0 Keys Owned · View {keyDef.unlocksChestName}
+                      </button>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
           </div>
         </div>
       )}
 
       {/* ====================================================================
-          TAB 2: ANIMATED AVATAR FRAME SKINS BOUTIQUE
+          PAGE 6: DEDICATED 5-TAB INVENTORY PAGE (STRICTLY OWNED ITEMS ONLY)
          ==================================================================== */}
-      {activeTab === 'skins' && (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-          {ARCADE_SKINS.map((skin) => {
-            const owned =
-              unlockedSkins.includes(skin.id) ||
-              skin.acquisitionSource === 'starter';
-            const equipped = (player.equippedSkin || 'skin-classic-notebook') === skin.id;
-            const isPreviewing = previewSkinId === skin.id;
+      {!isShopPage && (
+        <div className="space-y-5">
+          <div className="sketch-scrap p-4 space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <h3 className="text-xl font-bold text-[#38352f]">
+                  Player Inventory · Verified Owned Collection
+                </h3>
+                <p className="text-xs text-[#514d44]">
+                  Displays only items owned by your account across Avatars, Banners,
+                  Chests, Keys, and Consumables.
+                </p>
+              </div>
+              {activeCouple && (
+                <label className="flex items-center gap-2 text-xs cursor-pointer select-none bg-[#fcf8ef] px-3 py-1.5 rounded border border-[#b3ac9d]">
+                  <input
+                    type="checkbox"
+                    checked={applyToCouple}
+                    onChange={(e) => setApplyToCouple(e.target.checked)}
+                    className="accent-[#9e3a2e]"
+                  />
+                  <Heart className="w-3.5 h-3.5 text-[#9e3a2e]" />
+                  <span>Also apply equipped cosmetics to {activeCouple.coupleName}</span>
+                </label>
+              )}
+            </div>
 
-            return (
-              <div
-                key={skin.id}
-                className={`sketch-scrap p-4 flex flex-col justify-between space-y-4 ${
-                  equipped ? 'ring-2 ring-[#9e3a2e]' : ''
-                }`}
-              >
-                <div className="space-y-3">
-                  <div className="flex items-center justify-between gap-2">
-                    <span
-                      className={`px-2 py-0.5 text-[10px] font-mono uppercase rounded border ${getRarityBadgeClasses(
-                        skin.rarity
-                      )}`}
+            {/* 5 Inventory Category Tabs */}
+            <div className="flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-[#b3ac9d]">
+              <div className="flex flex-wrap items-center gap-2">
+                {(
+                  [
+                    {
+                      id: 'avatars',
+                      label: `Avatars (${ownedInventorySkins.length})`,
+                      icon: Sparkles,
+                    },
+                    {
+                      id: 'banners',
+                      label: `Banners (${ownedInventoryBanners.length})`,
+                      icon: Award,
+                    },
+                    {
+                      id: 'chests',
+                      label: `Chests (${totalChestsOwned})`,
+                      icon: Package,
+                    },
+                    {
+                      id: 'keys',
+                      label: `Keys (${totalKeysOwned})`,
+                      icon: Key,
+                    },
+                    {
+                      id: 'consumables',
+                      label: `Consumables (${totalConsumablesOwned})`,
+                      icon: Shield,
+                    },
+                  ] as const
+                ).map((tab) => {
+                  const TabIcon = tab.icon;
+                  return (
+                    <button
+                      key={tab.id}
+                      type="button"
+                      onClick={() => setInventoryTab(tab.id)}
+                      className={`px-3.5 py-2 text-xs font-bold border-[1.5px] border-[#38352f] flex items-center gap-1.5 ${
+                        inventoryTab === tab.id
+                          ? 'bg-[#f0dfa0] text-[#38352f] shadow-[2px_2px_0px_#9e3a2e]'
+                          : 'bg-[#fcf8ef] text-[#514d44]'
+                      }`}
                     >
-                      {skin.rarity}
-                    </span>
-                    <span className="text-[11px] font-mono text-[#514d44]">
-                      {skin.animationLabel}
-                    </span>
-                  </div>
+                      <TabIcon className="w-3.5 h-3.5 text-[#9e3a2e]" />
+                      <span>{tab.label}</span>
+                    </button>
+                  );
+                })}
+              </div>
 
-                  {/* Live Animated Frame around Player's Picture */}
-                  <div className="py-4 flex flex-col items-center justify-center bg-[#efe8d8]/50 rounded-xl border border-[#b3ac9d]">
-                    <AnimatedSkinnedAvatar
-                      avatarId={player.avatar}
-                      customPhotoUrl={player.customPhotoUrl}
-                      skinId={skin.id}
-                      size="lg"
-                    />
-                  </div>
-
-                  <div>
-                    <h4 className="text-base font-bold">{skin.name}</h4>
-                    <p className="text-xs text-[#514d44] mt-0.5">{skin.description}</p>
-                  </div>
-                </div>
-
-                <div className="pt-2 border-t border-[#b3ac9d] flex items-center justify-between gap-2">
+              {/* Rarity Filter for Inventory */}
+              <div className="flex flex-wrap items-center gap-1.5">
+                {(['ALL', ...SKIN_RARITY_ORDER] as const).map((r) => (
                   <button
+                    key={r}
                     type="button"
-                    onClick={() => setPreviewSkinId(skin.id)}
-                    className={`px-2.5 py-1.5 text-xs font-mono border border-[#38352f] flex items-center gap-1 ${
-                      isPreviewing ? 'bg-[#f0dfa0] font-bold' : 'bg-[#fcf8ef]'
+                    onClick={() => setRarityFilter(r)}
+                    className={`px-2 py-1 text-[10px] font-mono rounded border ${
+                      rarityFilter === r
+                        ? 'bg-[#f0dfa0] text-[#38352f] border-[#38352f] font-bold'
+                        : 'bg-[#fcf8ef] text-[#514d44] border-[#b3ac9d]'
                     }`}
                   >
-                    <Eye className="w-3.5 h-3.5" />
-                    <span>{isPreviewing ? 'Previewing' : 'Preview'}</span>
+                    {r === 'ALL' ? 'All' : r}
                   </button>
+                ))}
+              </div>
+            </div>
+          </div>
 
-                  {owned ? (
+          {/* INVENTORY TAB 1: OWNED AVATARS */}
+          {inventoryTab === 'avatars' && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+              {ownedInventorySkins.map((skin) => {
+                const equipped =
+                  (player.equippedSkin || 'skin-classic-notebook') === skin.id;
+                return (
+                  <div
+                    key={skin.id}
+                    className={`sketch-scrap p-4 flex flex-col justify-between space-y-3 ${
+                      equipped ? 'ring-2 ring-[#9e3a2e]' : ''
+                    }`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <span
+                        className={`px-2 py-0.5 text-[10px] font-mono uppercase rounded border ${getRarityBadgeClasses(
+                          skin.rarity
+                        )}`}
+                      >
+                        {skin.rarity}
+                      </span>
+                      <span className="text-[11px] font-mono text-emerald-800 font-bold">
+                        {equipped ? 'Equipped' : 'Owned'}
+                      </span>
+                    </div>
+
+                    <div className="py-3 flex flex-col items-center justify-center bg-[#efe8d8]/50 rounded-xl border border-[#b3ac9d]">
+                      <AnimatedSkinnedAvatar
+                        avatarId={player.avatar}
+                        customPhotoUrl={player.customPhotoUrl}
+                        skinId={skin.id}
+                        size="lg"
+                      />
+                    </div>
+
+                    <div>
+                      <div className="text-sm font-bold">{skin.name}</div>
+                      <div className="text-[11px] text-[#514d44]">
+                        {skin.animationLabel}
+                      </div>
+                    </div>
+
                     <button
                       type="button"
                       disabled={busyAction !== null}
-                      onClick={async () => {
-                        setBusyAction(`skin-${skin.id}`);
-                        try {
-                          const target = equipped
-                            ? 'skin-classic-notebook'
-                            : skin.id;
-                          await onEquipSkin(target, applyToCouple);
-                          setPreviewSkinId(target);
-                        } finally {
-                          setBusyAction(null);
-                        }
-                      }}
-                      className={`px-3 py-1.5 text-xs font-bold border-[1.5px] border-[#38352f] ${
+                      onClick={() =>
+                        onEquipSkin(
+                          equipped ? 'skin-classic-notebook' : skin.id,
+                          applyToCouple
+                        )
+                      }
+                      className={`w-full py-1.5 text-xs font-bold border border-[#38352f] ${
                         equipped
                           ? 'bg-[#f0dfa0] text-[#38352f]'
                           : 'bg-[#9e3a2e] text-[#fcf8ef]'
@@ -1140,447 +2333,347 @@ export function CosmeticChestShopAndInventorySuite({
                     >
                       {equipped
                         ? skin.id === 'skin-classic-notebook'
-                          ? 'Equipped'
-                          : 'Unequip'
+                          ? 'Equipped (Default)'
+                          : 'Unequip Frame'
                         : 'Equip Frame'}
                     </button>
-                  ) : (
-                    <button
-                      type="button"
-                      disabled={busyAction !== null || player.coins < skin.costCoins}
-                      onClick={async () => {
-                        setBusyAction(`buy-skin-${skin.id}`);
-                        try {
-                          await onPurchaseSkin(skin.id);
-                          setPreviewSkinId(skin.id);
-                        } catch (err: unknown) {
-                          setFeedback({
-                            type: 'error',
-                            text:
-                              err instanceof Error
-                                ? err.message
-                                : 'Could not purchase skin.',
-                          });
-                        } finally {
-                          setBusyAction(null);
-                        }
-                      }}
-                      className="px-3 py-1.5 text-xs font-bold bg-[#9e3a2e] text-[#fcf8ef] border-[1.5px] border-[#38352f] disabled:opacity-45"
-                    >
-                      Unlock ({skin.costCoins.toLocaleString()} Coins)
-                    </button>
-                  )}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      )}
-
-      {/* ====================================================================
-          TAB 3: PROFILE BANNERS BOUTIQUE (5 RARITIES)
-         ==================================================================== */}
-      {activeTab === 'banners' && (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-          {ARCADE_BANNERS.map((banner) => {
-            const owned =
-              unlockedBanners.includes(banner.id) ||
-              banner.acquisitionSource === 'starter';
-            const equipped =
-              getBannerById(player.equippedBanner || 'banner-warm-sketchbook').id === banner.id;
-            const isPreviewing = previewBannerId === banner.id;
-
-            return (
-              <div
-                key={banner.id}
-                className={`sketch-scrap p-4 flex flex-col justify-between space-y-3 ${
-                  equipped ? 'ring-2 ring-[#9e3a2e]' : ''
-                }`}
-              >
-                <div className="space-y-2.5">
-                  <div className="flex items-center justify-between">
-                    <span
-                      className={`px-2 py-0.5 text-[10px] font-mono uppercase rounded border ${getRarityBadgeClasses(
-                        banner.rarity
-                      )}`}
-                    >
-                      {banner.rarity} Banner
-                    </span>
-                    <span className="text-xs font-mono text-[#514d44]">
-                      {owned
-                        ? 'Owned'
-                        : banner.costCoins > 0
-                        ? `${banner.costCoins.toLocaleString()} Coins`
-                        : 'Chest / Seasonal'}
-                    </span>
                   </div>
+                );
+              })}
+            </div>
+          )}
 
-                  {/* Rectangular Banner Preview with Player's Avatar + Frame in Front */}
-                  <ProfileBannerBackdrop bannerId={banner.id} className="p-4">
-                    <div className="flex items-center gap-3">
-                      <AnimatedSkinnedAvatar
-                        avatarId={player.avatar}
-                        customPhotoUrl={player.customPhotoUrl}
-                        skinId={previewSkinId}
-                        size="md"
-                      />
-                      <div>
-                        <div
-                          className="text-sm font-bold"
-                          style={{ color: '#fcf8ef' }}
-                        >
-                          {player.username || 'Player'}
-                        </div>
-                        <div
-                          className="text-[11px] opacity-85"
-                          style={{ color: banner.accentColor }}
-                        >
-                          {banner.name}
-                        </div>
-                      </div>
-                    </div>
-                  </ProfileBannerBackdrop>
-
-                  <div>
-                    <h4 className="text-base font-bold">{banner.name}</h4>
-                    <p className="text-xs text-[#514d44]">{banner.description}</p>
-                  </div>
-                </div>
-
-                <div className="pt-2 border-t border-[#b3ac9d] flex items-center justify-between gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setPreviewBannerId(banner.id)}
-                    className={`px-2.5 py-1.5 text-xs font-mono border border-[#38352f] flex items-center gap-1 ${
-                      isPreviewing ? 'bg-[#f0dfa0] font-bold' : 'bg-[#fcf8ef]'
+          {/* INVENTORY TAB 2: OWNED BANNERS */}
+          {inventoryTab === 'banners' && (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {ownedInventoryBanners.map((banner) => {
+                const equipped =
+                  getBannerById(player.equippedBanner || 'banner-warm-sketchbook').id ===
+                  banner.id;
+                return (
+                  <div
+                    key={banner.id}
+                    className={`sketch-scrap p-4 space-y-3 ${
+                      equipped ? 'ring-2 ring-[#9e3a2e]' : ''
                     }`}
                   >
-                    <Eye className="w-3.5 h-3.5" />
-                    <span>{isPreviewing ? 'Previewing' : 'Preview'}</span>
-                  </button>
-
-                  {owned ? (
-                    <button
-                      type="button"
-                      disabled={busyAction !== null}
-                      onClick={async () => {
-                        setBusyAction(`banner-${banner.id}`);
-                        try {
-                          const target = equipped
-                            ? 'banner-sketchbook-grid'
-                            : banner.id;
-                          await onEquipBanner(target, applyToCouple);
-                          setPreviewBannerId(target);
-                        } finally {
-                          setBusyAction(null);
-                        }
-                      }}
-                      className={`px-3 py-1.5 text-xs font-bold border-[1.5px] border-[#38352f] ${
-                        equipped
-                          ? 'bg-[#f0dfa0] text-[#38352f]'
-                          : 'bg-[#9e3a2e] text-[#fcf8ef]'
-                      }`}
-                    >
-                      {equipped
-                        ? banner.id === 'banner-sketchbook-grid'
-                          ? 'Equipped'
-                          : 'Unequip'
-                        : 'Equip Banner'}
-                    </button>
-                  ) : (
-                    <button
-                      type="button"
-                      disabled={busyAction !== null || player.coins < banner.costCoins}
-                      onClick={async () => {
-                        setBusyAction(`buy-banner-${banner.id}`);
-                        try {
-                          await onPurchaseBanner(banner.id);
-                          setPreviewBannerId(banner.id);
-                        } catch (err: unknown) {
-                          setFeedback({
-                            type: 'error',
-                            text:
-                              err instanceof Error
-                                ? err.message
-                                : 'Could not purchase banner.',
-                          });
-                        } finally {
-                          setBusyAction(null);
-                        }
-                      }}
-                      className="px-3 py-1.5 text-xs font-bold bg-[#9e3a2e] text-[#fcf8ef] border-[1.5px] border-[#38352f] disabled:opacity-45"
-                    >
-                      Buy · {banner.costCoins.toLocaleString()} Coins
-                    </button>
-                  )}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      )}
-
-      {/* ====================================================================
-          TAB 4: UNIFIED 4-CATEGORY INVENTORY (SKINS, BANNERS, CHESTS, KEYS)
-         ==================================================================== */}
-      {activeTab === 'inventory' && (
-        <div className="space-y-5">
-          {/* Category Filter Pills */}
-          <div className="flex flex-wrap items-center gap-2">
-            {(
-              [
-                { id: 'all', label: 'All Owned Items' },
-                { id: 'skins', label: `Skins (${unlockedSkins.length})` },
-                { id: 'banners', label: `Banners (${unlockedBanners.length})` },
-                { id: 'chests', label: `Chests (${totalChestsOwned})` },
-                { id: 'keys', label: `Keys (${totalKeysOwned})` },
-              ] as const
-            ).map((cat) => (
-              <button
-                key={cat.id}
-                type="button"
-                onClick={() => setInventoryCategory(cat.id)}
-                className={`px-3 py-1.5 text-xs font-mono border border-[#38352f] ${
-                  inventoryCategory === cat.id
-                    ? 'bg-[#f0dfa0] text-[#38352f] font-bold'
-                    : 'bg-[#fcf8ef] text-[#514d44]'
-                }`}
-              >
-                {cat.label}
-              </button>
-            ))}
-          </div>
-
-          {/* 1. Owned Skins Section */}
-          {(inventoryCategory === 'all' || inventoryCategory === 'skins') && (
-            <div className="space-y-2.5">
-              <h4 className="text-sm font-mono uppercase tracking-wider text-[#514d44]">
-                Owned Avatar Frame Skins ({unlockedSkins.length})
-              </h4>
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                {ARCADE_SKINS.filter((s) => unlockedSkins.includes(s.id)).map((skin) => {
-                  const equipped =
-                    (player.equippedSkin || 'skin-classic-notebook') === skin.id;
-                  return (
-                    <div
-                      key={skin.id}
-                      className="sketch-scrap p-3.5 flex items-center justify-between gap-3"
-                    >
-                      <div className="flex items-center gap-3 min-w-0">
-                        <AnimatedSkinnedAvatar
-                          avatarId={player.avatar}
-                          customPhotoUrl={player.customPhotoUrl}
-                          skinId={skin.id}
-                          size="md"
-                        />
-                        <div className="min-w-0">
+                    <ProfileBannerBackdrop bannerId={banner.id} className="p-3.5">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2.5">
+                          <AnimatedSkinnedAvatar
+                            avatarId={player.avatar}
+                            customPhotoUrl={player.customPhotoUrl}
+                            skinId={player.equippedSkin}
+                            size="sm"
+                          />
                           <span
-                            className={`inline-block px-1.5 py-0.5 text-[9px] font-mono uppercase rounded border ${getRarityBadgeClasses(
-                              skin.rarity
-                            )}`}
+                            className="text-xs font-bold"
+                            style={{ color: '#fcf8ef' }}
                           >
-                            {skin.rarity}
+                            {banner.name}
                           </span>
-                          <div className="text-sm font-bold truncate mt-0.5">
-                            {skin.name}
-                          </div>
-                          <div className="text-[11px] text-[#514d44] truncate">
-                            {skin.animationLabel}
-                          </div>
                         </div>
+                        <span
+                          className={`px-2 py-0.5 text-[10px] font-mono uppercase rounded border ${getRarityBadgeClasses(
+                            banner.rarity
+                          )}`}
+                        >
+                          {banner.rarity}
+                        </span>
                       </div>
+                    </ProfileBannerBackdrop>
+
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs text-[#514d44] truncate">
+                        {banner.description}
+                      </span>
                       <button
                         type="button"
                         onClick={() =>
-                          onEquipSkin(
-                            equipped ? 'skin-classic-notebook' : skin.id,
+                          onEquipBanner(
+                            equipped ? 'banner-warm-sketchbook' : banner.id,
                             applyToCouple
                           )
                         }
-                        className={`px-2.5 py-1.5 text-xs font-bold border border-[#38352f] shrink-0 ${
+                        className={`px-3 py-1.5 text-xs font-bold border border-[#38352f] shrink-0 ${
                           equipped
                             ? 'bg-[#f0dfa0] text-[#38352f]'
                             : 'bg-[#9e3a2e] text-[#fcf8ef]'
                         }`}
                       >
                         {equipped
-                          ? skin.id === 'skin-classic-notebook'
-                            ? 'Active'
+                          ? banner.id === 'banner-warm-sketchbook'
+                            ? 'Equipped'
                             : 'Unequip'
-                          : 'Equip'}
+                          : 'Equip Banner'}
                       </button>
                     </div>
-                  );
-                })}
-              </div>
+                  </div>
+                );
+              })}
             </div>
           )}
 
-          {/* 2. Owned Banners Section */}
-          {(inventoryCategory === 'all' || inventoryCategory === 'banners') && (
-            <div className="space-y-2.5">
-              <h4 className="text-sm font-mono uppercase tracking-wider text-[#514d44]">
-                Owned Profile Banners ({unlockedBanners.length})
-              </h4>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {ARCADE_BANNERS.filter((b) => unlockedBanners.includes(b.id)).map(
-                  (banner) => {
-                    const equipped =
-                      getBannerById(player.equippedBanner || 'banner-warm-sketchbook').id ===
-                      banner.id;
+          {/* INVENTORY TAB 3: OWNED CHESTS (STRICTLY QUANTITY > 0) */}
+          {inventoryTab === 'chests' && (
+            <div>
+              {ownedInventoryChests.length === 0 ? (
+                <div className="sketch-scrap p-8 text-center space-y-3">
+                  <Package className="w-10 h-10 text-[#9e3a2e] mx-auto" />
+                  <div className="text-base font-bold text-[#38352f]">
+                    No Stored Chests in Your Inventory
+                  </div>
+                  <p className="text-xs text-[#514d44] max-w-md mx-auto">
+                    You currently have 0 stored chests. Visit the Chests Shop page to
+                    acquire or open Common, Uncommon, Rare, Epic, or Legendary Chests!
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => handleSelectPage('shop-chests')}
+                    className="px-4 py-2 text-xs font-bold bg-[#9e3a2e] text-[#fcf8ef] border border-[#38352f]"
+                  >
+                    Browse Chests Shop
+                  </button>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {ownedInventoryChests.map((chest) => {
+                    const qty = chestInv[chest.tier] || 0;
                     return (
-                      <div key={banner.id} className="sketch-scrap p-3.5 space-y-2.5">
-                        <ProfileBannerBackdrop bannerId={banner.id} className="p-3">
-                          <div className="flex items-center justify-between">
-                            <div className="flex items-center gap-2.5">
-                              <AnimatedSkinnedAvatar
-                                avatarId={player.avatar}
-                                customPhotoUrl={player.customPhotoUrl}
-                                skinId={player.equippedSkin}
-                                size="sm"
-                              />
-                              <span
-                                className="text-xs font-bold"
-                                style={{ color: '#fcf8ef' }}
-                              >
-                                {banner.name}
-                              </span>
-                            </div>
-                            <span
-                              className={`px-2 py-0.5 text-[10px] font-mono uppercase rounded border ${getRarityBadgeClasses(
-                                banner.rarity
-                              )}`}
-                            >
-                              {banner.rarity}
-                            </span>
+                      <div
+                        key={chest.id}
+                        className="sketch-scrap p-4 text-center flex flex-col items-center justify-between space-y-3"
+                      >
+                        <span
+                          className={`px-2 py-0.5 text-[10px] font-mono uppercase rounded border ${getRarityBadgeClasses(
+                            chest.tier
+                          )}`}
+                        >
+                          {chest.tier} Chest
+                        </span>
+                        <CustomChestArtwork tier={chest.tier} size={80} />
+                        <div>
+                          <div className="text-sm font-bold">{chest.name}</div>
+                          <div className="text-xs font-mono text-[#9e3a2e] font-bold">
+                            Owned Quantity: {qty}
                           </div>
-                        </ProfileBannerBackdrop>
-
-                        <div className="flex items-center justify-between">
-                          <span className="text-xs text-[#514d44] truncate">
-                            {banner.description}
-                          </span>
-                          <button
-                            type="button"
-                            onClick={() =>
-                              onEquipBanner(
-                                equipped ? 'banner-warm-sketchbook' : banner.id,
-                                applyToCouple
-                              )
-                            }
-                            className={`px-3 py-1 text-xs font-bold border border-[#38352f] shrink-0 ${
-                              equipped
-                                ? 'bg-[#f0dfa0] text-[#38352f]'
-                                : 'bg-[#9e3a2e] text-[#fcf8ef]'
-                            }`}
-                          >
-                            {equipped
-                              ? banner.id === 'banner-warm-sketchbook'
-                                ? 'Active'
-                                : 'Unequip'
-                              : 'Equip'}
-                          </button>
                         </div>
+                        <button
+                          type="button"
+                          disabled={busyAction !== null}
+                          onClick={() => handleTriggerOpenChest(chest.tier, 'inventory')}
+                          className="w-full py-2 text-xs font-bold bg-[#9e3a2e] text-[#fcf8ef] border border-[#38352f]"
+                        >
+                          Open Stored Chest
+                        </button>
                       </div>
                     );
-                  }
-                )}
-              </div>
+                  })}
+                </div>
+              )}
             </div>
           )}
 
-          {/* 3. Stored Chests Section */}
-          {(inventoryCategory === 'all' || inventoryCategory === 'chests') && (
-            <div className="space-y-2.5">
-              <h4 className="text-sm font-mono uppercase tracking-wider text-[#514d44]">
-                Stored Chests ({totalChestsOwned})
-              </h4>
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
-                {ARCADE_CHESTS.map((chest) => {
-                  const qty = chestInv[chest.tier] || 0;
-                  return (
-                    <div
-                      key={chest.id}
-                      className={`sketch-scrap p-3.5 text-center flex flex-col items-center justify-between space-y-2 ${
-                        qty === 0 ? 'opacity-65' : ''
-                      }`}
-                    >
-                      <CustomChestArtwork tier={chest.tier} size={64} />
-                      <div>
-                        <div className="text-xs font-bold">{chest.name}</div>
-                        <div className="text-[11px] font-mono text-[#514d44]">
-                          Quantity: <strong>{qty}</strong>
-                        </div>
-                      </div>
-                      {qty > 0 ? (
-                        <button
-                          type="button"
-                          onClick={() =>
-                            handleTriggerOpenChest(chest.tier, 'inventory')
-                          }
-                          className="w-full py-1.5 text-xs font-bold bg-[#9e3a2e] text-[#fcf8ef] border border-[#38352f]"
+          {/* INVENTORY TAB 4: OWNED KEYS (STRICTLY QUANTITY > 0) */}
+          {inventoryTab === 'keys' && (
+            <div>
+              {ownedInventoryKeys.length === 0 ? (
+                <div className="sketch-scrap p-8 text-center space-y-3">
+                  <Key className="w-10 h-10 text-[#9e3a2e] mx-auto" />
+                  <div className="text-base font-bold text-[#38352f]">
+                    No Chest Keys in Your Inventory Yet
+                  </div>
+                  <p className="text-xs text-[#514d44] max-w-md mx-auto">
+                    Complete Daily (24h), Weekly (7d), and Monthly (1m) Challenges to
+                    earn Common, Uncommon, Rare, Epic, and Legendary Keys!
+                  </p>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {ownedInventoryKeys.map((k) => {
+                    const qty = keyInv[k.tier] || 0;
+                    return (
+                      <div
+                        key={k.id}
+                        className="sketch-scrap p-4 text-center flex flex-col items-center justify-between space-y-3"
+                      >
+                        <span
+                          className={`px-2 py-0.5 text-[10px] font-mono uppercase rounded border ${getRarityBadgeClasses(
+                            k.tier
+                          )}`}
                         >
-                          Open Chest
-                        </button>
-                      ) : (
+                          {k.tier} Key
+                        </span>
+                        <CustomKeyArtwork tier={k.tier} size={64} />
+                        <div>
+                          <div className="text-sm font-bold">{k.name}</div>
+                          <div className="text-xs font-mono font-bold text-[#9e3a2e]">
+                            Owned Quantity: {qty}
+                          </div>
+                          <div className="text-[11px] text-[#514d44] mt-0.5">
+                            Unlocks: {k.unlocksChestName}
+                          </div>
+                        </div>
                         <button
                           type="button"
-                          onClick={() => setActiveTab('chests')}
-                          className="w-full py-1.5 text-[11px] font-mono bg-[#fcf8ef] border border-[#b3ac9d]"
-                        >
-                          Get in Shop
-                        </button>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-
-          {/* 4. Owned Challenge Keys Section */}
-          {(inventoryCategory === 'all' || inventoryCategory === 'keys') && (
-            <div className="space-y-2.5">
-              <h4 className="text-sm font-mono uppercase tracking-wider text-[#514d44]">
-                Challenge Keys ({totalKeysOwned})
-              </h4>
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
-                {ARCADE_KEYS.map((k) => {
-                  const qty = keyInv[k.tier] || 0;
-                  return (
-                    <div
-                      key={k.id}
-                      className={`sketch-scrap p-3.5 text-center flex flex-col items-center justify-between space-y-2 ${
-                        qty === 0 ? 'opacity-65' : ''
-                      }`}
-                    >
-                      <CustomKeyArtwork tier={k.tier} size={52} />
-                      <div>
-                        <div className="text-xs font-bold">{k.name}</div>
-                        <div className="text-[10px] text-[#514d44]">
-                          {k.challengeSourceLabel}
-                        </div>
-                        <div className="text-[11px] font-mono mt-1">
-                          Owned: <strong>{qty}</strong>
-                        </div>
-                      </div>
-                      {qty > 0 && (
-                        <button
-                          type="button"
+                          disabled={busyAction !== null}
                           onClick={() => handleTriggerOpenChest(k.tier, 'key')}
-                          className="w-full py-1.5 text-xs font-bold bg-[#f0dfa0] text-[#38352f] border border-[#38352f]"
+                          className="w-full py-2 text-xs font-bold bg-[#f0dfa0] text-[#38352f] border border-[#38352f]"
                         >
-                          Unlock {k.tier} Chest
+                          Unlock {k.unlocksChestName}
                         </button>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           )}
 
-          {/* Recent Chest Openings History */}
+          {/* INVENTORY TAB 5: OWNED CONSUMABLES (RANKED SHIELD CARD & RENAME CARD) */}
+          {inventoryTab === 'consumables' && (
+            <div>
+              {totalConsumablesOwned === 0 ? (
+                <div className="sketch-scrap p-8 text-center space-y-3">
+                  <Shield className="w-10 h-10 text-sky-600 mx-auto" />
+                  <div className="text-base font-bold text-[#38352f]">
+                    No Consumable Items in Your Inventory
+                  </div>
+                  <p className="text-xs text-[#514d44] max-w-md mx-auto">
+                    Ranked Shield Cards drop from Rare (2%), Epic (5%), and Legendary
+                    (10%) Chests. Official Rename Cards can be purchased in Shop →
+                    Profile.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => handleSelectPage('shop-chests')}
+                    className="px-4 py-2 text-xs font-bold bg-[#9e3a2e] text-[#fcf8ef] border border-[#38352f]"
+                  >
+                    Open Chests Shop
+                  </button>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                  {shieldCardsOwned > 0 && (
+                    <div className="sketch-scrap p-5 flex flex-col justify-between space-y-4">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="flex items-center gap-3">
+                          <RankedShieldCardArtwork size={72} />
+                          <div>
+                            <span className="px-2 py-0.5 text-[10px] font-mono uppercase rounded border border-sky-500/60 bg-sky-500/20 text-sky-900 dark:text-sky-200">
+                              2v2 Ranked Consumable
+                            </span>
+                            <h4 className="text-lg font-bold text-[#38352f] mt-1">
+                              Ranked Shield Card
+                            </h4>
+                            <div className="text-xs font-mono font-bold text-[#9e3a2e]">
+                              Quantity Owned: {shieldCardsOwned}
+                            </div>
+                          </div>
+                        </div>
+                        {shieldCardArmed && (
+                          <span className="px-2.5 py-1 rounded bg-emerald-500/20 border border-emerald-600/50 text-xs font-bold text-emerald-900 dark:text-emerald-200">
+                            Armed for Next 2v2
+                          </span>
+                        )}
+                      </div>
+
+                      <p className="text-xs text-[#514d44]">
+                        Protects your individual XP when your couple loses a 2v2 match.
+                        Consumed only when a 2v2 loss occurs and XP loss protection is
+                        applied. Does not prevent couple trophy loss.
+                      </p>
+
+                      {onToggleShieldCard && (
+                        <button
+                          type="button"
+                          disabled={busyAction !== null}
+                          onClick={() => setPendingShieldConfirm(!shieldCardArmed)}
+                          className={`w-full py-2 px-3 text-xs font-bold border-[1.5px] border-[#38352f] flex items-center justify-center gap-1.5 ${
+                            shieldCardArmed
+                              ? 'bg-[#f0dfa0] text-[#38352f]'
+                              : 'bg-[#9e3a2e] text-[#fcf8ef]'
+                          }`}
+                        >
+                          <Shield className="w-4 h-4" />
+                          <span>
+                            {shieldCardArmed
+                              ? 'Disarm Shield Card (Keep in Inventory)'
+                              : 'Pre-Equip Shield Card for Next 2v2 Match'}
+                          </span>
+                        </button>
+                      )}
+                    </div>
+                  )}
+
+                  {renameCardsOwned > 0 && (
+                    <div className="sketch-scrap p-5 flex flex-col justify-between space-y-4">
+                      <div>
+                        <span className="px-2 py-0.5 text-[10px] font-mono uppercase rounded border border-amber-500/60 bg-amber-500/20 text-amber-900">
+                          Account Utility Consumable
+                        </span>
+                        <h4 className="text-lg font-bold text-[#38352f] mt-1">
+                          Official Rename Card
+                        </h4>
+                        <div className="text-xs font-mono font-bold text-[#9e3a2e]">
+                          Quantity Owned: {renameCardsOwned}
+                        </div>
+                        <p className="text-xs text-[#514d44] mt-1">
+                          Redeem to change your unique arcade username across all
+                          leaderboards, couple profiles, and match history.
+                        </p>
+                      </div>
+
+                      {onUseRenameCard && (
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="text"
+                            value={newUsernameInput}
+                            onChange={(e) => setNewUsernameInput(e.target.value)}
+                            placeholder="Enter new username..."
+                            maxLength={20}
+                            className="flex-1 px-3 py-1.5 text-xs bg-[#fcf8ef] border border-[#38352f] rounded"
+                          />
+                          <button
+                            type="button"
+                            disabled={
+                              busyAction !== null || newUsernameInput.trim().length < 3
+                            }
+                            onClick={async () => {
+                              setBusyAction('redeem-rename');
+                              try {
+                                await onUseRenameCard(newUsernameInput.trim());
+                                setNewUsernameInput('');
+                                setFeedback({
+                                  type: 'success',
+                                  text: 'Username updated!',
+                                });
+                              } catch (err: unknown) {
+                                setFeedback({
+                                  type: 'error',
+                                  text:
+                                    err instanceof Error
+                                      ? err.message
+                                      : 'Rename failed.',
+                                });
+                              } finally {
+                                setBusyAction(null);
+                              }
+                            }}
+                            className="px-4 py-1.5 text-xs font-bold bg-[#9e3a2e] text-[#fcf8ef] border border-[#38352f] disabled:opacity-45"
+                          >
+                            Use Card
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Recent Verified Chest Openings History */}
           {chestOpenings.length > 0 && (
             <div className="sketch-strip p-4 space-y-2">
               <div className="text-xs font-mono uppercase tracking-wider font-bold text-[#514d44]">
@@ -1599,7 +2692,7 @@ export function CosmeticChestShopAndInventorySuite({
                     </span>
                     <span className="font-mono text-[11px]">
                       {op.wasDuplicate
-                        ? `Duplicate → +${op.duplicateCoinsAwarded} Coins`
+                        ? `Duplicate → +${op.duplicateCoinsAwarded.toLocaleString()} Coins`
                         : 'New Unlock'}
                     </span>
                   </div>
@@ -1607,6 +2700,118 @@ export function CosmeticChestShopAndInventorySuite({
               </div>
             </div>
           )}
+        </div>
+      )}
+
+      {/* ====================================================================
+          PURCHASE CONFIRMATION MODAL (BEFORE DEDUCTING COINS)
+         ==================================================================== */}
+      {pendingPurchase && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-xs p-4">
+          <div className="sketch-scrap w-full max-w-md p-6 space-y-4 border-2 border-[#38352f] bg-[#fcf8ef]">
+            <div className="flex items-center justify-between border-b border-[#b3ac9d] pb-2.5">
+              <div className="flex items-center gap-2 font-bold text-base text-[#38352f]">
+                <Coins className="w-5 h-5 text-[#9e3a2e]" />
+                <span>Confirm Coin Purchase</span>
+              </div>
+              <span
+                className={`px-2 py-0.5 text-[10px] font-mono uppercase rounded border ${getRarityBadgeClasses(
+                  pendingPurchase.rarity
+                )}`}
+              >
+                {pendingPurchase.rarity}
+              </span>
+            </div>
+
+            <div className="space-y-2">
+              <div className="text-lg font-bold text-[#38352f]">
+                {pendingPurchase.itemName}
+              </div>
+              <p className="text-xs text-[#514d44]">{pendingPurchase.description}</p>
+            </div>
+
+            <div className="p-3 rounded bg-[#efe8d8] border border-[#b3ac9d] space-y-1.5 text-xs font-mono">
+              <div className="flex items-center justify-between">
+                <span>Current Coin Balance:</span>
+                <strong>{player.coins.toLocaleString()} Coins</strong>
+              </div>
+              <div className="flex items-center justify-between text-[#9e3a2e]">
+                <span>Item Price:</span>
+                <strong>-{pendingPurchase.costCoins.toLocaleString()} Coins</strong>
+              </div>
+              <div className="flex items-center justify-between pt-1 border-t border-[#b3ac9d] font-bold text-[#38352f]">
+                <span>Balance After Purchase:</span>
+                <span>
+                  {Math.max(
+                    0,
+                    player.coins - pendingPurchase.costCoins
+                  ).toLocaleString()}{' '}
+                  Coins
+                </span>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2.5 pt-2">
+              <button
+                type="button"
+                onClick={() => setPendingPurchase(null)}
+                className="px-4 py-2 text-xs font-bold bg-[#fcf8ef] text-[#38352f] border border-[#38352f]"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleExecuteConfirmedPurchase}
+                className="px-4 py-2 text-xs font-bold bg-[#9e3a2e] text-[#fcf8ef] border-[1.5px] border-[#38352f] flex items-center gap-1.5"
+              >
+                <Check className="w-4 h-4" />
+                <span>
+                  Confirm ({pendingPurchase.costCoins.toLocaleString()} Coins)
+                </span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ====================================================================
+          RANKED SHIELD CARD PRE-EQUIP CONFIRMATION MODAL
+         ==================================================================== */}
+      {pendingShieldConfirm !== null && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-xs p-4">
+          <div className="sketch-scrap w-full max-w-md p-6 space-y-4 border-2 border-[#38352f] bg-[#fcf8ef]">
+            <div className="flex items-center gap-2 border-b border-[#b3ac9d] pb-2.5 font-bold text-base text-[#38352f]">
+              <Shield className="w-5 h-5 text-sky-600" />
+              <span>
+                {pendingShieldConfirm
+                  ? 'Pre-Equip Ranked Shield Card?'
+                  : 'Disarm Ranked Shield Card?'}
+              </span>
+            </div>
+
+            <p className="text-xs text-[#514d44] leading-relaxed">
+              {pendingShieldConfirm
+                ? 'When armed, 1 Ranked Shield Card will automatically protect you from losing XP on your next 2v2 Couple Mode loss. The card is only consumed if a 2v2 loss occurs (wins and draws never consume the card). Note: Ranked Shield Cards do not prevent couple trophy loss.'
+                : 'Your Ranked Shield Card will be disarmed and remain safely stored in your Inventory → Consumables.'}
+            </p>
+
+            <div className="flex items-center justify-end gap-2.5 pt-2">
+              <button
+                type="button"
+                onClick={() => setPendingShieldConfirm(null)}
+                className="px-4 py-2 text-xs font-bold bg-[#fcf8ef] text-[#38352f] border border-[#38352f]"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmShieldToggle}
+                className="px-4 py-2 text-xs font-bold bg-[#9e3a2e] text-[#fcf8ef] border-[1.5px] border-[#38352f]"
+              >
+                {pendingShieldConfirm ? 'Confirm & Arm Shield' : 'Confirm Disarm'}
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
@@ -1622,9 +2827,11 @@ export function CosmeticChestShopAndInventorySuite({
           if (category === 'skin') {
             await onEquipSkin(itemId, applyToCouple);
             setPreviewSkinId(itemId);
-          } else {
+          } else if (category === 'banner') {
             await onEquipBanner(itemId, applyToCouple);
             setPreviewBannerId(itemId);
+          } else if (category === 'consumable' && onToggleShieldCard) {
+            await onToggleShieldCard(true);
           }
         }}
       />

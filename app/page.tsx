@@ -7,6 +7,7 @@ import {
   MULTIPLAYER_GAMES,
   MULTIPLAYER_1V1_EXCLUSIVE_GAMES,
   MULTIPLAYER_2V2_COUPLE_GAMES,
+  PARTY_GAMES,
   ALL_ARCADE_GAMES,
   REWARD_SHOP_ITEMS,
   RENAME_CARD_COST_COINS,
@@ -75,7 +76,10 @@ import {
 import {
   CosmeticChestShopAndInventorySuite,
   ChestOpeningResultPayload,
+  DedicatedShopOrInventoryPage,
 } from '@/src/components/ChestBoutiqueAndInventory';
+import { ProgressionHud } from '@/src/components/ProgressionHud';
+import PartyGamesArena from '@/src/components/PartyGamesArena';
 import { soundFX } from '@/src/lib/sound';
 import {
   Users,
@@ -92,6 +96,8 @@ import {
   VolumeX,
   Plus,
   ShieldAlert,
+  Camera,
+  Upload,
 } from 'lucide-react';
 
 type NavSection = ArcadeNavSection;
@@ -166,6 +172,7 @@ export default function HerLittleArcadePage() {
     useState<ChallengePeriodWindows | null>(null);
   const [seasonState, setSeasonState] = useState<SeasonDataState | null>(null);
   const [photoModalOpen, setPhotoModalOpen] = useState<boolean>(false);
+  const [photoModalMode, setPhotoModalMode] = useState<'upload' | 'camera'>('upload');
   const [chestOpenings, setChestOpenings] = useState<
     Array<{
       id: number;
@@ -192,10 +199,14 @@ export default function HerLittleArcadePage() {
     'all' | 'single' | '1v1' | '2v2' | 'competitive' | 'cooperative' | 'party'
   >('all');
   const [multiplayerFilter, setMultiplayerFilter] = useState<
-    'all' | '1v1' | '2v2' | 'trophy-road' | 'couple-leaderboard'
+    'all' | '1v1' | '2v2' | 'party' | 'trophy-road' | 'couple-leaderboard'
   >('all');
-  const [selectedMultiplayerMode, setSelectedMultiplayerMode] = useState<'1v1' | '2v2'>('1v1');
-  const [requestedDockTab, setRequestedDockTab] = useState<'matchmake' | 'invite' | 'create' | 'join' | null>(null);
+  const [selectedMultiplayerMode, setSelectedMultiplayerMode] = useState<
+    '1v1' | '2v2' | 'party'
+  >('1v1');
+  const [requestedDockTab, setRequestedDockTab] = useState<
+    'matchmake' | 'invite' | 'create' | 'join' | null
+  >(null);
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [leaderboardTab, setLeaderboardTab] = useState<'couples' | 'trophy-road'>('couples');
   const [coupleLeaderboardPeriod, setCoupleLeaderboardPeriod] = useState<'global' | 'weekly' | 'monthly'>('global');
@@ -231,11 +242,11 @@ export default function HerLittleArcadePage() {
   const gameSwitchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mainViewportRef = useRef<HTMLElement | null>(null);
 
-  // Modal state for Play Game -> 1v1 or 2v2 Match Setup
+  // Modal state for Play Game -> 1v1, 2v2, or Party Match Setup
   const [playSetupModal, setPlaySetupModal] = useState<{
     isOpen: boolean;
     gameId: string;
-    mode: '1v1' | '2v2';
+    mode: '1v1' | '2v2' | 'party';
   }>({
     isOpen: false,
     gameId: 'chess',
@@ -261,7 +272,7 @@ export default function HerLittleArcadePage() {
   const handleLaunchGame = useCallback(
     (
       nextGameId: string | null,
-      options?: { autostart?: boolean; mode?: '1v1' | '2v2' }
+      options?: { autostart?: boolean; mode?: '1v1' | '2v2' | 'party' }
     ) => {
       if (gameSwitchTimeoutRef.current) {
         clearTimeout(gameSwitchTimeoutRef.current);
@@ -337,15 +348,27 @@ export default function HerLittleArcadePage() {
   // Single-Player games open directly; Multiplayer games open the 1v1 or 2v2 Setup Modal
   // (unless the player is already inside a full active room for that exact game & mode).
   const handlePlayGameClick = useCallback(
-    (game: ArcadeGameDef, forcedMode?: '1v1' | '2v2') => {
+    (game: ArcadeGameDef, forcedMode?: '1v1' | '2v2' | 'party') => {
       if (game.collection === 'single') {
         handleLaunchGame(game.id, { autostart: false });
         return;
       }
 
+      if (game.collection === 'party' || forcedMode === 'party') {
+        setSelectedMultiplayerMode('party');
+        setPlaySetupModal({
+          isOpen: true,
+          gameId: game.id,
+          mode: 'party',
+        });
+        return;
+      }
+
       const resolvedMode: '1v1' | '2v2' =
-        forcedMode ||
-        (game.supports2v2 && selectedMultiplayerMode === '2v2' ? '2v2' : '1v1');
+        forcedMode === '2v2' ||
+        (game.supports2v2 && selectedMultiplayerMode === '2v2')
+          ? '2v2'
+          : '1v1';
 
       setSelectedMultiplayerMode(resolvedMode);
 
@@ -1073,6 +1096,46 @@ export default function HerLittleArcadePage() {
     }
   }
 
+  async function handleToggleShieldCard(armed: boolean) {
+    if (!currentUser || !sessionToken) return;
+    setRewardStatusBanner(null);
+    setPendingShopItemId('shield-card-toggle');
+    try {
+      const res = await fetch('/api/arcade', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${sessionToken}`,
+        },
+        body: JSON.stringify({
+          action: 'toggle_shield_card',
+          armed,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setRewardStatusBanner(data.error || 'Could not update Ranked Shield Card.');
+        soundFX.playError();
+        return;
+      }
+      if (data.user) {
+        setCurrentUser(normalizePlayerProfile(data.user));
+      }
+      setRewardStatusBanner(
+        armed
+          ? '🛡️ Ranked Shield Card ARMED! Your personal XP is protected on your next 2v2 loss.'
+          : 'Ranked Shield Card disarmed and returned to your inventory.'
+      );
+      soundFX.playSuccess();
+      await loadBootstrapData(currentUser.uid);
+    } catch {
+      setRewardStatusBanner('Could not update Ranked Shield Card right now.');
+      soundFX.playError();
+    } finally {
+      setPendingShopItemId(null);
+    }
+  }
+
   async function handleUpdateSeasonBracket(configUpdates: Partial<SeasonalBracketConfig>) {
     if (!currentUser || !sessionToken) return;
     setIsUpdatingSeason(true);
@@ -1306,6 +1369,34 @@ export default function HerLittleArcadePage() {
           } else if (nextSection === 'leaderboard') {
             setLeaderboardTab('couples');
             setActiveSection('leaderboard');
+          } else if (nextSection === 'mp-1v1') {
+            setMultiplayerFilter('1v1');
+            setSelectedMultiplayerMode('1v1');
+            setActiveSection('mp-1v1');
+          } else if (nextSection === 'mp-2v2') {
+            setMultiplayerFilter('2v2');
+            setSelectedMultiplayerMode('2v2');
+            setActiveSection('mp-2v2');
+          } else if (nextSection === 'mp-party') {
+            setMultiplayerFilter('party');
+            setSelectedMultiplayerMode('party');
+            setActiveSection('mp-party');
+          } else if (nextSection === 'mp-create-room') {
+            setRequestedDockTab('create');
+            setActiveSection('mp-create-room');
+          } else if (nextSection === 'mp-join-group') {
+            setRequestedDockTab('join');
+            setActiveSection('mp-join-group');
+          } else if (nextSection === 'mp-matchmaking') {
+            setRequestedDockTab('matchmake');
+            setMultiplayerFilter('2v2');
+            setSelectedMultiplayerMode('2v2');
+            setActiveSection('mp-matchmaking');
+          } else if (nextSection === 'mp-invitations') {
+            setRequestedDockTab('invite');
+            setActiveSection('mp-invitations');
+          } else if (nextSection === 'mp-voice-chat') {
+            setActiveSection('mp-voice-chat');
           } else {
             setActiveSection(nextSection);
           }
@@ -1324,6 +1415,22 @@ export default function HerLittleArcadePage() {
 
       {/* Right Content Column */}
       <div className="flex min-w-0 flex-1 flex-col">
+        {/* Persistent Top Game-Style Progression HUD (Level 300 XP & 5,000,000 Coin Capacity) */}
+        <ProgressionHud
+          xp={currentUser.xp}
+          coins={currentUser.coins}
+          shieldCards={currentUser.shieldCards}
+          shieldCardArmed={currentUser.shieldCardArmed}
+          onOpenShopChests={() => {
+            handleLaunchGame(null);
+            setActiveSection('shop-chests');
+          }}
+          onOpenInventoryConsumables={() => {
+            handleLaunchGame(null);
+            setActiveSection('inventory');
+          }}
+        />
+
         {/* Email Verification Reminder Bar if not yet verified */}
         {!currentUser.emailVerified && (
           <div className="border-b border-amber-500/30 bg-amber-500/10 px-6 py-2 text-xs text-amber-200">
@@ -1474,6 +1581,32 @@ export default function HerLittleArcadePage() {
                       </button>
                     </div>
                   </div>
+                ) : activeGameDef.collection === 'party' ||
+                  activeRoom?.mode === 'party' ? (
+                  <PartyGamesArena
+                    currentUser={{
+                      uid: currentUser.uid,
+                      username: currentUser.username,
+                      avatar: currentUser.avatar,
+                      customPhotoUrl: currentUser.customPhotoUrl,
+                      equippedSkin: currentUser.equippedSkin,
+                      equippedBanner: currentUser.equippedBanner,
+                      level: levelMetrics.level,
+                    }}
+                    activeCouple={activeCouple}
+                    activeRoom={activeRoom}
+                    authFetcher={authFetcher}
+                    onRoomUpdated={(nextRoom) => setActiveRoom(nextRoom)}
+                    onLeaveRoom={() => {
+                      setActiveRoom(null);
+                      handleLaunchGame(null);
+                    }}
+                    onOpenCouplePairing={() => {
+                      handleLaunchGame(null);
+                      setActiveSection('profile');
+                    }}
+                    onXpAwarded={() => loadBootstrapData(currentUser.uid)}
+                  />
                 ) : activeGameDef.id === 'chess' ? (
                   <ChessArena
                     playerName={currentUser.username}
@@ -1503,7 +1636,11 @@ export default function HerLittleArcadePage() {
                     gameId={activeGameDef.id}
                     playerName={currentUser.username}
                     partnerName={partnerDisplayName}
-                    roomMode={activeRoom?.mode || selectedMultiplayerMode}
+                    roomMode={
+                      activeRoom?.mode === '2v2' || selectedMultiplayerMode === '2v2'
+                        ? '2v2'
+                        : '1v1'
+                    }
                     roomTeams={activeRoom?.teams || []}
                     roomGameState={activeRoom?.gameState}
                     onSyncRoomGameState={(nextGameState) => {
@@ -1536,7 +1673,9 @@ export default function HerLittleArcadePage() {
                     activeCouple={activeCouple}
                     activeRoom={activeRoom}
                     incomingInvitations={incomingInvitations}
-                    preferredMode={selectedMultiplayerMode}
+                    preferredMode={
+                      selectedMultiplayerMode === '2v2' ? '2v2' : '1v1'
+                    }
                     onRefreshInvitations={() => loadBootstrapData(currentUser.uid)}
                     onUpdateRoom={handlePersistRoom}
                     onStartRoomGame={(room) => {
@@ -1836,9 +1975,40 @@ export default function HerLittleArcadePage() {
               )}
 
               {/* ============================================================
+                  SECTION 3A: PARTY GAMES (3 TO 10 COUPLES · 12 PLAYABLE PARTY GAMES)
+                  ============================================================ */}
+              {activeSection === 'mp-party' && (
+                <PartyGamesArena
+                  currentUser={{
+                    uid: currentUser.uid,
+                    username: currentUser.username,
+                    avatar: currentUser.avatar,
+                    customPhotoUrl: currentUser.customPhotoUrl,
+                    equippedSkin: currentUser.equippedSkin,
+                    equippedBanner: currentUser.equippedBanner,
+                    level: levelMetrics.level,
+                  }}
+                  activeCouple={activeCouple}
+                  activeRoom={activeRoom}
+                  authFetcher={authFetcher}
+                  onRoomUpdated={(nextRoom) => setActiveRoom(nextRoom)}
+                  onLeaveRoom={() => setActiveRoom(null)}
+                  onOpenCouplePairing={() => setActiveSection('profile')}
+                  onXpAwarded={() => loadBootstrapData(currentUser.uid)}
+                />
+              )}
+
+              {/* ============================================================
                   SECTION 3: MULTIPLAYER & COMPETITIVE RANKING (1v1, 2v2, Rooms, Matchmaking, Invitations, Lobby, Voice, 2v2 Trophy Road & 2v2 Couple Leaderboard)
                   ============================================================ */}
-              {activeSection === 'multiplayer' && (
+              {(activeSection === 'multiplayer' ||
+                activeSection === 'mp-1v1' ||
+                activeSection === 'mp-2v2' ||
+                activeSection === 'mp-create-room' ||
+                activeSection === 'mp-join-group' ||
+                activeSection === 'mp-matchmaking' ||
+                activeSection === 'mp-invitations' ||
+                activeSection === 'mp-voice-chat') && (
                 <div className="grid grid-cols-1 gap-6 xl:grid-cols-12">
                   <div className="space-y-5 xl:col-span-8">
                     <div className="space-y-3 border-b border-stone-800 pb-4">
@@ -2490,7 +2660,9 @@ export default function HerLittleArcadePage() {
                       incomingInvitations={incomingInvitations}
                       requestedLobbyTab={requestedDockTab}
                       preferredMode={
-                        multiplayerFilter === '2v2' ? '2v2' : selectedMultiplayerMode
+                        multiplayerFilter === '2v2' || selectedMultiplayerMode === '2v2'
+                          ? '2v2'
+                          : '1v1'
                       }
                       onLobbyTabChange={(tab) => setRequestedDockTab(tab)}
                       onRefreshInvitations={() => loadBootstrapData(currentUser.uid)}
@@ -3211,88 +3383,39 @@ export default function HerLittleArcadePage() {
               )}
 
               {/* ============================================================
-                  SECTION 6: SHOP — COINS, RENAME CARDS, COSMETICS & ACHIEVEMENTS
+                  SECTION 6: DEDICATED SHOP PAGES (PROFILE, BANNERS, AVATARS, CHESTS, KEYS) & STANDALONE INVENTORY
                   ============================================================ */}
-              {(activeSection === 'shop' || activeSection === 'rewards') && (
+              {(activeSection === 'shop' ||
+                activeSection === 'rewards' ||
+                activeSection === 'shop-profile' ||
+                activeSection === 'shop-banners' ||
+                activeSection === 'shop-avatars' ||
+                activeSection === 'shop-chests' ||
+                activeSection === 'shop-keys' ||
+                activeSection === 'inventory') && (
                 <div className="space-y-8">
-                  <div className="flex flex-wrap items-center justify-between gap-4 border-b border-stone-800 pb-4">
-                    <div>
-                      <h1 className="text-2xl font-bold tracking-tight text-stone-100">
-                        Arcade Shop — Coins, Official Rename Card &amp; Cosmetics
-                      </h1>
-                      <p className="mt-1 text-xs text-stone-400">
-                        Coins are earned exclusively in 2v2 Couple Matches (0 starting balance). Spend coins on cosmetics or the 10,000-Coin Official Rename Card.
-                      </p>
-                    </div>
-
-                    <div className="flex flex-wrap items-center gap-2">
-                      <div className="flex items-center gap-2 rounded-xl border border-stone-800 bg-stone-900 px-4 py-2 font-mono text-xs font-bold text-amber-300 tabular-nums">
-                        <span>Rename Cards: {currentUser.renameCards ?? 0}</span>
-                      </div>
-                      <div className="flex items-center gap-2 rounded-xl border border-stone-800 bg-stone-900 px-4 py-2 font-mono text-sm font-bold text-teal-300 tabular-nums">
-                        <Coins className="h-4 w-4 text-amber-400" />
-                        <span>{currentUser.coins.toLocaleString()} Coins Available</span>
-                      </div>
-                    </div>
-                  </div>
-
                   {rewardStatusBanner && (
                     <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 p-3.5 text-xs font-semibold text-amber-200">
                       {rewardStatusBanner}
                     </div>
                   )}
 
-                  {/* Featured Official Rename Card (10,000 Coins) — Clean Unboxed Presentation */}
-                  <section className="border-b border-stone-800 pb-6">
-                    <div className="flex flex-col justify-between gap-4 lg:flex-row lg:items-center">
-                      <div>
-                        <div className="text-xs font-bold uppercase tracking-wider text-amber-300">
-                          Identity &amp; Username Management · 10,000 Coins
-                        </div>
-                        <h2 className="mt-1 text-lg font-bold text-stone-100">
-                          Official Rename Card ({RENAME_CARD_COST_COINS.toLocaleString()} Coins)
-                        </h2>
-                        <p className="mt-1 max-w-2xl text-xs leading-relaxed text-stone-300">
-                          Every player chooses their initial unique username for free during onboarding. Any subsequent username change requires <strong>1 Official Rename Card (10,000 Coins)</strong>. Your new username is validated for uniqueness and cascades automatically across your Couple Profile, Leaderboards, and Match History.
-                        </p>
-                      </div>
-
-                      <div className="flex flex-wrap items-center gap-2.5 shrink-0">
-                        <button
-                          type="button"
-                          disabled={pendingShopItemId === 'rename-card'}
-                          onClick={() =>
-                            handleBuyOrEquipShopItem(
-                              'rename-card',
-                              RENAME_CARD_COST_COINS,
-                              'utility',
-                              'rename-card'
-                            )
-                          }
-                          className="flex items-center gap-1.5 rounded-xl bg-amber-500 px-4 py-2.5 text-xs font-bold text-stone-950 hover:bg-amber-400 disabled:opacity-60"
-                        >
-                          {pendingShopItemId === 'rename-card' ? (
-                            <ArcadeInlineSpinner size={14} label="Purchasing Rename Card..." />
-                          ) : (
-                            <span>Buy Rename Card ({RENAME_CARD_COST_COINS.toLocaleString()} Coins)</span>
-                          )}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setAuthModalOpen(true)}
-                          className="rounded-xl border border-teal-500/40 bg-teal-500/15 px-4 py-2.5 text-xs font-bold text-teal-200 hover:bg-teal-500/25"
-                        >
-                          Use Rename Card ({currentUser.renameCards ?? 0} Owned)
-                        </button>
-                      </div>
-                    </div>
-                  </section>
-
-                  {/* 5-Tier Chests & Keys Boutique + Banners + Unified 4-Category Inventory */}
+                  {/* Dedicated 5-Page Shop Suite & Standalone 5-Tab Inventory Page */}
                   <CosmeticChestShopAndInventorySuite
                     player={currentUser}
                     activeCouple={activeCouple}
                     chestOpenings={chestOpenings}
+                    activePage={
+                      (activeSection === 'shop-profile' ||
+                      activeSection === 'shop-banners' ||
+                      activeSection === 'shop-avatars' ||
+                      activeSection === 'shop-chests' ||
+                      activeSection === 'shop-keys' ||
+                      activeSection === 'inventory'
+                        ? activeSection
+                        : 'shop-chests') as DedicatedShopOrInventoryPage
+                    }
+                    onNavigatePage={(nextPage) => setActiveSection(nextPage)}
                     onBuyChest={handleBuyChest}
                     onOpenChest={handleOpenChest}
                     onPurchaseSkin={(skinId) => {
@@ -3303,19 +3426,49 @@ export default function HerLittleArcadePage() {
                     onEquipSkin={handleEquipSkin}
                     onPurchaseBanner={handlePurchaseBanner}
                     onEquipBanner={handleEquipBanner}
-                    onOpenPhotoStudio={() => setPhotoModalOpen(true)}
+                    onToggleShieldCard={handleToggleShieldCard}
+                    onPurchaseRenameCard={() =>
+                      handleBuyOrEquipShopItem(
+                        'rename-card',
+                        RENAME_CARD_COST_COINS,
+                        'utility',
+                        'rename-card'
+                      )
+                    }
+                    onUseRenameCard={async (newUsername: string) => {
+                      if (!currentUser || !sessionToken) return;
+                      setRewardStatusBanner(null);
+                      const res = await fetch('/api/arcade', {
+                        method: 'POST',
+                        headers: {
+                          'Content-Type': 'application/json',
+                          Authorization: `Bearer ${sessionToken}`,
+                        },
+                        body: JSON.stringify({
+                          action: 'use_rename_card',
+                          username: newUsername,
+                        }),
+                      });
+                      const data = await res.json();
+                      if (!res.ok) {
+                        setRewardStatusBanner(data.error || 'Could not update username.');
+                        soundFX.playError();
+                        return;
+                      }
+                      if (data.user) {
+                        setCurrentUser(normalizePlayerProfile(data.user));
+                      }
+                      setRewardStatusBanner(
+                        `Username updated to @${newUsername} using 1 Official Rename Card!`
+                      );
+                      soundFX.playSuccess();
+                      await loadBootstrapData(currentUser.uid);
+                    }}
+                    onOpenPhotoStudio={(mode) => {
+                      setPhotoModalMode(mode || 'upload');
+                      setPhotoModalOpen(true);
+                    }}
                   />
-
-                  {/* 5-Rarity Equippable Skins Vault & Live Preview */}
-                  <SkinsBoutiqueAndVaultPanel
-                    currentUser={currentUser}
-                    activeCouple={activeCouple}
-                    pendingSkinActionId={pendingShopItemId}
-                    onPurchaseSkin={handlePurchaseSkin}
-                    onEquipSkin={handleEquipSkin}
-                  />
-
-                  {/* Cosmetic Unlockables Boutique */}
                   <section className="space-y-4">
                     <h2 className="text-base font-bold text-stone-100">
                       Avatars, Themes, Pet Accessories &amp; Utility Unlockables
@@ -3528,8 +3681,11 @@ export default function HerLittleArcadePage() {
                       setCoupleContext(nextCtx);
                       loadBootstrapData(currentUser.uid);
                     }}
-                    onOpenPhotoUpload={() => setPhotoModalOpen(true)}
-                    onOpenCosmeticsVault={() => setActiveSection('shop')}
+                    onOpenPhotoUpload={() => {
+                      setPhotoModalMode('upload');
+                      setPhotoModalOpen(true);
+                    }}
+                    onOpenCosmeticsVault={() => setActiveSection('shop-profile')}
                   />
 
                   <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
@@ -3667,13 +3823,30 @@ export default function HerLittleArcadePage() {
                           </div>
                         </div>
                       </div>
-                      <button
-                        type="button"
-                        onClick={() => setPhotoModalOpen(true)}
-                        className="rounded-xl bg-amber-500 px-4 py-2 text-xs font-bold text-stone-950 hover:bg-amber-400"
-                      >
-                        {currentUser.customPhotoUrl ? 'Replace / Crop Photo' : 'Upload Profile Picture'}
-                      </button>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setPhotoModalMode('upload');
+                            setPhotoModalOpen(true);
+                          }}
+                          className="flex items-center gap-1.5 rounded-xl bg-amber-500 px-3.5 py-2 text-xs font-bold text-stone-950 hover:bg-amber-400"
+                        >
+                          <Upload className="h-3.5 w-3.5" />
+                          <span>Upload Photo</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setPhotoModalMode('camera');
+                            setPhotoModalOpen(true);
+                          }}
+                          className="flex items-center gap-1.5 rounded-xl bg-rose-500 px-3.5 py-2 text-xs font-bold text-white hover:bg-rose-400"
+                        >
+                          <Camera className="h-3.5 w-3.5" />
+                          <span>Take Photo</span>
+                        </button>
+                      </div>
                     </div>
 
                     <div className="flex items-center justify-between">
@@ -3801,6 +3974,8 @@ export default function HerLittleArcadePage() {
           username: currentUser.username,
           avatar: currentUser.avatar,
           equippedSkin: currentUser.equippedSkin,
+          shieldCards: currentUser.shieldCards,
+          shieldCardArmed: currentUser.shieldCardArmed,
         }}
         activeCouple={
           activeCouple
@@ -3858,6 +4033,7 @@ export default function HerLittleArcadePage() {
           setActiveSection('profile');
           smoothScrollToTop();
         }}
+        onShieldCardUpdated={() => loadBootstrapData(currentUser.uid)}
       />
 
       {/* Account Management Modal (when already authenticated) */}
@@ -3884,9 +4060,10 @@ export default function HerLittleArcadePage() {
         }}
       />
 
-      {/* Profile Picture Upload, Crop & Preview Studio Modal */}
+      {/* Profile Picture Upload, Camera Capture, Crop & Preview Studio Modal */}
       <ProfilePhotoUploadAndCropModal
         isOpen={photoModalOpen}
+        initialMode={photoModalMode}
         currentPhotoUrl={currentUser.customPhotoUrl || ''}
         avatarId={currentUser.avatar}
         equippedSkinId={currentUser.equippedSkin}

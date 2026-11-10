@@ -4,7 +4,7 @@ export interface ArcadeGameDef {
   id: string;
   number: number;
   title: string;
-  collection: 'single' | 'multiplayer';
+  collection: 'single' | 'multiplayer' | 'party';
   category: GameCategory;
   shortDesc: string;
   rulesSummary: string;
@@ -12,10 +12,30 @@ export interface ArcadeGameDef {
   xpReward: number;
   coinReward: number;
   supports2v2?: boolean;
+  supportsParty?: boolean;
+  minCouples?: number;
+  maxCouples?: number;
+  minPlayers?: number;
+  maxPlayers?: number;
+  partyRounds?: number;
   supportsPersonalization?: boolean;
   personalizationType?: 'memory_photo' | 'guess_picture' | 'quiz_question' | 'truth_or_dare';
   defaultDifficulty?: 'Easy' | 'Medium' | 'Hard';
   accentColor: string;
+}
+
+export const PARTY_PLACEMENT_XP_REWARDS = {
+  first: 60,
+  second: 45,
+  third: 35,
+  participant: 25,
+} as const;
+
+export function getPartyPlacementXp(rank: number): number {
+  if (rank === 1) return PARTY_PLACEMENT_XP_REWARDS.first;
+  if (rank === 2) return PARTY_PLACEMENT_XP_REWARDS.second;
+  if (rank === 3) return PARTY_PLACEMENT_XP_REWARDS.third;
+  return PARTY_PLACEMENT_XP_REWARDS.participant;
 }
 
 export const HERO_BANNER_IMAGE = '/src/assets/images/arcade_hero_banner_1793883798298.jpg';
@@ -331,6 +351,237 @@ export const MULTIPLAYER_GAMES: ArcadeGameDef[] = [
   },
 ];
 
+export const PARTY_GAMES: ArcadeGameDef[] = [
+  {
+    id: 'party-couple-quiz-showdown',
+    number: 1,
+    title: 'Couple Quiz Showdown',
+    collection: 'party',
+    category: 'party',
+    shortDesc: 'Couples compete in trivia rounds covering general knowledge, entertainment, puzzles, and fun topics. Both partners can discuss answers before submitting.',
+    rulesSummary: '3–10 couples race through 5 multi-category trivia rounds. Both partners see their partner’s live suggested pick and lock in a combined team answer for speed and accuracy points.',
+    controlsHint: 'Select Option A–D · Coordinate with Partner · Lock In Answer',
+    xpReward: 60,
+    coinReward: 0,
+    supportsParty: true,
+    minCouples: 3,
+    maxCouples: 10,
+    minPlayers: 6,
+    maxPlayers: 20,
+    partyRounds: 5,
+    accentColor: '#E76F51',
+  },
+  {
+    id: 'party-draw-and-guess',
+    number: 2,
+    title: 'Draw & Guess Party',
+    collection: 'party',
+    category: 'party',
+    shortDesc: 'One partner draws a randomly assigned word while everyone else guesses. Rotate drawing turns and award points for correct guesses.',
+    rulesSummary: '3–10 couples rotate spotlight easel turns. The active artist sketches the secret prompt while their partner and rival couples race to type the exact word.',
+    controlsHint: 'Drag on Canvas to Draw · Type Guess in Prompt Box · Submit',
+    xpReward: 60,
+    coinReward: 0,
+    supportsParty: true,
+    minCouples: 3,
+    maxCouples: 10,
+    minPlayers: 6,
+    maxPlayers: 20,
+    partyRounds: 5,
+    accentColor: '#F4A261',
+  },
+  {
+    id: 'party-charades-challenge',
+    number: 3,
+    title: 'Charades Challenge',
+    collection: 'party',
+    category: 'party',
+    shortDesc: 'One partner acts out a word or phrase without speaking while their partner guesses. Compete against other couples within a time limit.',
+    rulesSummary: 'Perform silent stage cues, expressive gestures, and scene actions without taboo words so your partner and rival couples can identify the secret phrase before the curtain falls.',
+    controlsHint: 'Trigger Stage Gesture Cues · Select Phrase Guess · Lock In',
+    xpReward: 60,
+    coinReward: 0,
+    supportsParty: true,
+    minCouples: 3,
+    maxCouples: 10,
+    minPlayers: 6,
+    maxPlayers: 20,
+    partyRounds: 5,
+    accentColor: '#2A9D8F',
+  },
+  {
+    id: 'party-word-association',
+    number: 4,
+    title: 'Word Association Battle',
+    collection: 'party',
+    category: 'party',
+    shortDesc: 'Couples take turns connecting words under time pressure. Repeated answers, invalid words, and slow responses can affect scoring.',
+    rulesSummary: 'Link semantic word chains from the root theme word before the fuse runs out. Unique, fast word connections build your couple multiplier; repeated or invalid words break your streak.',
+    controlsHint: 'Type Connected Word · Press Enter Before Timer Expires',
+    xpReward: 60,
+    coinReward: 0,
+    supportsParty: true,
+    minCouples: 3,
+    maxCouples: 10,
+    minPlayers: 6,
+    maxPlayers: 20,
+    partyRounds: 5,
+    accentColor: '#E9C46A',
+  },
+  {
+    id: 'party-emoji-decode',
+    number: 5,
+    title: 'Emoji Decode',
+    collection: 'party',
+    category: 'party',
+    shortDesc: 'Decode movies, objects, phrases, and popular expressions using emoji clues. Fast and accurate answers earn points.',
+    rulesSummary: 'Inspect the encrypted emoji sequence representing famous films, idioms, songs, and holiday puzzles. Submit the decoded title or expression fastest for top couple points.',
+    controlsHint: 'Inspect Emoji Cipher · Type or Pick Decoded Phrase · Submit',
+    xpReward: 60,
+    coinReward: 0,
+    supportsParty: true,
+    minCouples: 3,
+    maxCouples: 10,
+    minPlayers: 6,
+    maxPlayers: 20,
+    partyRounds: 5,
+    accentColor: '#F4A261',
+  },
+  {
+    id: 'party-reaction-rumble',
+    number: 6,
+    title: 'Reaction Rumble',
+    collection: 'party',
+    category: 'party',
+    shortDesc: 'Compete in reaction-based mini-rounds. Both partners participate in quick challenges involving timing, attention, and coordination.',
+    rulesSummary: 'Both partners strike synchronized target beacons, dodge red decoys, and hit precision timing windows. Combined partner millisecond scores rank every couple each round.',
+    controlsHint: 'Click Emerald Target Beacons · Avoid Red Decoys · Space Strike',
+    xpReward: 60,
+    coinReward: 0,
+    supportsParty: true,
+    minCouples: 3,
+    maxCouples: 10,
+    minPlayers: 6,
+    maxPlayers: 20,
+    partyRounds: 5,
+    accentColor: '#E76F51',
+  },
+  {
+    id: 'party-memory-mayhem',
+    number: 7,
+    title: 'Memory Mayhem',
+    collection: 'party',
+    category: 'party',
+    shortDesc: 'Couples work together to remember card positions and solve increasingly challenging memory rounds while competing for the highest score.',
+    rulesSummary: 'Study the brief constellation card flash, then flip and pair matching relic tiles across escalating 4x4 and 4x5 grids before the round timer runs out.',
+    controlsHint: 'Memorize Revealed Grid · Click Matching Tile Pairs',
+    xpReward: 60,
+    coinReward: 0,
+    supportsParty: true,
+    minCouples: 3,
+    maxCouples: 10,
+    minPlayers: 6,
+    maxPlayers: 20,
+    partyRounds: 4,
+    accentColor: '#2A9D8F',
+  },
+  {
+    id: 'party-two-truths-and-a-lie',
+    number: 8,
+    title: 'Two Truths & A Lie',
+    collection: 'party',
+    category: 'party',
+    shortDesc: 'Participants submit three statements, with others trying to identify the false one. Award points for correct guesses.',
+    rulesSummary: 'Craft two true statements and one clever lie (or customize from playful prompt templates). Earn deception points when rival couples fall for your lie and detective points for spotting theirs!',
+    controlsHint: 'Submit 2 Truths + 1 Lie · Vote on Rival Couple Statements',
+    xpReward: 60,
+    coinReward: 0,
+    supportsParty: true,
+    minCouples: 3,
+    maxCouples: 10,
+    minPlayers: 6,
+    maxPlayers: 20,
+    partyRounds: 4,
+    accentColor: '#E9C46A',
+  },
+  {
+    id: 'party-puzzle-rush',
+    number: 9,
+    title: 'Puzzle Rush',
+    collection: 'party',
+    category: 'party',
+    shortDesc: 'Couples solve timed puzzles involving patterns, logic, sequences, and visual clues. The fastest accurate team wins.',
+    rulesSummary: 'Race through randomized logic sequences, cipher wheels, missing-symbol matrices, and arithmetic relays. Accuracy and remaining seconds determine your couple score.',
+    controlsHint: 'Analyze Pattern Matrix · Select Missing Element · Lock In',
+    xpReward: 60,
+    coinReward: 0,
+    supportsParty: true,
+    minCouples: 3,
+    maxCouples: 10,
+    minPlayers: 6,
+    maxPlayers: 20,
+    partyRounds: 5,
+    accentColor: '#F4A261',
+  },
+  {
+    id: 'party-treasure-hunt',
+    number: 10,
+    title: 'Treasure Hunt Party',
+    collection: 'party',
+    category: 'party',
+    shortDesc: 'Couples solve clues and complete a series of challenges to find hidden treasure. Include multiple possible paths and randomized puzzles.',
+    rulesSummary: 'Navigate branching archipelago map nodes, solve compass riddles to unlock coastal paths, and excavate the Golden Keepsake Chest ahead of rival couples.',
+    controlsHint: 'Choose Map Path · Solve Compass Riddle · Excavate Sector',
+    xpReward: 60,
+    coinReward: 0,
+    supportsParty: true,
+    minCouples: 3,
+    maxCouples: 10,
+    minPlayers: 6,
+    maxPlayers: 20,
+    partyRounds: 4,
+    accentColor: '#2A9D8F',
+  },
+  {
+    id: 'party-story-chain',
+    number: 11,
+    title: 'Story Chain',
+    collection: 'party',
+    category: 'party',
+    shortDesc: 'Couples collaboratively create funny stories by adding sentences based on randomized prompts. Other couples vote on creativity and entertainment.',
+    rulesSummary: 'Each round provides a story opening and a mandatory wildcard word. Couples write the next twist in the tale, then vote on the most creative and hilarious couple entries!',
+    controlsHint: 'Write Next Story Sentence Using Wildcard Word · Vote on Entries',
+    xpReward: 60,
+    coinReward: 0,
+    supportsParty: true,
+    minCouples: 3,
+    maxCouples: 10,
+    minPlayers: 6,
+    maxPlayers: 20,
+    partyRounds: 4,
+    accentColor: '#E76F51',
+  },
+  {
+    id: 'party-quickfire-challenge',
+    number: 12,
+    title: 'Quickfire Challenge',
+    collection: 'party',
+    category: 'party',
+    shortDesc: 'A collection of short mini-challenges involving quick decisions, pattern recognition, memory, and general knowledge. Each round contributes to the final team score.',
+    rulesSummary: 'Survive a rapid 5-stage micro-game gauntlet: Math Blitz, Stroop Color Trap, Odd-Icon Out, Sequence Recall, and Lightning Trivia!',
+    controlsHint: 'Respond Rapidly to Each Mini-Challenge Before the 12s Fuse Ends',
+    xpReward: 60,
+    coinReward: 0,
+    supportsParty: true,
+    minCouples: 3,
+    maxCouples: 10,
+    minPlayers: 6,
+    maxPlayers: 20,
+    partyRounds: 5,
+    accentColor: '#E9C46A',
+  },
+];
+
 export const MULTIPLAYER_1V1_EXCLUSIVE_GAMES: ArcadeGameDef[] = MULTIPLAYER_GAMES.filter(
   (g) => !g.supports2v2
 );
@@ -344,6 +595,7 @@ export const MULTIPLAYER_1V1_GAMES: ArcadeGameDef[] = [...MULTIPLAYER_GAMES];
 export const ALL_ARCADE_GAMES: ArcadeGameDef[] = [
   ...SINGLE_PLAYER_GAMES,
   ...MULTIPLAYER_GAMES,
+  ...PARTY_GAMES,
 ];
 
 export interface ChessTimePreset {
@@ -462,6 +714,10 @@ export type SkinFrameAnimationStyle =
   | 'sketchbook_graphite_tick'
   | 'kraft_twine_swing';
 
+export function isDirectCoinPurchaseAllowed(rarity: SkinRarity): boolean {
+  return rarity === 'Rare' || rarity === 'Uncommon' || rarity === 'Common';
+}
+
 export interface ArcadeSkinDef {
   id: string;
   name: string;
@@ -471,7 +727,8 @@ export interface ArcadeSkinDef {
   emblem: string;
   icon?: string;
   scope: 'individual_and_couple' | 'couple_crest';
-  acquisitionSource: 'starter' | 'shop' | 'seasonal_exclusive';
+  acquisitionSource: 'starter' | 'shop' | 'chest' | 'seasonal_exclusive';
+  directPurchaseAllowed: boolean;
   seasonExclusiveRank?: 1 | 2 | 3;
   seasonalRank?: 1 | 2 | 3;
   costCoins: number;
@@ -488,19 +745,20 @@ export interface ArcadeSkinDef {
 }
 
 export const ARCADE_SKINS: ArcadeSkinDef[] = [
-  // === SEASONAL TOP-3 EXCLUSIVE REWARD SKINS (Awarded at Season End to Top 3 Couples) ===
+  // === SEASONAL TOP-3 & CHEST SKINS ===
   {
     id: 'skin-season-sovereign-eclipse',
     name: 'Sovereign Eclipse Crown',
     rarity: 'Legendary',
     rarityOrder: 1,
     description:
-      'Gilded celestial astrolabe frame with twin solar-eclipse halos and crimson-gold foil. Unlock with Coins, Chests, or 1st Place Season finish.',
+      'Gilded celestial astrolabe frame with twin solar-eclipse halos and crimson-gold foil. Exclusively obtained from Chests or 1st Place Season finish.',
     emblem: '👑✨',
     scope: 'individual_and_couple',
     acquisitionSource: 'seasonal_exclusive',
+    directPurchaseAllowed: false,
     seasonExclusiveRank: 1,
-    costCoins: 750,
+    costCoins: 0,
     previewCode: 'skin-season-sovereign-eclipse',
     bannerGradient: 'from-amber-500/35 via-rose-500/25 to-yellow-500/30',
     frameClass: 'border-amber-400 shadow-[0_0_24px_rgba(245,158,11,0.28)]',
@@ -517,12 +775,13 @@ export const ARCADE_SKINS: ArcadeSkinDef[] = [
     rarity: 'Epic',
     rarityOrder: 2,
     description:
-      'Velvet constellation tapestry with silver-violet starlight ribbons. Unlock with Coins, Chests, or 2nd Place Season finish.',
+      'Velvet constellation tapestry with silver-violet starlight ribbons. Exclusively obtained from Chests or 2nd Place Season finish.',
     emblem: '🦢🌙',
     scope: 'individual_and_couple',
     acquisitionSource: 'seasonal_exclusive',
+    directPurchaseAllowed: false,
     seasonExclusiveRank: 2,
-    costCoins: 480,
+    costCoins: 0,
     previewCode: 'skin-season-celestial-waltz',
     bannerGradient: 'from-fuchsia-500/30 via-purple-500/25 to-indigo-500/30',
     frameClass: 'border-fuchsia-400 shadow-[0_0_20px_rgba(217,70,239,0.24)]',
@@ -539,10 +798,11 @@ export const ARCADE_SKINS: ArcadeSkinDef[] = [
     rarity: 'Rare',
     rarityOrder: 3,
     description:
-      'Azure river lanterns drifting across warm twilight ink wash. Unlock with Coins, Chests, or 3rd Place Season finish.',
+      'Azure river lanterns drifting across warm twilight ink wash. Obtainable from Chests, direct Coin purchase, or 3rd Place Season finish.',
     emblem: '🏮🌊',
     scope: 'individual_and_couple',
     acquisitionSource: 'seasonal_exclusive',
+    directPurchaseAllowed: true,
     seasonExclusiveRank: 3,
     costCoins: 300,
     previewCode: 'skin-season-paper-lantern-harmony',
@@ -556,18 +816,19 @@ export const ARCADE_SKINS: ArcadeSkinDef[] = [
     frameSecondaryColor: '#FBBF24',
   },
 
-  // === SHOP & CHEST SKINS ACROSS ALL 5 RARITY LEVELS ===
+  // === CHEST & SHOP SKINS ACROSS ALL 5 RARITY LEVELS ===
   {
     id: 'skin-imperial-clockwork-heart',
     name: 'Clockwork Sanctuary Grandmaster',
     rarity: 'Legendary',
     rarityOrder: 1,
     description:
-      'Masterwork brass escapement gears and ruby filigree that illuminates your profile, sidebar badge, and arena header.',
+      'Masterwork brass escapement gears and ruby filigree that illuminates your profile, sidebar badge, and arena header. Chest-Exclusive Legendary reward.',
     emblem: '⚙️💎',
     scope: 'individual_and_couple',
-    acquisitionSource: 'shop',
-    costCoins: 650,
+    acquisitionSource: 'chest',
+    directPurchaseAllowed: false,
+    costCoins: 0,
     previewCode: 'skin-imperial-clockwork-heart',
     bannerGradient: 'from-amber-500/30 via-orange-500/20 to-rose-500/25',
     frameClass: 'border-amber-400/90 shadow-[0_0_20px_rgba(245,158,11,0.22)]',
@@ -584,11 +845,12 @@ export const ARCADE_SKINS: ArcadeSkinDef[] = [
     rarity: 'Epic',
     rarityOrder: 2,
     description:
-      'Hand-painted evening cherry blossoms with plum-blossom lacquer trim and floating petal accents.',
+      'Hand-painted evening cherry blossoms with plum-blossom lacquer trim and floating petal accents. Chest-Exclusive Epic reward.',
     emblem: '🌸🌙',
     scope: 'individual_and_couple',
-    acquisitionSource: 'shop',
-    costCoins: 420,
+    acquisitionSource: 'chest',
+    directPurchaseAllowed: false,
+    costCoins: 0,
     previewCode: 'skin-sakura-moonlit-pavilion',
     bannerGradient: 'from-rose-500/30 via-fuchsia-500/20 to-amber-500/20',
     frameClass: 'border-fuchsia-400/80 shadow-[0_0_16px_rgba(217,70,239,0.18)]',
@@ -609,6 +871,7 @@ export const ARCADE_SKINS: ArcadeSkinDef[] = [
     emblem: '🧭✨',
     scope: 'individual_and_couple',
     acquisitionSource: 'shop',
+    directPurchaseAllowed: true,
     costCoins: 260,
     previewCode: 'skin-starlight-observatory',
     bannerGradient: 'from-sky-500/25 via-indigo-500/20 to-teal-500/20',
@@ -630,6 +893,7 @@ export const ARCADE_SKINS: ArcadeSkinDef[] = [
     emblem: '🍀🌿',
     scope: 'individual_and_couple',
     acquisitionSource: 'shop',
+    directPurchaseAllowed: true,
     costCoins: 140,
     previewCode: 'skin-matcha-botanical-press',
     bannerGradient: 'from-emerald-500/25 via-teal-500/15 to-stone-800/40',
@@ -651,6 +915,7 @@ export const ARCADE_SKINS: ArcadeSkinDef[] = [
     emblem: '🍓✉️',
     scope: 'individual_and_couple',
     acquisitionSource: 'shop',
+    directPurchaseAllowed: true,
     costCoins: 120,
     previewCode: 'skin-berry-milk-postmark',
     bannerGradient: 'from-rose-500/20 via-amber-500/15 to-stone-800/40',
@@ -672,6 +937,7 @@ export const ARCADE_SKINS: ArcadeSkinDef[] = [
     emblem: '📓✏️',
     scope: 'individual_and_couple',
     acquisitionSource: 'starter',
+    directPurchaseAllowed: false,
     costCoins: 0,
     previewCode: 'skin-classic-notebook',
     bannerGradient: 'from-stone-700/30 via-stone-800/30 to-stone-900/40',
@@ -693,6 +959,7 @@ export const ARCADE_SKINS: ArcadeSkinDef[] = [
     emblem: '🏷️🧵',
     scope: 'individual_and_couple',
     acquisitionSource: 'shop',
+    directPurchaseAllowed: true,
     costCoins: 60,
     previewCode: 'skin-cozy-parchment-cord',
     bannerGradient: 'from-amber-700/20 via-stone-800/30 to-stone-900/40',
@@ -746,8 +1013,8 @@ export const REWARD_SHOP_ITEMS: RewardShopItem[] = [
     previewCode: 'rename-card',
     consumable: true,
   },
-  // All skins exposed in unified shop catalog so any unowned skin can be unlocked with coins
-  ...ARCADE_SKINS.map((s) => ({
+  // Only Rare, Uncommon, and Common purchasable skins are listed for direct coin purchase
+  ...ARCADE_SKINS.filter((s) => s.directPurchaseAllowed && s.costCoins > 0).map((s) => ({
     id: s.id,
     name: `${s.name} (${s.rarity} Skin)`,
     category: 'skin' as const,
@@ -1427,6 +1694,7 @@ export interface ArcadeBannerDef {
   description: string;
   emblem: string;
   costCoins: number;
+  directPurchaseAllowed: boolean;
   acquisitionSource: 'starter' | 'shop' | 'chest' | 'trophy_road';
   artworkPattern: BannerArtworkPattern;
   primaryColor: string;
@@ -1438,17 +1706,18 @@ export interface ArcadeBannerDef {
 }
 
 export const ARCADE_BANNERS: ArcadeBannerDef[] = [
-  // 1. LEGENDARY BANNERS
+  // 1. LEGENDARY BANNERS (Chest-Exclusive · No Direct Coin Purchase)
   {
     id: 'banner-sovereign-eclipse-horizon',
     name: 'Sovereign Eclipse Horizon',
     rarity: 'Legendary',
     rarityOrder: 1,
     description:
-      'Gilded celestial horizon where twin solar-eclipse rings and golden astrolabe arcs illuminate dark velvet parchment.',
+      'Gilded celestial horizon where twin solar-eclipse rings and golden astrolabe arcs illuminate dark velvet parchment. Chest-Exclusive Legendary banner.',
     emblem: '🌞👑',
-    costCoins: 620,
-    acquisitionSource: 'shop',
+    costCoins: 0,
+    directPurchaseAllowed: false,
+    acquisitionSource: 'chest',
     artworkPattern: 'solar_eclipse_sanctuary',
     primaryColor: '#451A03',
     secondaryColor: '#991B1B',
@@ -1463,9 +1732,10 @@ export const ARCADE_BANNERS: ArcadeBannerDef[] = [
     rarity: 'Legendary',
     rarityOrder: 1,
     description:
-      'Intricate planetary gearwork, brass pendulums, and ruby jewel bearings spanning a royal horology blueprint.',
+      'Intricate planetary gearwork, brass pendulums, and ruby jewel bearings spanning a royal horology blueprint. Chest-Exclusive Legendary banner.',
     emblem: '⚙️🕰️',
-    costCoins: 580,
+    costCoins: 0,
+    directPurchaseAllowed: false,
     acquisitionSource: 'chest',
     artworkPattern: 'imperial_clockwork_orrery',
     primaryColor: '#3B1D0A',
@@ -1476,17 +1746,18 @@ export const ARCADE_BANNERS: ArcadeBannerDef[] = [
     motifLabel: 'Planetary Brass Gears & Ruby Bearings',
   },
 
-  // 2. EPIC BANNERS
+  // 2. EPIC BANNERS (Chest-Exclusive · No Direct Coin Purchase)
   {
     id: 'banner-astral-swan-constellation',
     name: 'Astral Swan Constellation',
     rarity: 'Epic',
     rarityOrder: 2,
     description:
-      'Silver-violet nebula silk embroidered with twin swans, crescent moon reflections, and shimmering starlight threads.',
+      'Silver-violet nebula silk embroidered with twin swans, crescent moon reflections, and shimmering starlight threads. Chest-Exclusive Epic banner.',
     emblem: '🦢🌌',
-    costCoins: 400,
-    acquisitionSource: 'shop',
+    costCoins: 0,
+    directPurchaseAllowed: false,
+    acquisitionSource: 'chest',
     artworkPattern: 'astral_swan_nocturne',
     primaryColor: '#2E1065',
     secondaryColor: '#701A75',
@@ -1501,9 +1772,10 @@ export const ARCADE_BANNERS: ArcadeBannerDef[] = [
     rarity: 'Epic',
     rarityOrder: 2,
     description:
-      'Arched vermilion garden bridge beneath cascading cherry blossom boughs and a glowing harvest moon.',
+      'Arched vermilion garden bridge beneath cascading cherry blossom boughs and a glowing harvest moon. Chest-Exclusive Epic banner.',
     emblem: '🌸🏮',
-    costCoins: 380,
+    costCoins: 0,
+    directPurchaseAllowed: false,
     acquisitionSource: 'chest',
     artworkPattern: 'moonlit_sakura_bridge',
     primaryColor: '#4C0519',
@@ -1514,7 +1786,7 @@ export const ARCADE_BANNERS: ArcadeBannerDef[] = [
     motifLabel: 'Sakura Canopy & Vermilion Bridge',
   },
 
-  // 3. RARE BANNERS
+  // 3. RARE BANNERS (Obtainable from Chests or Direct Coin Purchase)
   {
     id: 'banner-twilight-lantern-harbor',
     name: 'Twilight Lantern Harbor',
@@ -1524,6 +1796,7 @@ export const ARCADE_BANNERS: ArcadeBannerDef[] = [
       'Paper festival lanterns drifting across deep indigo harbor waves with warm amber reflections.',
     emblem: '🏮🌊',
     costCoins: 240,
+    directPurchaseAllowed: true,
     acquisitionSource: 'shop',
     artworkPattern: 'river_lantern_festival',
     primaryColor: '#0C4A6E',
@@ -1542,7 +1815,8 @@ export const ARCADE_BANNERS: ArcadeBannerDef[] = [
       'Hand-inked nautical and celestial meridian map with a golden compass rose and Polaris coordinates.',
     emblem: '🧭🗺️',
     costCoins: 220,
-    acquisitionSource: 'chest',
+    directPurchaseAllowed: true,
+    acquisitionSource: 'shop',
     artworkPattern: 'celestial_compass_chart',
     primaryColor: '#1E1B4B',
     secondaryColor: '#0F172A',
@@ -1552,7 +1826,7 @@ export const ARCADE_BANNERS: ArcadeBannerDef[] = [
     motifLabel: 'Nautical Meridians & Compass Rose',
   },
 
-  // 4. UNCOMMON BANNERS
+  // 4. UNCOMMON BANNERS (Obtainable from Chests or Direct Coin Purchase)
   {
     id: 'banner-pressed-clover-conservatory',
     name: 'Pressed Clover Conservatory',
@@ -1562,6 +1836,7 @@ export const ARCADE_BANNERS: ArcadeBannerDef[] = [
       'Botanical field journal page with pressed four-leaf clovers, fern fronds, and sage green linen tape.',
     emblem: '🍀🌿',
     costCoins: 130,
+    directPurchaseAllowed: true,
     acquisitionSource: 'shop',
     artworkPattern: 'pressed_clover_herbarium',
     primaryColor: '#064E3B',
@@ -1580,7 +1855,8 @@ export const ARCADE_BANNERS: ArcadeBannerDef[] = [
       'Vintage airmail stationery with diagonal coral-and-cream stripes, postmark cancellation lines, and a berry wax seal.',
     emblem: '🍓📮',
     costCoins: 115,
-    acquisitionSource: 'chest',
+    directPurchaseAllowed: true,
+    acquisitionSource: 'shop',
     artworkPattern: 'strawberry_airmail_parlor',
     primaryColor: '#4C1D24',
     secondaryColor: '#3F2E21',
@@ -1590,7 +1866,7 @@ export const ARCADE_BANNERS: ArcadeBannerDef[] = [
     motifLabel: 'Vintage Airmail Stripes & Berry Seal',
   },
 
-  // 5. COMMON BANNERS
+  // 5. COMMON BANNERS (Obtainable from Chests or Direct Coin Purchase)
   {
     id: 'banner-warm-sketchbook',
     name: 'Warm Sketchbook Working Sheet',
@@ -1600,6 +1876,7 @@ export const ARCADE_BANNERS: ArcadeBannerDef[] = [
       'Default cozy dot-grid sketchbook sheet with hand-ruled pencil margin lines and masking tape tabs.',
     emblem: '📓✏️',
     costCoins: 0,
+    directPurchaseAllowed: false,
     acquisitionSource: 'starter',
     artworkPattern: 'warm_sketchbook_grid',
     primaryColor: '#292524',
@@ -1618,6 +1895,7 @@ export const ARCADE_BANNERS: ArcadeBannerDef[] = [
       'Warm kraft wrapping paper tied crosswise with red-and-cream baker’s twine and a stamped keepsake tag.',
     emblem: '📦🧵',
     costCoins: 55,
+    directPurchaseAllowed: true,
     acquisitionSource: 'shop',
     artworkPattern: 'kraft_twine_postscript',
     primaryColor: '#3E2C1C',
@@ -1751,11 +2029,19 @@ export function getKeyByTier(tier: SkinRarity): ArcadeKeyDef {
    ============================================================================ */
 
 export const DUPLICATE_COSMETIC_COIN_PAYOUT: Record<SkinRarity, number> = {
-  Common: 35,
-  Uncommon: 75,
-  Rare: 160,
-  Epic: 320,
-  Legendary: 650,
+  Common: 100,
+  Uncommon: 250,
+  Rare: 600,
+  Epic: 1500,
+  Legendary: 3000,
+};
+
+export const RANKED_SHIELD_DROP_RATES: Record<SkinRarity, number> = {
+  Common: 0,
+  Uncommon: 0,
+  Rare: 2,
+  Epic: 5,
+  Legendary: 10,
 };
 
 export interface ArcadeChestDef {
@@ -1769,6 +2055,7 @@ export interface ArcadeChestDef {
   compatibleKeyTier: SkinRarity;
   compatibleKeyName: string;
   rarityProbabilities: Record<SkinRarity, number>; // Percentages summing to 100
+  rankedShieldDropPercent: number; // 0 for Common/Uncommon, 2% Rare, 5% Epic, 10% Legendary
   openingAnimationStyle: string;
   openingAnimationDescription: string;
   primaryColor: string;
@@ -1784,7 +2071,7 @@ export const ARCADE_CHESTS: ArcadeChestDef[] = [
     name: 'Legendary Chest',
     subtitle: 'Sovereign Solar Reliquary',
     description:
-      'Gilded celestial reliquary forged in sun-gold and crimson velvet. Guarantees an Epic or Legendary cosmetic Skin or Profile Banner.',
+      'Gilded celestial reliquary forged in sun-gold and crimson velvet. Guarantees an Epic or Legendary cosmetic Skin or Profile Banner, with a 10% chance for a Ranked Shield Card.',
     costCoins: 1500,
     compatibleKeyTier: 'Legendary',
     compatibleKeyName: 'Legendary Key',
@@ -1795,6 +2082,7 @@ export const ARCADE_CHESTS: ArcadeChestDef[] = [
       Uncommon: 0,
       Common: 0,
     },
+    rankedShieldDropPercent: 10,
     openingAnimationStyle: 'Solar Eclipse Levitation & Triple-Orbital Prism Draw',
     openingAnimationDescription:
       'Levitates with golden shockwaves, shatters the solar astrolabe seal into starlight, converges three orbital rings, and unveils a radiant prism card.',
@@ -1809,7 +2097,7 @@ export const ARCADE_CHESTS: ArcadeChestDef[] = [
     name: 'Epic Chest',
     subtitle: 'Moonlit Lacquer Coffer',
     description:
-      'Plum-lacquer coffer inlaid with mother-of-pearl sakura blossoms and amethyst clasps. High probability of Epic and Legendary cosmetics.',
+      'Plum-lacquer coffer inlaid with mother-of-pearl sakura blossoms and amethyst clasps. High probability of Epic and Legendary cosmetics, plus a 5% chance for a Ranked Shield Card.',
     costCoins: 850,
     compatibleKeyTier: 'Epic',
     compatibleKeyName: 'Epic Key',
@@ -1820,6 +2108,7 @@ export const ARCADE_CHESTS: ArcadeChestDef[] = [
       Uncommon: 0,
       Common: 0,
     },
+    rankedShieldDropPercent: 5,
     openingAnimationStyle: 'Twin Lacquer Doors & Sakura Vortex Tarot Flip',
     openingAnimationDescription:
       'Parts double lacquer doors amidst swirling sakura petals and violet comet trails, elevating a glowing tarot card with a shockwave flip.',
@@ -1834,7 +2123,7 @@ export const ARCADE_CHESTS: ArcadeChestDef[] = [
     name: 'Rare Chest',
     subtitle: 'Starlight Astrolabe Trunk',
     description:
-      'Deep sapphire navigator’s trunk bound in brushed silver and brass compass dials. Contains Rare, Epic, and Legendary Skins & Banners.',
+      'Deep sapphire navigator’s trunk bound in brushed silver and brass compass dials. Contains Rare, Epic, and Legendary Skins & Banners, plus a 2% chance for a Ranked Shield Card.',
     costCoins: 450,
     compatibleKeyTier: 'Rare',
     compatibleKeyName: 'Rare Key',
@@ -1845,6 +2134,7 @@ export const ARCADE_CHESTS: ArcadeChestDef[] = [
       Uncommon: 15,
       Common: 0,
     },
+    rankedShieldDropPercent: 2,
     openingAnimationStyle: '180° Compass Lock Rotation & Sapphire Beam Spiral',
     openingAnimationDescription:
       'Rotates the brass compass dial 180°, projects a sapphire meridian beam, and spirals the drawn card to center stage.',
@@ -1870,6 +2160,7 @@ export const ARCADE_CHESTS: ArcadeChestDef[] = [
       Uncommon: 50,
       Common: 30,
     },
+    rankedShieldDropPercent: 0,
     openingAnimationStyle: 'Botanical Clasp Snap & Leaf Burst Card Lift',
     openingAnimationDescription:
       'Snaps open the brass clover clasp with a burst of botanical leaves and lifts the reward card in a crisp vertical arc.',
@@ -1895,6 +2186,7 @@ export const ARCADE_CHESTS: ArcadeChestDef[] = [
       Uncommon: 25,
       Common: 70,
     },
+    rankedShieldDropPercent: 0,
     openingAnimationStyle: 'Twine Untie & Sketchbook Card Slide',
     openingAnimationDescription:
       'Unties the baker’s twine bow, unfolds the kraft parcel flaps, and smoothly slides out a hand-stamped keepsake card.',
@@ -1911,7 +2203,7 @@ export function getChestByTier(tier: SkinRarity): ArcadeChestDef {
 export interface ChestRewardPoolItem {
   id: string;
   name: string;
-  category: 'skin' | 'banner';
+  category: 'skin' | 'banner' | 'consumable';
   rarity: SkinRarity;
   emblem: string;
   description: string;
@@ -1959,8 +2251,23 @@ export function getRewardPoolForChest(chestTier: SkinRarity): ChestRewardPoolIte
     description: b.description,
   }));
 
+  const consumableItems: ChestRewardPoolItem[] =
+    chest.rankedShieldDropPercent > 0
+      ? [
+          {
+            id: 'ranked-shield-card',
+            name: `Ranked Shield Card (${chest.rankedShieldDropPercent}% Drop)`,
+            category: 'consumable' as const,
+            rarity: chest.tier,
+            emblem: '🛡️✨',
+            description:
+              'Protects you from losing XP on your next 2v2 Couple Mode loss when pre-equipped in the 2v2 lobby.',
+          },
+        ]
+      : [];
+
   const deduped = new Map<string, ChestRewardPoolItem>();
-  for (const item of [...skinItems, ...commonSkins, ...bannerItems]) {
+  for (const item of [...consumableItems, ...skinItems, ...commonSkins, ...bannerItems]) {
     deduped.set(`${item.category}:${item.id}`, item);
   }
   return Array.from(deduped.values());

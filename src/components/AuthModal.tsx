@@ -24,18 +24,28 @@ import {
 } from 'lucide-react';
 import { ArcadeCircularLoader, ArcadeInlineSpinner } from './ArcadeLoader';
 
+import { calculateLevelFromXp, MAX_COIN_CAPACITY, MAX_PLAYER_LEVEL } from '@/src/lib/game-rules';
+
 export interface PlayerProfile {
   uid: string;
   email: string;
   username: string;
   usernameSetupCompleted: boolean;
   renameCards?: number;
+  shieldCards?: number;
+  shieldCardArmed?: boolean;
   emailVerified: boolean;
   avatar: string;
   customPhotoUrl?: string;
   xp: number;
   level: number;
+  currentLevelXp?: number;
+  nextLevelXp?: number;
+  xpProgressPercent?: number;
+  isMaxLevel?: boolean;
+  maxLevel?: number;
   coins: number;
+  maxCoinCapacity?: number;
   streak: number;
   wins: number;
   losses: number;
@@ -83,18 +93,31 @@ export function normalizePlayerProfile(raw: Record<string, unknown>): PlayerProf
   if (!unlockedBannersList.includes('banner-sketchbook-grid')) {
     unlockedBannersList.push('banner-sketchbook-grid');
   }
+  const levelInfo = calculateLevelFromXp(Number(raw.xp ?? 0));
+  const safeShieldCards = Math.max(0, Number(raw.shieldCards ?? 0));
+  const safeShieldArmed = Boolean(safeShieldCards > 0 && raw.shieldCardArmed);
+  const safeCoins = Math.max(0, Math.min(MAX_COIN_CAPACITY, Number(raw.coins ?? 0)));
+
   return {
     uid: String(raw.uid || ''),
     email: String(raw.email || ''),
     username: setupDone ? rawUsername : '',
     usernameSetupCompleted: setupDone,
     renameCards: Number(raw.renameCards ?? 0),
+    shieldCards: safeShieldCards,
+    shieldCardArmed: safeShieldArmed,
     emailVerified: Boolean(raw.emailVerified),
     avatar: String(raw.avatar || 'kitsune'),
     customPhotoUrl: String(raw.customPhotoUrl || ''),
-    xp: Number(raw.xp ?? 0),
-    level: Number(raw.level ?? 1),
-    coins: Number(raw.coins ?? 0),
+    xp: levelInfo.clampedTotalXp,
+    level: levelInfo.level,
+    currentLevelXp: levelInfo.currentLevelXp,
+    nextLevelXp: levelInfo.nextLevelXp,
+    xpProgressPercent: levelInfo.progressPercent,
+    isMaxLevel: levelInfo.isMaxLevel,
+    maxLevel: MAX_PLAYER_LEVEL,
+    coins: safeCoins,
+    maxCoinCapacity: MAX_COIN_CAPACITY,
     streak: Number(raw.streak ?? 1),
     wins: Number(raw.wins ?? 0),
     losses: Number(raw.losses ?? 0),

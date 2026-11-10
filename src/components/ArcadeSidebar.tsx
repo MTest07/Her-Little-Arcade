@@ -9,7 +9,6 @@ import {
   HeartHandshake,
   Crown,
   Trophy,
-  ShoppingBag,
   Sparkles,
   Settings,
   LogOut,
@@ -21,6 +20,19 @@ import {
   ShieldCheck,
   Sun,
   Moon,
+  UserCircle2,
+  Image as ImageIcon,
+  Frame,
+  Package,
+  KeyRound,
+  Backpack,
+  Swords,
+  PartyPopper,
+  PlusCircle,
+  LogIn,
+  Radio,
+  Mail,
+  Mic,
 } from 'lucide-react';
 import { PlayerProfile } from './AuthModal';
 import { EnrichedCouplePairing } from './CouplePairingPanel';
@@ -33,10 +45,24 @@ export type ArcadeNavSection =
   | 'home'
   | 'single'
   | 'multiplayer'
+  | 'mp-1v1'
+  | 'mp-2v2'
+  | 'mp-party'
+  | 'mp-create-room'
+  | 'mp-join-group'
+  | 'mp-matchmaking'
+  | 'mp-invitations'
+  | 'mp-voice-chat'
   | 'couple-profile'
   | 'trophy-road'
   | 'leaderboard'
   | 'shop'
+  | 'shop-profile'
+  | 'shop-banners'
+  | 'shop-avatars'
+  | 'shop-chests'
+  | 'shop-keys'
+  | 'inventory'
   | 'achievements'
   | 'settings'
   | 'our-games'
@@ -66,11 +92,55 @@ export const SIDEBAR_NAV_ITEMS: SidebarNavItem[] = [
     badge: '7',
   },
   {
-    id: 'multiplayer',
-    label: 'Multiplayer',
-    purpose: '1v1, 2v2, rooms & queue',
+    id: 'mp-1v1',
+    label: 'MP · 1v1 Partner',
+    purpose: 'Partner-only 1v1 duels (14 games)',
+    icon: Swords,
+    badge: '1V1',
+  },
+  {
+    id: 'mp-2v2',
+    label: 'MP · 2v2 Couples',
+    purpose: '2v2 couple battles (10 games)',
     icon: Users,
-    badge: '14',
+    badge: '2V2',
+  },
+  {
+    id: 'mp-party',
+    label: 'MP · Party Games',
+    purpose: '3–10 couple party games (12 games)',
+    icon: PartyPopper,
+    badge: '12',
+  },
+  {
+    id: 'mp-create-room',
+    label: 'MP · Create Room',
+    purpose: 'Host public or private couple/party rooms',
+    icon: PlusCircle,
+  },
+  {
+    id: 'mp-join-group',
+    label: 'MP · Join Group',
+    purpose: 'Browse public rooms or enter room code',
+    icon: LogIn,
+  },
+  {
+    id: 'mp-matchmaking',
+    label: 'MP · Matchmaking',
+    purpose: '2v2 trophy-based couple queue',
+    icon: Radio,
+  },
+  {
+    id: 'mp-invitations',
+    label: 'MP · Invitations',
+    purpose: 'Partner & couple game invites',
+    icon: Mail,
+  },
+  {
+    id: 'mp-voice-chat',
+    label: 'MP · Voice Chat',
+    purpose: 'Live room voice & text chat dock',
+    icon: Mic,
   },
   {
     id: 'couple-profile',
@@ -93,10 +163,45 @@ export const SIDEBAR_NAV_ITEMS: SidebarNavItem[] = [
     badge: '2v2',
   },
   {
-    id: 'shop',
-    label: 'Shop',
-    purpose: 'Coins, Rename Card & items',
-    icon: ShoppingBag,
+    id: 'shop-profile',
+    label: 'Shop · Profile',
+    purpose: 'Profile customization & appearance',
+    icon: UserCircle2,
+    badge: 'SHOP',
+  },
+  {
+    id: 'shop-banners',
+    label: 'Shop · Banners',
+    purpose: 'Browse & purchase profile banners',
+    icon: ImageIcon,
+    badge: 'SHOP',
+  },
+  {
+    id: 'shop-avatars',
+    label: 'Shop · Avatars',
+    purpose: 'Avatar skins, frames & animations',
+    icon: Frame,
+    badge: 'SHOP',
+  },
+  {
+    id: 'shop-chests',
+    label: 'Shop · Chests',
+    purpose: 'Purchase & open rarity chests',
+    icon: Package,
+    badge: 'SHOP',
+  },
+  {
+    id: 'shop-keys',
+    label: 'Shop · Keys',
+    purpose: 'View & manage chest keys',
+    icon: KeyRound,
+    badge: 'SHOP',
+  },
+  {
+    id: 'inventory',
+    label: 'Inventory',
+    purpose: 'Owned skins, banners, chests & shields',
+    icon: Backpack,
   },
   {
     id: 'achievements',
@@ -179,8 +284,8 @@ export function ArcadeSidebar({
   const normalizedSection: ArcadeNavSection =
     activeSection === 'profile'
       ? 'couple-profile'
-      : activeSection === 'rewards'
-      ? 'shop'
+      : activeSection === 'rewards' || activeSection === 'shop'
+      ? 'shop-chests'
       : activeSection === 'our-games'
       ? 'achievements'
       : activeSection;

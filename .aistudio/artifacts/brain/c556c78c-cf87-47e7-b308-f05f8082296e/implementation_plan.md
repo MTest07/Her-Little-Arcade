@@ -1,34 +1,33 @@
-# Profile Customization, Animated Avatar Frames, Banners & Collectible Chest System — Her Little Arcade
+# Her Little Arcade — Camera Studio, Partner-Only 1v1 & 3–10 Couple Party Games
 
-This plan upgrades **Her Little Arcade** with a scrollbar-free responsive sidebar, custom profile picture uploading and cropping, bespoke per-skin animated avatar frames, a 5-rarity **Profile Banners** cosmetic layer, a 5-tier **Collectible Chest & Key System** with tier-distinct GSAP card-reveal animations, and a unified 4-category **Inventory** backed by atomic server-side transactions.
+This update introduces a live camera capture and crop studio for profile pictures, refines 1v1 mode into an exclusive partner-versus-partner duel system with backend enforcement, expands Multiplayer into eight dedicated top-level sidebar sections, and launches a complete **Party Games** multiplayer mode where **3 to 10 paired couples (6 to 20 players)** compete together across **12 playable multi-round party games**.
 
 ---
 
 ## User Review & Critical Decisions
 
 > [!IMPORTANT]
-> The following product and technical decisions incorporate your confirmed Phase 1 answers:
+> The following architectural and UX decisions incorporate your confirmed choices and govern the implementation:
 
-- **Confirmed Decision 1 — Duplicate Cosmetic Reward Conversion**: When a chest rolls a Skin or Banner that the player already owns, the server automatically converts the duplicate into **Arcade Coins** scaled by the item's rarity tier (**Common**: `+35 Coins`, **Uncommon**: `+75 Coins`, **Rare**: `+160 Coins`, **Epic**: `+320 Coins`, **Legendary**: `+650 Coins`), clearly badged during the card-reveal sequence and recorded in the player's coin ledger.
-- **Confirmed Decision 2 — Challenge Key Progression**: Completed and verified challenges award Chest Keys matching their period and difficulty:
-  - **Daily Challenges (Easy · 24h)**: Award **Common Keys** (or **Uncommon Keys** on higher-target daily objectives).
-  - **Weekly Challenges (Medium · 7d)**: Award **Rare Keys** or **Epic Keys**.
-  - **Monthly Challenges (Hard · 1m)**: Award **Legendary Keys**.
-- **Confirmed Decision 3 — Profile Picture Storage & Cropping**: Uploaded profile pictures (`PNG`, `JPG`, `JPEG`, `WebP` up to `5 MB`) use an interactive client-side zoom/pan square crop studio and are stored and served through the built-in authenticated backend and database storage layer, keeping the uploaded image strictly separate from equipped avatar frames and banners.
+- **Confirmed Decision 1 — Party Room Couple Entry & Readiness Flow**: When one partner creates or joins a Party Room (`3–10 couples`), an invitation is automatically sent to their paired partner. Each couple occupies a dedicated Couple Team Slot (`Slot 1` through `Slot 10`) and counts toward the **3-couple minimum** once both partners have joined the room and clicked **Ready**.
+- **Confirmed Decision 2 — Party Game Placement-Tiered XP Rewards**: Party Games award **XP only** (`0 Coins` and `0 Couple Trophies`, keeping the competitive 2v2 Trophy Road and Couple Leaderboard completely separate) using a configurable placement-tiered rule:
+  - **1st Place Couple**: `+60 XP` per partner
+  - **2nd Place Couple**: `+45 XP` per partner
+  - **3rd Place Couple**: `+35 XP` per partner
+  - **All Other Participating Couples**: `+25 XP` per partner
+- **Confirmed Decision 3 — Eight Dedicated Top-Level Multiplayer Sidebar Sections**: The sidebar navigation will expose separate top-level entries for each Multiplayer section: **1v1 Games**, **2v2 Games**, **Party Games**, **Create Room**, **Join Group**, **Matchmaking**, **Invitations**, and **Voice Chat**.
 
 ---
 
 ## 1. Overview & Core Concept
 
 - **What It Does**:
-  1. **Scrollbar-Free Sidebar**: Eliminates both vertical and horizontal scrollbars inside the desktop/tablet collapsible sidebar and mobile drawer while keeping smooth mouse-wheel, trackpad, and touch scrolling when items exceed viewport height.
-  2. **Three-Layer Independent Profile Architecture**: Decouples player customization into three non-destructive layers that compose together everywhere profiles appear:
-     - **Layer 1 (Background)**: Rectangular **Profile Banner** (5 rarities: Legendary, Epic, Rare, Uncommon, Common).
-     - **Layer 2 (Center Subject)**: Uploaded custom **Profile Picture** (with interactive crop/zoom studio, or fallback cozy character portrait).
-     - **Layer 3 (Foreground Frame & FX)**: Equipped **Skin Avatar Frame** featuring a unique per-skin SVG/GSAP animation (orbiting stars, drifting sakura petals, solar eclipse corona, clockwork gears, botanical vines, wax seal pulse, etc.).
-  3. **5-Tier Chest & Custom Key Ecosystem**: Expands the Shop with **Common**, **Uncommon**, **Rare**, **Epic**, and **Legendary** Chests and matching custom-illustrated **Keys**. Players can purchase chests with Coins or unlock them using Keys earned from completed Daily, Weekly, and Monthly Challenges.
-  4. **Server-Authoritative GSAP Card-Draw Opening Experience**: Every chest tier plays its own distinct GSAP opening and card-drawing sequence (with an instant **Skip Animation** button that reveals the server-determined reward immediately).
-  5. **4-Category Persistent Inventory**: Organizes all owned items into **Skins**, **Banners**, **Chests**, and **Keys** with live preview, equip/unequip controls, and quantity badges.
+  1. **Dual-Mode Profile Picture Studio (Upload Photo & Take Photo)**: Adds a privacy-first live camera capture flow alongside device file upload, supporting front/rear camera switching, live preview, capture/retake, interactive zoom/pan square cropping, and real-time preview inside the player's equipped animated avatar frame and profile banner.
+  2. **Partner-Exclusive 1v1 Mode**: Transforms 1v1 into an intimate **You vs. Your Partner** experience. Removes username search, public/private room creation, and third-party invitations from 1v1 both in the UI and on the server.
+  3. **Party Games Mode (3–10 Couples / 6–20 Players)**: Introduces a social multi-couple party lobby, public/private party room browser, host controls, live text/voice chat, and **12 authentic, multi-round playable party games** with real-time team scoring and couple podium ceremonies.
+  4. **Clear Multiplayer Navigation**: Gives each of the eight multiplayer functions its own direct top-level sidebar entry so players can jump straight into 1v1 partner duels, 2v2 ranked couple matches, 3–10 couple party games, room management, matchmaking, invitations, or voice chat.
+- **Target Audience / Persona**: Paired couples looking for private 1v1 duels with their partner, competitive 2v2 matches against rival couples, or lively 3–10 couple game nights with friends.
+- **Key Value**: Establishes clear boundaries between intimate 1v1 partner play, competitive 2v2 ranked play, and large-group 3–10 couple social party play while preserving economy integrity.
 
 ---
 
@@ -36,65 +35,61 @@ This plan upgrades **Her Little Arcade** with a scrollbar-free responsive sideba
 
 ### Key User Flows
 
-1. **Sidebar Navigation (Zero Visible Scrollbars)**
-   - Hides native scrollbar tracks and thumbs across WebKit, Firefox, and Chromium (`scrollbar-width: none`, `-ms-overflow-style: none`, `::-webkit-scrollbar { display: none }`) and prevents horizontal overflow caused by hover micro-shifts while preserving vertical wheel/touch scrolling.
+1. **Profile Picture Studio (`Upload Photo` | `Take Photo`)**:
+   - In the Profile Customization studio, the player sees two explicit mode buttons: **Upload Photo** and **Take Photo**.
+   - **Privacy-First Camera Lifecycle**: Selecting **Take Photo** requests `navigator.mediaDevices.getUserMedia` with `facingMode: 'user'` (front camera by default). No camera stream is ever opened until the user clicks **Take Photo**.
+   - **Camera Controls**: Displays the live video feed with a **Switch Camera (Front / Rear)** button, a **Capture Photo** shutter button, and clear fallback messaging if camera permission is denied, no webcam is detected, or the browser does not support `mediaDevices`.
+   - **Retake, Crop & Live Cosmetic Preview**: After capturing a frame, the camera stream immediately stops (`track.stop()`), and the captured still enters the interactive crop & position stage with a **Retake Photo** button. Below the cropper, a live composite preview renders the cropped photo inside the user's currently equipped **Animated Avatar Frame** over their equipped **Profile Banner** before saving to backend storage. Closing the modal or switching tabs always terminates any active camera tracks.
 
-2. **Profile Picture Upload, Crop & Layer Independence**
-   - In **Profile & Couple** and **Account Settings**, clicking **Upload Profile Picture** opens an interactive **Crop & Preview Studio**:
-     - Validates file format (`PNG`, `JPG`, `JPEG`, `WebP`) and size ($\le 5\text{ MB}$).
-     - Provides zoom slider and drag-to-reposition square framing with live preview inside the player's currently equipped **Skin Avatar Frame** and **Profile Banner**.
-     - Includes **Save Picture**, **Replace Picture**, and **Remove Uploaded Picture** (reverting cleanly to the player's chosen character icon without affecting their equipped skin or banner).
+2. **Partner-Only 1v1 Duel Flow (`You VS Your Partner`)**:
+   - Selecting any 1v1 game opens the streamlined **Partner Duel Modal**:
+     - **Left Card (`YOU`)**: Displays the authenticated user's avatar, `@username`, equipped animated skin frame, and online badge.
+     - **Center Badge (`VS`)**: Hand-sketched duel emblem with `XP Only · 0 Coins · 0 Trophies`.
+     - **Right Card (`YOUR PARTNER`)**: Automatically resolves the user's actively paired partner from their Couple Pairing record, displaying their avatar, `@username`, equipped skin frame, and live online/offline status.
+   - **Unpaired Gate**: If the user does not have an active couple pairing, the modal displays a clear explanation that Couple Pairing is mandatory for 1v1 and provides a one-click **Pair with Partner** button.
+   - **Invitation Lifecycle**: Clicking **Challenge Your Partner** sends a direct `1v1` invitation to the paired partner (`pending`, `accepted`, `declined`, `expired`, and `cancelled` states shown in real time, with a **Cancel Challenge** option while pending). If the partner is offline, an unavailable notice is shown. Once the partner accepts, both players automatically enter the 1v1 match arena.
 
-3. **Skin-Based Avatar Frames & Unique Per-Skin Animations**
-   - Every skin in the 5-rarity catalog renders a bespoke SVG + CSS/GSAP animated frame around the user's profile picture:
-     - *Sovereign Solar Eclipse (Legendary)*: Rotating golden eclipse corona with orbiting solar flares.
-     - *Imperial Gilded Constellation (Legendary)*: Twinkling astrolabe rings and orbiting starlight nodes.
-     - *Celestial Waltz Aura (Epic)*: Dual orbiting comet ribbons in rose and indigo.
-     - *Astral Origami Crane (Epic)*: Floating folded paper cranes and shimmering gold leaf particles.
-     - *Moonlit Sakura Pavilion (Epic)*: Gently drifting cherry blossom petals and soft lantern glow.
-     - *Paper Lantern Harmony (Rare)*: Warm swaying festival lanterns and rising ember motes.
-     - *Starlight Cartographer (Rare)*: Sweeping brass compass needle and cardinal star glints.
-     - *Pressed Clover Herbarium (Uncommon)*: Breathing botanical vine border with emerging four-leaf clovers.
-     - *Strawberry Postmark Stamp (Uncommon)*: Perforated stamp frame with a gentle wax-seal pulse.
-     - *Warm Sketchbook Margin & Twine Keepsake (Common)*: Hand-sketched graphite corner ticks and subtle paper-tape shimmer.
-   - Respects `prefers-reduced-motion` by rendering the full decorative frame artwork in a static, crisp posture when reduced motion is enabled.
+3. **Party Games Flow (`3–10 Couples` / `6–20 Players`)**:
+   - **Step 1 — Browse the 12 Party Games**: Selecting **Party Games** in the sidebar displays the 12-game Party Library with round rules, couple capacity (`3–10 Couples · 6–20 Players`), and XP reward tiers.
+   - **Step 2 — Create or Join a Party Room**: Players can create a **Public** or **Private** Party Room (generating a unique party room code) or browse open public parties in the **Public Party Browser**.
+   - **Step 3 — Auto-Partner Invitation & 10-Couple Lobby Grid**: When a player creates or joins a Party Room, their paired partner automatically receives a Party Team invite. The Party Lobby displays:
+     - Party game artwork, title, round settings, and `X/10 Couples Joined (Y/20 Players)` counter.
+     - Room code with **Copy Code** and **Share Invite Link** buttons.
+     - **10 Couple Team Cards**: Each occupied slot shows the Couple Name, Couple Banner backdrop, both partners' avatars, `@usernames`, equipped skin frames, online badges, and individual/couple **Ready** status (`Waiting for Partner`, `Joined · Not Ready`, or `Couple Ready ✓`).
+     - **Host Controls**: The host can switch the selected party game, adjust round count/timers, remove a participant/couple, and click **Start Party Game** once at least **3 complete couples (6 players)** have joined and marked Ready.
+     - **Integrated Party Chat & Voice**: Built-in room text chat and WebRTC/synthesized voice channel controls for all participating couples.
 
-4. **Profile Banners (5 Rarity Tiers)**
-   - Adds 10 distinct rectangular **Profile Banners** spanning **Legendary**, **Epic**, **Rare**, **Uncommon**, and **Common** rarities, each with custom layered SVG/canvas artwork, title, lore description, and rarity badge.
-   - Positioned as the horizontal backdrop behind the player's avatar and animated skin frame on Individual Profiles, Couple Profiles, 2v2 Team Lobbies, Leaderboards, and the Live Preview Studio.
-   - Players can independently preview, equip, and unequip any owned banner without altering their skin or profile photo.
+4. **The 12 Playable Party Games (Multi-Round & Real-Time Synchronized)**:
+   - **01. Couple Quiz Showdown**: Timed multi-round trivia across general knowledge, pop culture, logic puzzles, and couple brainteasers where both partners can coordinate and lock in their team answer for speed + accuracy points.
+   - **02. Draw & Guess Party**: Rotating shared canvas where the designated artist draws an assigned secret prompt while all couples race to submit the correct guess; faster guesses earn higher couple points.
+   - **03. Charades Challenge**: Silent clue-acting rounds where the acting partner selects gesture/mime clue cards and visual stage actions without prohibited words while their partner and rival couples race the clock.
+   - **04. Word Association Battle**: High-tempo word-chain relay where couples must submit valid, non-repeated semantic word links before the fuse runs out; duplicate or slow words lose streak multipliers.
+   - **05. Emoji Decode**: Multi-round emoji cipher boards representing movies, idioms, songs, and objects; couples decode the exact phrase under time pressure with progressive hint reveals.
+   - **06. Reaction Rumble**: Synchronized reflex and coordination mini-rounds (signal flash targets, dual-partner rhythm taps, decoy avoidance) where both partners' millisecond reaction scores combine into the couple's round score.
+   - **07. Memory Mayhem**: Escalating grid memory rounds where couples flip and match paired symbol/pattern tiles under a shared move and time budget.
+   - **08. Two Truths & A Lie**: Statement-deception party game where couples craft two truths and one convincing lie (or select from curated prompt decks) and earn points for fooling rival couples and spotting others' lies.
+   - **09. Puzzle Rush**: Timed sequence, pattern matrix, cipher, and spatial logic sprints where couples race to solve randomized valid boards for fastest-completion bonuses.
+   - **10. Treasure Hunt Party**: Branching island map adventure where couples solve riddles and mini-challenges across interconnected nodes to uncover the buried treasure chest first.
+   - **11. Story Chain**: Collaborative comedy storytelling where each couple adds the next sentence using required wildcard words, followed by a live peer-voting phase where couples vote on the funniest contributions.
+   - **12. Quickfire Challenge**: Rapid-fire 5-stage medley combining math blitz, color-word Stroop test, odd-one-out, pattern recall, and trivia sprints into a cumulative team gauntlet.
 
-5. **Chest Shop, Custom Keys & GSAP Card-Draw Reveal**
-   - **5 Chest Tiers & Transparent Drop Tables**:
-     - **Common Chest** (`100 Coins` or `1 Common Key`): 70% Common, 25% Uncommon, 5% Rare.
-     - **Uncommon Chest** (`220 Coins` or `1 Uncommon Key`): 30% Common, 50% Uncommon, 17% Rare, 3% Epic.
-     - **Rare Chest** (`450 Coins` or `1 Rare Key`): 15% Uncommon, 65% Rare, 17% Epic, 3% Legendary.
-     - **Epic Chest** (`850 Coins` or `1 Epic Key`): 20% Rare, 68% Epic, 12% Legendary.
-     - **Legendary Chest** (`1,500 Coins` or `1 Legendary Key`): 25% Epic, 75% Legendary.
-   - **Custom Key Progression**: 5 custom-crafted SVG key designs progressing from a simple wrought-iron notebook key (Common) and clover-engraved brass key (Uncommon) to a sapphire compass key (Rare), amethyst sakura key with glowing runes (Epic), and a radiant solar-crest key with animated aura (Legendary).
-   - **5 Distinct GSAP Opening & Card-Draw Sequences**:
-     - *Common*: Sketchbook parcel unties and slides out a single crisp keepsake card.
-     - *Uncommon*: Botanical clasp snaps open with leaf confetti and a vertical card lift + flip.
-     - *Rare*: Brass astrolabe lock rotates 180°, releasing a sapphire light beam as the reward card spirals to center stage.
-     - *Epic*: Double lacquer doors part with sakura/comet particles, elevating a glowing tarot-style card that flips with a shockwave ring.
-     - *Legendary*: Multi-stage cinematic sequence—the chest levitates with golden shockwaves, the solar lock shatters into starlight, three orbital energy rings converge into a radiant prism card, and the Legendary reward is unveiled with full banner/frame live preview.
-     - Includes an always-accessible **Skip Animation** button after the server returns the outcome.
-
-6. **Unified 4-Category Inventory**
-   - Dedicated **Inventory** view inside the Shop & Profile hub with 4 tabs: **Skins**, **Banners**, **Chests**, and **Keys**.
-   - Displays artwork, rarity, quantity owned (for Chests and Keys), ownership/equipped badges, and direct **Preview**, **Equip / Unequip**, or **Open Chest** actions.
+### Visual Identity & Theme
+- **Aesthetic Direction**: Preserves the tactile **Warm Sketchbook & Cozy Arcade Notebook** aesthetic (`--dp-color-ground`, `--dp-color-ink`, `--dp-color-accent`, `--dp-color-highlight`) paired with dark-slate arena surfaces (`#1C1917` / `#0F172A`), tabular numerals (`font-mono tabular-nums`), and zero-pill unboxed metadata discipline.
+- **Interactive Feedback & Motion**: Uses compositor-only GSAP transitions (`transform`, `opacity`) for modal entrances, camera shutter flash, 1v1 VS card reveals, party lobby slot updates, round countdowns, and the final Couple Podium scoreboard.
 
 ---
 
 ## 3. Key Product Decisions & Trade-Offs
 
-- **Decision 1 — Server-Authoritative Chest Rolls Before Animation Playback**
-  - *Chosen Approach*: When a player clicks **Open with Key** or **Buy & Open with Coins**, the client first executes an atomic `POST /api/arcade` transaction (`open_chest` or `buy_chest`). The server verifies balance/key ownership, deducts the cost, rolls the rarity and item from the chest's pool, checks ownership, converts duplicates into rarity-scaled Coins if already owned, persists the ledger record, and returns the sealed result payload. The GSAP chest-opening animation then dramatizes that exact server-verified reward.
-  - *Why*: Guarantees zero client-side tampering, prevents double-spending or refresh exploits, and allows instant **Skip Animation** without altering the outcome.
-
-- **Decision 2 — Three-Layer Composable Profile Header & Avatar Component**
-  - *Chosen Approach*: Build a reusable `<ProfileBannerAndAvatar />` and `<AnimatedSkinnedAvatar />` component system that accepts `{ photoUrl, fallbackAvatar, skinId, bannerId, size }`.
-  - *Why*: Ensures changing a profile picture, equipping a new skin frame, or swapping a banner never overwrites or mutates the other two layers, and renders consistently across Sidebar, Profile, Couple Profile, Matchmaking Modals, and Leaderboards.
+- **Decision 1 — Strict Backend Enforcement for Partner-Only 1v1**:
+  - *Chosen Approach*: Update the server-side `sendGameInvitation`, `createMultiplayerRoom`, and `joinMultiplayerRoom` handlers so `1v1` mode rejects any target user who is not the caller's active paired partner and rejects standalone `1v1` room creation.
+  - *Why*: Guarantees partner-only 1v1 privacy at the API layer rather than relying solely on hiding UI buttons.
+- **Decision 2 — Dedicated Party Room & Couple Slot Engine (`3–10 Couples`)**:
+  - *Chosen Approach*: Extend the room engine with `mode: 'party'`, `minCouples: 3`, `maxCouples: 10`, `maxPlayers: 20`, and structured `partyCouples` slots (`coupleId`, `coupleName`, `coupleBanner`, `coupleSkin`, `partnerA`, `partnerB`, `teamScore`, `partnerContributions`, `bothJoined`, `bothReady`).
+  - *Why*: Prevents duplicate couple entries, ensures both partners of each couple are validated against their active couple pairing, and tracks both individual partner contributions and combined couple scores.
+- **Decision 3 — Isolated Party Economy & Match Ledger**:
+  - *Chosen Approach*: Store completed party sessions in a dedicated `party_matches` history table and award placement-tiered XP (`+60 / +45 / +35 / +25 XP`) with `0 Coins` and `0 Trophies`.
+  - *Why*: Protects the 2v2 Couple Trophy Leaderboard and Trophy Road from inflation while rewarding social party participation with balanced XP progression.
 
 ---
 
@@ -103,49 +98,62 @@ This plan upgrades **Her Little Arcade** with a scrollbar-free responsive sideba
 ### Architecture & Component Diagram
 
 ```
-┌────────────────────────────────────────────────────────────────────────────┐
-│                        HER LITTLE ARCADE FRONTEND                          │
-│                                                                            │
-│  ┌──────────────────────┐   ┌───────────────────────────────────────────┐  │
-│  │ Scrollbar-Free       │   │ Three-Layer Profile & Avatar System       │  │
-│  │ ArcadeSidebar        │   │  • Layer 1: ProfileBannerArtwork (5 Tiers)│  │
-│  │  • Hidden Scrollbars │   │  • Layer 2: Uploaded Photo / Crop Studio  │  │
-│  │  • Wheel/Touch Scroll│   │  • Layer 3: AnimatedSkinAvatarFrame (GSAP)│  │
-│  └──────────────────────┘   └───────────────────────────────────────────┘  │
-│                                                                            │
-│  ┌──────────────────────────────────────────────────────────────────────┐  │
-│  │ Collectible Shop, Chests, Custom Keys & 4-Tab Inventory              │  │
-│  │  ┌────────────────┐ ┌────────────────┐ ┌──────────────────────────┐  │  │
-│  │  │ Chest Boutique │ │ 4-Tab Inventory│ │ GSAP Chest Opening Modal │  │  │
-│  │  │ • 5 Chest Tiers│ │ • Skins        │ │ • 5 Tier-Unique Timelines│  │  │
-│  │  │ • Drop Odds UI │ │ • Banners      │ │ • Card-Draw Flip Reveal  │  │  │
-│  │  │ • Coin / Key   │ │ • Chests (Qty) │ │ • Duplicate -> Coins Note│  │  │
-│  │  │   Triggers     │ │ • Keys (Qty)   │ │ • Instant Skip Button    │  │  │
-│  │  └───────┬────────┘ └───────┬────────┘ └────────────┬─────────────┘  │  │
-│  └──────────┼──────────────────┼───────────────────────┼────────────────┘  │
-└─────────────┼──────────────────┼───────────────────────┼───────────────────┘
-              │                  │                       │
-              ▼                  ▼                       ▼
-┌────────────────────────────────────────────────────────────────────────────┐
-│                   SERVER API & ATOMIC REPOSITORY (/api/arcade)             │
-│                                                                            │
-│  • upload_profile_photo / remove_profile_photo (Validated Base64/Data URL) │
-│  • equip_banner / purchase_banner (Persisted on User & Couple Profiles)    │
-│  • claim_challenge (Grants XP + Tier-Matched Chest Key: Common..Legendary) │
-│  • buy_chest / open_chest (Atomic Coin/Key Deduction + Server RNG Roll +   │
-│    Duplicate-to-Coin Conversion + Chest Opening Ledger Record)             │
-└────────────────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────────────────┐
+│                        PERSISTENT TOP PROGRESSION HUD                               │
+│     [LEVEL 1..300 + Horizontal XP Bar]        [Custom Coin SVG + 5M Capacity Bar]   │
+└──────────────────────────────────────────┬──────────────────────────────────────────┘
+                                           │
+┌──────────────────────────────────────────▼──────────────────────────────────────────┐
+│                 SCROLLBAR-FREE SIDEBAR NAVIGATION (TOP-LEVEL ITEMS)                 │
+│  • Home / Single Player                                                             │
+│  • 1v1 Games (Partner-Only)   • 2v2 Games (Ranked Couple)  • Party Games (3–10 Duo) │
+│  • Create Room (2v2 / Party)  • Join Group (Code/Browser)  • Matchmaking (2v2)      │
+│  • Invitations                • Voice Chat                 • Shop (5 Pages) & Inv.  │
+└───────┬──────────────────────────┬───────────────────────────────┬──────────────────┘
+        │                          │                               │
+┌───────▼──────────┐    ┌──────────▼─────────────┐     ┌───────────▼──────────────────┐
+│ PROFILE CAMERA   │    │ PARTNER-ONLY 1V1 DUEL  │     │ PARTY GAMES HUB & ARENA      │
+│ & CROP STUDIO    │    │ MODAL (PlayGameSetup)  │     │ (3–10 Couples / 6–20 Users)  │
+│ • Upload Photo   │    │ • You vs Paired Partner│     │ • 12-Game Party Library      │
+│ • Take Photo     │    │ • Live Partner Status  │     │ • Public/Private Party Rooms │
+│ • Front/Rear Cam │    │ • Challenge Partner    │     │ • Auto Partner Team Invite   │
+│ • Retake & Crop  │    │ • Pending/Accepted/    │     │ • 10-Couple Readiness Grid   │
+│ • Frame + Banner │    │   Declined/Cancelled   │     │ • 12 Multi-Round Party Games │
+│   Live Preview   │    │ • XP Only (0 Coins/🏆) │     │ • Live Couple Scoreboard     │
+└───────┬──────────┘    └──────────┬─────────────┘     └───────────┬──────────────────┘
+        │                          │                               │
+        └──────────────────────────┼───────────────────────────────┘
+                                   ▼
+┌─────────────────────────────────────────────────────────────────────────────────────┐
+│                 NEXT.JS API ROUTES (/api/arcade) & DRIZZLE REPOSITORY               │
+│  • Partner-Only 1v1 Validation (Active Couple Check, Target === Paired Partner)     │
+│  • Party Room Engine (3–10 Couples Capacity, Auto Partner Invite, Host Controls)    │
+│  • Real-Time Party State Sync (Round Seed, Submissions, Individual + Team Scores)   │
+│  • Party Match Ledger (Placement XP: +60/+45/+35/+25 XP · 0 Coins · 0 Trophies)     │
+└─────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-### Data Model & State Extensions
+### Data Model & State
 
-- **User Profile Extensions**:
-  - `customPhotoUrl`: Cropped uploaded profile image data/URL (empty string when using default character icon).
-  - `equippedBanner`: Equipped banner ID (default `'banner-warm-sketchbook'`).
-  - `unlockedBannersJson`: Array of owned banner IDs.
-  - `chestInventoryJson`: Map of owned unopened chests by tier (`{ Common, Uncommon, Rare, Epic, Legendary }`).
-  - `keyInventoryJson`: Map of owned chest keys by tier (`{ Common, Uncommon, Rare, Epic, Legendary }`).
-- **Chest Opening History Table (`chestOpenings`)**:
-  - Records `userUid`, `chestTier`, `unlockMethod` (`coins` or `key`), `rewardType` (`skin` or `banner`), `rewardId`, `rewardRarity`, `wasDuplicate`, `duplicateCoinsAwarded`, and `createdAt`.
-- **Challenge Key Rewards**:
-  - Each challenge definition in `ARCADE_CHALLENGE_CATALOG` includes `keyRewardTier` (`Common` / `Uncommon` for Daily, `Rare` / `Epic` for Weekly, `Legendary` for Monthly) and `keyRewardCount: 1`, awarded atomically upon claiming a completed challenge.
+1. **Party Games Catalog (`PARTY_GAMES`)**:
+   - Defines all 12 party games (`couple-quiz-showdown`, `draw-and-guess-party`, `charades-challenge`, `word-association-battle`, `emoji-decode`, `reaction-rumble`, `memory-mayhem`, `two-truths-and-a-lie`, `puzzle-rush`, `treasure-hunt-party`, `story-chain`, `quickfire-challenge`) with `minCouples: 3`, `maxCouples: 10`, `minPlayers: 6`, `maxPlayers: 20`, round count, and placement XP table.
+2. **Party Room State (`mode: 'party'`)**:
+   - `teams`: Up to 10 `PartyCoupleTeam` records containing `coupleId`, `coupleName`, `coupleBanner`, `equippedCoupleSkin`, `members` (both paired partners with `uid`, `username`, `avatar`, `equippedSkin`, `online`, `ready`, `individualScore`), `coupleReady` (`members.length === 2 && members.every(m => m.ready)`), and `teamScore`.
+   - `gameState`: Synchronized multi-round state (`roundNumber`, `totalRounds`, `phase`, `sessionSeed`, `currentPrompt`, `drawStrokes`, `submissionsByUid`, `votesByUid`, `roundScoresByCouple`, `paused`, `disconnectedUids`).
+3. **Party Match History (`party_matches` table)**:
+   - Stores `id`, `roomCode`, `gameId`, `hostCoupleId`, `participatingCouplesCount`, `winnerCoupleId`, `winnerCoupleName`, `standingsJson` (couple rankings + individual partner contributions), `xpAwardedByUidJson`, and `createdAt`.
+
+### Interactive Component & State Mapping
+
+- **Camera Capture & Crop Modal**:
+  - Clicking **Take Photo** invokes `navigator.mediaDevices.getUserMedia({ video: { facingMode } })` and attaches the stream to `<video autoPlay playsInline muted />`.
+  - Clicking **Switch Camera** toggles `facingMode` between `'user'` and `'environment'`, stopping the previous stream before starting the new one.
+  - Clicking **Capture** draws the current video frame onto an offscreen canvas, stops all media tracks immediately, and loads the data URL into the interactive zoom/offset square cropper with a **Retake Photo** button and live **Avatar Frame + Profile Banner** preview.
+- **1v1 Partner Duel Modal**:
+  - Queries the user's active couple pairing and renders the **You vs. Your Partner** comparison card.
+  - Clicking **Challenge Your Partner** calls `action: 'send_game_invitation'` with `inviteType: '1v1'`; backend verifies `targetUid === pairedPartnerUid` and creates a 2-seat partner duel room.
+  - Supports **Cancel Challenge** (`action: 'cancel_game_invitation'`) while pending and auto-launches the selected 1v1 game as soon as the partner accepts.
+- **Party Lobby & 12 Party Game Engines**:
+  - Creating or joining a Party Room seats the player in their couple's team slot and automatically sends a `party_partner_invite` to their paired partner so both partners join the same couple team.
+  - Host controls allow changing the party game, configuring rounds, kicking disruptive participants, and starting the match once `readyCouplesCount >= 3` (and `<= 10`).
+  - Finishing a party game displays the **Couple Podium & Contribution Breakdown** (showing each couple's rank, total score, and both partners' individual points) and persists placement-tiered XP (`+60 / +45 / +35 / +25 XP`, `0 Coins`, `0 Trophies`) to the database.

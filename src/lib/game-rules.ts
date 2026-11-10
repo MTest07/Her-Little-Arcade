@@ -12,19 +12,121 @@ export function verifyGameCatalogCounts() {
   };
 }
 
-export function calculateLevelFromXp(xp: number): {
+export const MAX_PLAYER_LEVEL = 300;
+export const MAX_COIN_CAPACITY = 5_000_000;
+
+export interface XpCurveConfig {
+  baseXp: number;
+  linearStep: number;
+  quadraticStep: number;
+}
+
+export const DEFAULT_XP_CURVE_CONFIG: XpCurveConfig = {
+  baseXp: 100,
+  linearStep: 25,
+  quadraticStep: 5,
+};
+
+export function getXpRequiredForLevel(
+  level: number,
+  config: XpCurveConfig = DEFAULT_XP_CURVE_CONFIG
+): number {
+  const safeLevel = Math.max(1, Math.floor(level));
+  if (safeLevel >= MAX_PLAYER_LEVEL) {
+    return 0;
+  }
+  const offset = safeLevel - 1;
+  return (
+    config.baseXp +
+    config.linearStep * offset +
+    config.quadraticStep * offset * offset
+  );
+}
+
+export function getCumulativeXpForLevel(
+  targetLevel: number,
+  config: XpCurveConfig = DEFAULT_XP_CURVE_CONFIG
+): number {
+  const clampedTarget = Math.max(1, Math.min(MAX_PLAYER_LEVEL, Math.floor(targetLevel)));
+  let total = 0;
+  for (let lvl = 1; lvl < clampedTarget; lvl++) {
+    total += getXpRequiredForLevel(lvl, config);
+  }
+  return total;
+}
+
+export const MAX_CUMULATIVE_XP = getCumulativeXpForLevel(MAX_PLAYER_LEVEL);
+
+export function calculateLevelFromXp(
+  xp: number,
+  config: XpCurveConfig = DEFAULT_XP_CURVE_CONFIG
+): {
   level: number;
   currentLevelXp: number;
   nextLevelXp: number;
   progressPercent: number;
+  isMaxLevel: boolean;
+  clampedTotalXp: number;
+  levelFloorTotalXp: number;
 } {
-  const safeXp = Math.max(0, Math.floor(xp));
-  // Each level requires 200 XP
-  const level = Math.floor(safeXp / 200) + 1;
-  const currentLevelXp = safeXp % 200;
-  const nextLevelXp = 200;
-  const progressPercent = Math.min(100, Math.round((currentLevelXp / nextLevelXp) * 100));
-  return { level, currentLevelXp, nextLevelXp, progressPercent };
+  const safeXp = Math.max(0, Math.floor(Number(xp) || 0));
+  let remaining = safeXp;
+  let level = 1;
+  let levelFloorTotalXp = 0;
+
+  while (level < MAX_PLAYER_LEVEL) {
+    const req = getXpRequiredForLevel(level, config);
+    if (remaining >= req) {
+      remaining -= req;
+      levelFloorTotalXp += req;
+      level += 1;
+    } else {
+      const progressPercent =
+        req > 0 ? Math.min(100, Math.max(0, Math.round((remaining / req) * 100))) : 100;
+      return {
+        level,
+        currentLevelXp: remaining,
+        nextLevelXp: req,
+        progressPercent,
+        isMaxLevel: false,
+        clampedTotalXp: safeXp,
+        levelFloorTotalXp,
+      };
+    }
+  }
+
+  return {
+    level: MAX_PLAYER_LEVEL,
+    currentLevelXp: 0,
+    nextLevelXp: 0,
+    progressPercent: 100,
+    isMaxLevel: true,
+    clampedTotalXp: levelFloorTotalXp,
+    levelFloorTotalXp,
+  };
+}
+
+export function clampCoinsToCapacity(
+  currentCoins: number,
+  deltaCoins: number,
+  maxCapacity: number = MAX_COIN_CAPACITY
+): {
+  nextCoins: number;
+  actualDelta: number;
+  overflowClipped: number;
+  isAtCapacity: boolean;
+} {
+  const safeCurrent = Math.max(0, Math.min(maxCapacity, Math.floor(Number(currentCoins) || 0)));
+  const rawNext = safeCurrent + Math.floor(Number(deltaCoins) || 0);
+  const nextCoins = Math.max(0, Math.min(maxCapacity, rawNext));
+  const actualDelta = nextCoins - safeCurrent;
+  const overflowClipped = rawNext > maxCapacity ? rawNext - maxCapacity : 0;
+  return {
+    nextCoins,
+    actualDelta,
+    overflowClipped,
+    isAtCapacity: nextCoins >= maxCapacity,
+  };
 }
 
 export interface CustomChessClockConfig {

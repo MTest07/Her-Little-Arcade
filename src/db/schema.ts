@@ -8,6 +8,8 @@ export const users = pgTable('users', {
   username: text('username').notNull(),
   usernameSetupCompleted: boolean('username_setup_completed').notNull().default(true),
   renameCards: integer('rename_cards').notNull().default(0),
+  shieldCards: integer('shield_cards').notNull().default(0),
+  shieldCardArmed: boolean('shield_card_armed').notNull().default(false),
   passwordHash: text('password_hash').notNull().default(''),
   emailVerified: boolean('email_verified').notNull().default(false),
   verificationCode: text('verification_code').notNull().default(''),
@@ -245,12 +247,55 @@ export const chestOpenings = pgTable('chest_openings', {
   userUid: text('user_uid').notNull(),
   chestTier: text('chest_tier').notNull(), // 'Common' | 'Uncommon' | 'Rare' | 'Epic' | 'Legendary'
   openMethod: text('open_method').notNull(), // 'coins' | 'key' | 'inventory'
-  rewardCategory: text('reward_category').notNull(), // 'skin' | 'banner'
+  rewardCategory: text('reward_category').notNull(), // 'skin' | 'banner' | 'consumable'
   rewardId: text('reward_id').notNull(),
   rewardName: text('reward_name').notNull(),
   rewardRarity: text('reward_rarity').notNull(), // 'Common' | 'Uncommon' | 'Rare' | 'Epic' | 'Legendary'
   wasDuplicate: boolean('was_duplicate').notNull().default(false),
   duplicateCoinsAwarded: integer('duplicate_coins_awarded').notNull().default(0),
+  createdAt: timestamp('created_at').defaultNow(),
+});
+
+export const itemTransactions = pgTable('item_transactions', {
+  id: serial('id').primaryKey(),
+  userUid: text('user_uid').notNull(),
+  txType: text('tx_type').notNull(), // 'direct_coin_purchase' | 'chest_reward' | 'duplicate_conversion' | 'shield_card_drop' | 'shield_card_armed' | 'shield_card_consumed' | 'challenge_key_reward'
+  itemCategory: text('item_category').notNull(), // 'skin' | 'banner' | 'chest' | 'key' | 'consumable' | 'utility'
+  itemId: text('item_id').notNull(),
+  itemName: text('item_name').notNull(),
+  rarity: text('rarity').notNull().default('Common'),
+  quantityDelta: integer('quantity_delta').notNull().default(1),
+  coinsDelta: integer('coins_delta').notNull().default(0),
+  wasDuplicate: boolean('was_duplicate').notNull().default(false),
+  description: text('description').notNull().default(''),
+  createdAt: timestamp('created_at').defaultNow(),
+});
+
+export const xpTransactions = pgTable('xp_transactions', {
+  id: serial('id').primaryKey(),
+  userUid: text('user_uid').notNull(),
+  amount: integer('amount').notNull(),
+  xpBefore: integer('xp_before').notNull().default(0),
+  xpAfter: integer('xp_after').notNull().default(0),
+  levelBefore: integer('level_before').notNull().default(1),
+  levelAfter: integer('level_after').notNull().default(1),
+  txType: text('tx_type').notNull(), // 'match_reward' | '2v2_loss_penalty' | '2v2_shield_protected' | 'challenge_reward' | 'party_match_reward'
+  referenceId: text('reference_id').notNull().default(''),
+  description: text('description').notNull().default(''),
+  createdAt: timestamp('created_at').defaultNow(),
+});
+
+export const partyMatches = pgTable('party_matches', {
+  id: serial('id').primaryKey(),
+  roomCode: text('room_code').notNull(),
+  gameId: text('game_id').notNull(),
+  hostUid: text('host_uid').notNull(),
+  totalCouples: integer('total_couples').notNull().default(3),
+  totalPlayers: integer('total_players').notNull().default(6),
+  winningCoupleId: integer('winning_couple_id').notNull().default(0),
+  winningCoupleName: text('winning_couple_name').notNull().default(''),
+  standingsJson: text('standings_json').notNull().default('[]'),
+  durationSeconds: integer('duration_seconds').notNull().default(180),
   createdAt: timestamp('created_at').defaultNow(),
 });
 
@@ -264,3 +309,4 @@ export const gameRecordsRelations = relations(gameRecords, ({ one }) => ({
     references: [users.uid],
   }),
 }));
+

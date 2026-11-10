@@ -779,7 +779,7 @@ export function ThreeLayerProfileHeader({
                 className="px-3 py-1.5 text-xs font-medium bg-[#fcf8ef]/95 hover:bg-[#f0dfa0] text-[#38352f] border-[1.5px] border-[#38352f] flex items-center gap-1.5 shadow-sm"
               >
                 <Camera className="w-3.5 h-3.5" />
-                <span>{customPhotoUrl ? 'Edit Photo' : 'Upload Photo'}</span>
+                <span>{customPhotoUrl ? 'Upload / Take Photo' : 'Upload or Take Photo'}</span>
               </button>
             )}
             {onOpenCosmeticsVault && (
@@ -1075,7 +1075,7 @@ export function CustomChestArtwork({
 }
 
 /* ============================================================================
-   5. PROFILE PICTURE UPLOAD, PREVIEW & CROP STUDIO MODAL
+   5. PROFILE PICTURE UPLOAD, CAMERA CAPTURE, PREVIEW & CROP STUDIO MODAL
    ============================================================================ */
 
 interface ProfilePhotoUploadAndCropModalProps {
@@ -1086,6 +1086,7 @@ interface ProfilePhotoUploadAndCropModalProps {
   equippedSkinId?: string;
   equippedBannerId?: string;
   username?: string;
+  initialMode?: 'upload' | 'camera';
   onSavePhoto: (croppedDataUrl: string) => Promise<void>;
 }
 
@@ -1100,9 +1101,12 @@ export function ProfilePhotoUploadAndCropModal({
   equippedSkinId = 'skin-classic-notebook',
   equippedBannerId = 'banner-sketchbook-grid',
   username = 'Player',
+  initialMode = 'upload',
   onSavePhoto,
 }: ProfilePhotoUploadAndCropModalProps) {
+  const [sourceMode, setSourceMode] = useState<'upload' | 'camera'>(initialMode);
   const [sourceImageObj, setSourceImageObj] = useState<HTMLImageElement | null>(null);
+  const [capturedFromCamera, setCapturedFromCamera] = useState<boolean>(false);
   const [zoom, setZoom] = useState<number>(1);
   const [pan, setPan] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const [isDragging, setIsDragging] = useState(false);
@@ -1111,22 +1115,149 @@ export function ProfilePhotoUploadAndCropModal({
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
+  // Camera state (Privacy-First: Only activates when user explicitly selects Take Photo)
+  const [cameraActive, setCameraActive] = useState<boolean>(false);
+  const [cameraLoading, setCameraLoading] = useState<boolean>(false);
+  const [cameraFacing, setCameraFacing] = useState<'user' | 'environment'>('user');
+
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const cropCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const mediaStreamRef = useRef<MediaStream | null>(null);
 
+  const stopCameraStream = useCallback(() => {
+    if (mediaStreamRef.current) {
+      mediaStreamRef.current.getTracks().forEach((track) => {
+        try {
+          track.stop();
+        } catch {
+          // ignore
+        }
+      });
+      mediaStreamRef.current = null;
+    }
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
+    }
+    Promise.resolve().then(() => {
+      setCameraActive(false);
+      setCameraLoading(false);
+    });
+  }, []);
+
+  const startCameraStream = useCallback(
+    async (facing: 'user' | 'environment') => {
+      stopCameraStream();
+      setErrorMsg(null);
+
+      if (
+        typeof navigator === 'undefined' ||
+        !navigator.mediaDevices ||
+        typeof navigator.mediaDevices.getUserMedia !== 'function'
+      ) {
+        setErrorMsg(
+          'Your browser or device does not support direct camera access. Please use "Upload Photo" instead.'
+        );
+        return;
+      }
+
+      setCameraLoading(true);
+      try {
+        let stream: MediaStream;
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({
+            video: {
+              facingMode: { ideal: facing },
+              width: { ideal: 720 },
+              height: { ideal: 720 },
+            },
+            audio: false,
+          });
+        } catch {
+          // Fallback to any available video camera if specific facingMode is unavailable on desktop webcam
+          stream = await navigator.mediaDevices.getUserMedia({
+            video: true,
+            audio: false,
+          });
+        }
+
+        mediaStreamRef.current = stream;
+        setCameraFacing(facing);
+        setCameraActive(true);
+        setCameraLoading(false);
+
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+          await videoRef.current.play().catch(() => {});
+        }
+      } catch (err: unknown) {
+        setCameraLoading(false);
+        setCameraActive(false);
+        const errName = err instanceof Error ? err.name : '';
+        if (
+          errName === 'NotAllowedError' ||
+          errName === 'PermissionDeniedError' ||
+          errName === 'SecurityError'
+        ) {
+          setErrorMsg(
+            'Camera permission was denied. Please allow camera access in your browser address bar or choose "Upload Photo".'
+          );
+        } else if (
+          errName === 'NotFoundError' ||
+          errName === 'DevicesNotFoundError' ||
+          errName === 'OverconstrainedError'
+        ) {
+          setErrorMsg(
+            'No compatible camera was found on this device. Please connect a webcam or use "Upload Photo".'
+          );
+        } else if (errName === 'NotReadableError' || errName === 'TrackStartError') {
+          setErrorMsg(
+            'Your camera is currently in use by another application. Please close other camera apps and try again.'
+          );
+        } else {
+          setErrorMsg(
+            err instanceof Error
+              ? `Unable to access camera: ${err.message}`
+              : 'Unable to access camera on this device.'
+          );
+        }
+      }
+    },
+    [stopCameraStream]
+  );
+
+  // Attach stream to video element whenever cameraActive turns true
+  useEffect(() => {
+    if (cameraActive && videoRef.current && mediaStreamRef.current) {
+      videoRef.current.srcObject = mediaStreamRef.current;
+      videoRef.current.play().catch(() => {});
+    }
+  }, [cameraActive]);
+
+  // Reset modal state on open and guarantee camera stream stops on close/unmount
   useEffect(() => {
     if (isOpen) {
       Promise.resolve().then(() => {
         setCroppedPreviewUrl(currentPhotoUrl || '');
         setSourceImageObj(null);
+        setCapturedFromCamera(false);
         setZoom(1);
         setPan({ x: 0, y: 0 });
         setErrorMsg(null);
+        setSourceMode(initialMode);
+        if (initialMode === 'camera') {
+          startCameraStream('user');
+        }
       });
+    } else {
+      stopCameraStream();
     }
-  }, [isOpen, currentPhotoUrl]);
+    return () => {
+      stopCameraStream();
+    };
+  }, [isOpen, currentPhotoUrl, initialMode, startCameraStream, stopCameraStream]);
 
-  // Render square crop to hidden/visible canvas whenever sourceImageObj, zoom, or pan changes
+  // Render square crop to canvas whenever sourceImageObj, zoom, or pan changes
   const renderSquareCrop = useCallback(() => {
     const canvas = cropCanvasRef.current;
     if (!canvas || !sourceImageObj) return;
@@ -1170,11 +1301,82 @@ export function ProfilePhotoUploadAndCropModal({
 
   useEffect(() => {
     if (sourceImageObj) {
-      renderSquareCrop();
+      Promise.resolve().then(() => {
+        renderSquareCrop();
+      });
     }
   }, [sourceImageObj, renderSquareCrop]);
 
   if (!isOpen) return null;
+
+  const handleSelectUploadTab = () => {
+    stopCameraStream();
+    setSourceMode('upload');
+    setErrorMsg(null);
+  };
+
+  const handleSelectTakePhotoTab = () => {
+    setSourceMode('camera');
+    setSourceImageObj(null);
+    setCapturedFromCamera(false);
+    setErrorMsg(null);
+    startCameraStream(cameraFacing);
+  };
+
+  const handleSwitchCameraFacing = () => {
+    const nextFacing: 'user' | 'environment' =
+      cameraFacing === 'user' ? 'environment' : 'user';
+    startCameraStream(nextFacing);
+  };
+
+  const handleCaptureCameraFrame = () => {
+    const video = videoRef.current;
+    if (!video || !cameraActive) return;
+
+    const vw = video.videoWidth || 640;
+    const vh = video.videoHeight || 640;
+
+    const captureCanvas = document.createElement('canvas');
+    captureCanvas.width = vw;
+    captureCanvas.height = vh;
+    const ctx = captureCanvas.getContext('2d');
+    if (!ctx) {
+      setErrorMsg('Could not capture frame from camera.');
+      return;
+    }
+
+    // Mirror horizontally if captured from front-facing ('user') camera so it matches live preview
+    if (cameraFacing === 'user') {
+      ctx.translate(vw, 0);
+      ctx.scale(-1, 1);
+    }
+    ctx.drawImage(video, 0, 0, vw, vh);
+
+    const capturedDataUrl = captureCanvas.toDataURL('image/jpeg', 0.92);
+
+    // Privacy requirement: Stop camera stream immediately once user finishes capturing
+    stopCameraStream();
+
+    const img = new window.Image();
+    img.onload = () => {
+      setSourceImageObj(img);
+      setCapturedFromCamera(true);
+      setZoom(1);
+      setPan({ x: 0, y: 0 });
+    };
+    img.onerror = () => {
+      setErrorMsg('Could not process captured camera photo.');
+    };
+    img.src = capturedDataUrl;
+  };
+
+  const handleRetakeCameraPhoto = () => {
+    setSourceImageObj(null);
+    setCapturedFromCamera(false);
+    setZoom(1);
+    setPan({ x: 0, y: 0 });
+    startCameraStream(cameraFacing);
+  };
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     setErrorMsg(null);
@@ -1193,12 +1395,14 @@ export function ProfilePhotoUploadAndCropModal({
       return;
     }
 
+    stopCameraStream();
     const reader = new FileReader();
     reader.onload = () => {
       const dataUrl = String(reader.result || '');
       const img = new window.Image();
       img.onload = () => {
         setSourceImageObj(img);
+        setCapturedFromCamera(false);
         setZoom(1);
         setPan({ x: 0, y: 0 });
       };
@@ -1228,14 +1432,20 @@ export function ProfilePhotoUploadAndCropModal({
     setIsDragging(false);
   };
 
+  const handleCloseModal = () => {
+    stopCameraStream();
+    onClose();
+  };
+
   const handleSave = async () => {
     if (!croppedPreviewUrl) {
-      setErrorMsg('Please upload an image before saving.');
+      setErrorMsg('Please upload or capture a picture before saving.');
       return;
     }
     setSaving(true);
     setErrorMsg(null);
     try {
+      stopCameraStream();
       await onSavePhoto(croppedPreviewUrl);
       onClose();
     } catch (err: unknown) {
@@ -1249,6 +1459,7 @@ export function ProfilePhotoUploadAndCropModal({
     setSaving(true);
     setErrorMsg(null);
     try {
+      stopCameraStream();
       await onSavePhoto('');
       setCroppedPreviewUrl('');
       setSourceImageObj(null);
@@ -1267,19 +1478,58 @@ export function ProfilePhotoUploadAndCropModal({
           <div className="flex items-center gap-2.5">
             <Camera className="w-5 h-5 text-[#9e3a2e]" />
             <div>
-              <h2 className="text-xl font-bold">Profile Picture Studio</h2>
+              <h2 className="text-xl font-bold text-[#38352f]">Profile Picture Studio</h2>
               <p className="text-xs text-[#514d44]">
-                Upload, crop, and preview your picture inside your equipped skin frame & banner
+                Upload a photo or take a picture with your camera, then crop &amp; preview with your equipped frame and banner
               </p>
             </div>
           </div>
           <button
             type="button"
-            onClick={onClose}
+            onClick={handleCloseModal}
             className="p-1.5 text-[#514d44] hover:text-[#38352f]"
             aria-label="Close"
           >
             <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        {/* Two Profile Picture Choices: Upload Photo | Take Photo */}
+        <div className="mt-4 grid grid-cols-2 gap-3">
+          <button
+            type="button"
+            onClick={handleSelectUploadTab}
+            className={`p-3 border-[1.5px] border-[#38352f] text-left transition-colors flex items-center gap-2.5 ${
+              sourceMode === 'upload'
+                ? 'bg-[#f0dfa0] text-[#38352f] font-bold shadow-[2px_2px_0px_#38352f]'
+                : 'bg-[#fcf8ef] text-[#514d44] hover:bg-[#f5eedc]'
+            }`}
+          >
+            <Upload className="w-4 h-4 text-[#9e3a2e] shrink-0" />
+            <div className="min-w-0">
+              <div className="text-xs font-bold text-[#38352f]">Upload Photo</div>
+              <div className="text-[11px] text-[#514d44] truncate">
+                Select an existing image from device
+              </div>
+            </div>
+          </button>
+
+          <button
+            type="button"
+            onClick={handleSelectTakePhotoTab}
+            className={`p-3 border-[1.5px] border-[#38352f] text-left transition-colors flex items-center gap-2.5 ${
+              sourceMode === 'camera'
+                ? 'bg-[#f0dfa0] text-[#38352f] font-bold shadow-[2px_2px_0px_#38352f]'
+                : 'bg-[#fcf8ef] text-[#514d44] hover:bg-[#f5eedc]'
+            }`}
+          >
+            <Camera className="w-4 h-4 text-[#9e3a2e] shrink-0" />
+            <div className="min-w-0">
+              <div className="text-xs font-bold text-[#38352f]">Take Photo</div>
+              <div className="text-[11px] text-[#514d44] truncate">
+                Open device camera &amp; capture picture
+              </div>
+            </div>
           </button>
         </div>
 
@@ -1291,7 +1541,7 @@ export function ProfilePhotoUploadAndCropModal({
         )}
 
         <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-5 items-start">
-          {/* Left Column: File Picker & Interactive Square Crop Canvas */}
+          {/* Left Column: Upload / Live Camera Feed / Interactive Square Crop Canvas */}
           <div className="space-y-3">
             <input
               ref={fileInputRef}
@@ -1303,6 +1553,7 @@ export function ProfilePhotoUploadAndCropModal({
 
             <div className="sketch-strip p-3 flex flex-col items-center justify-center">
               {sourceImageObj ? (
+                /* Interactive Crop & Position Stage (Works for both Uploaded and Captured Photos) */
                 <>
                   <div className="relative w-56 h-56 rounded-xl overflow-hidden border-2 border-[#38352f] shadow-inner cursor-move touch-none">
                     <canvas
@@ -1338,7 +1589,81 @@ export function ProfilePhotoUploadAndCropModal({
                     </div>
                   </div>
                 </>
+              ) : sourceMode === 'camera' ? (
+                /* Live Camera Capture Stage */
+                <div className="w-full flex flex-col items-center space-y-3 py-2">
+                  <div className="relative w-56 h-56 rounded-xl overflow-hidden border-2 border-[#38352f] bg-[#1c1917] flex items-center justify-center">
+                    {cameraActive ? (
+                      <>
+                        <video
+                          ref={videoRef}
+                          autoPlay
+                          playsInline
+                          muted
+                          className={`w-full h-full object-cover ${
+                            cameraFacing === 'user' ? 'scale-x-[-1]' : ''
+                          }`}
+                        />
+                        <div className="absolute inset-3 rounded-full border-2 border-dashed border-[#fcf8ef]/80 pointer-events-none shadow-[0_0_0_9999px_rgba(0,0,0,0.35)]" />
+                        <span className="absolute top-2 left-2 px-2 py-0.5 rounded bg-black/70 text-[10px] font-mono text-[#fcf8ef]">
+                          {cameraFacing === 'user' ? 'Front Camera' : 'Rear Camera'}
+                        </span>
+                      </>
+                    ) : cameraLoading ? (
+                      <div className="text-center p-4 space-y-2 text-[#fcf8ef]">
+                        <RefreshCw className="w-6 h-6 mx-auto animate-spin text-[#f0dfa0]" />
+                        <p className="text-xs font-medium">
+                          Requesting camera permission...
+                        </p>
+                      </div>
+                    ) : (
+                      <div className="text-center p-4 space-y-2.5 text-[#fcf8ef]">
+                        <Camera className="w-7 h-7 mx-auto text-[#f0dfa0]" />
+                        <p className="text-xs font-medium">
+                          Camera preview is paused or awaiting permission.
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => startCameraStream(cameraFacing)}
+                          className="px-3 py-1.5 text-xs font-bold bg-[#9e3a2e] text-[#fcf8ef] border border-[#fcf8ef]"
+                        >
+                          Start Camera
+                        </button>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Camera Controls: Switch Camera (Front/Rear) & Capture Button */}
+                  <div className="flex flex-wrap items-center justify-center gap-2 w-full">
+                    <button
+                      type="button"
+                      disabled={cameraLoading}
+                      onClick={handleSwitchCameraFacing}
+                      className="px-3 py-2 text-xs font-semibold bg-[#fcf8ef] text-[#38352f] border-[1.5px] border-[#38352f] flex items-center gap-1.5 hover:bg-[#f0dfa0] disabled:opacity-50"
+                    >
+                      <RefreshCw className="w-3.5 h-3.5" />
+                      <span>
+                        Switch to {cameraFacing === 'user' ? 'Rear' : 'Front'} Camera
+                      </span>
+                    </button>
+
+                    <button
+                      type="button"
+                      disabled={!cameraActive || cameraLoading}
+                      onClick={handleCaptureCameraFrame}
+                      className="px-4 py-2 text-xs font-bold bg-[#9e3a2e] text-[#fcf8ef] border-[1.5px] border-[#38352f] flex items-center gap-1.5 shadow-[2px_2px_0px_#38352f] disabled:opacity-50"
+                    >
+                      <Camera className="w-3.5 h-3.5" />
+                      <span>Capture Photo</span>
+                    </button>
+                  </div>
+
+                  <p className="text-[11px] text-[#514d44] text-center">
+                    Camera access stops automatically as soon as you capture or close this window.
+                  </p>
+                </div>
               ) : (
+                /* File Upload Stage */
                 <div className="py-8 px-4 text-center space-y-3">
                   <div className="w-14 h-14 mx-auto rounded-full bg-[#fcf8ef] border-[1.5px] border-[#38352f] flex items-center justify-center">
                     <ImageIcon className="w-6 h-6 text-[#344c69]" />
@@ -1351,28 +1676,49 @@ export function ProfilePhotoUploadAndCropModal({
                       Supports PNG, JPG, JPEG, and WebP up to 5 MB
                     </p>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => fileInputRef.current?.click()}
-                    className="px-4 py-2 text-xs font-bold bg-[#9e3a2e] text-[#fcf8ef] border-[1.5px] border-[#38352f] inline-flex items-center gap-1.5"
-                  >
-                    <Upload className="w-3.5 h-3.5" />
-                    <span>Select Image File</span>
-                  </button>
+                  <div className="flex flex-wrap items-center justify-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => fileInputRef.current?.click()}
+                      className="px-4 py-2 text-xs font-bold bg-[#9e3a2e] text-[#fcf8ef] border-[1.5px] border-[#38352f] inline-flex items-center gap-1.5"
+                    >
+                      <Upload className="w-3.5 h-3.5" />
+                      <span>Select Image File</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleSelectTakePhotoTab}
+                      className="px-3.5 py-2 text-xs font-bold bg-[#fcf8ef] text-[#38352f] border-[1.5px] border-[#38352f] inline-flex items-center gap-1.5 hover:bg-[#f0dfa0]"
+                    >
+                      <Camera className="w-3.5 h-3.5" />
+                      <span>Take Photo</span>
+                    </button>
+                  </div>
                 </div>
               )}
             </div>
 
             {sourceImageObj && (
-              <div className="flex items-center justify-between gap-2">
-                <button
-                  type="button"
-                  onClick={() => fileInputRef.current?.click()}
-                  className="px-3 py-1.5 text-xs font-medium bg-[#fcf8ef] border border-[#38352f] flex items-center gap-1.5"
-                >
-                  <RefreshCw className="w-3.5 h-3.5" />
-                  <span>Choose Another File</span>
-                </button>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                {capturedFromCamera ? (
+                  <button
+                    type="button"
+                    onClick={handleRetakeCameraPhoto}
+                    className="px-3 py-1.5 text-xs font-bold bg-[#fcf8ef] text-[#38352f] border-[1.5px] border-[#38352f] flex items-center gap-1.5 hover:bg-[#f0dfa0]"
+                  >
+                    <Camera className="w-3.5 h-3.5 text-[#9e3a2e]" />
+                    <span>Retake Photo</span>
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    className="px-3 py-1.5 text-xs font-medium bg-[#fcf8ef] text-[#38352f] border border-[#38352f] flex items-center gap-1.5"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5" />
+                    <span>Choose Another File</span>
+                  </button>
+                )}
                 <button
                   type="button"
                   onClick={() => {
@@ -1390,7 +1736,7 @@ export function ProfilePhotoUploadAndCropModal({
           {/* Right Column: Live 3-Layer Composite Preview */}
           <div className="space-y-3">
             <div className="text-xs font-mono uppercase tracking-wider text-[#514d44]">
-              Live 3-Layer Arcade Preview
+              Live 3-Layer Arcade Preview (Banner + Photo + Frame)
             </div>
 
             <ThreeLayerProfileHeader
@@ -1405,11 +1751,11 @@ export function ProfilePhotoUploadAndCropModal({
 
             <div className="sketch-strip p-3 space-y-2 text-xs text-[#514d44]">
               <p className="font-bold text-[#38352f]">
-                Non-Destructive Layer Guarantee:
+                Privacy &amp; Layer Guarantee:
               </p>
               <ul className="list-disc list-inside space-y-1">
-                <li>Your uploaded photo stays strictly separate from skins & banners.</li>
-                <li>Changing or unequipping skins never alters your uploaded picture.</li>
+                <li>Camera access starts only when you click <strong>Take Photo</strong> and stops immediately after capture.</li>
+                <li>Your uploaded or captured photo stays separate from skins &amp; banners.</li>
                 <li>Displays on your profile, couple card, sidebar, and leaderboards.</li>
               </ul>
             </div>
@@ -1435,8 +1781,8 @@ export function ProfilePhotoUploadAndCropModal({
             <button
               type="button"
               disabled={saving}
-              onClick={onClose}
-              className="px-4 py-2 text-xs font-medium bg-[#fcf8ef] border border-[#38352f]"
+              onClick={handleCloseModal}
+              className="px-4 py-2 text-xs font-medium bg-[#fcf8ef] text-[#38352f] border border-[#38352f]"
             >
               Cancel
             </button>
@@ -1455,3 +1801,4 @@ export function ProfilePhotoUploadAndCropModal({
     </div>
   );
 }
+
