@@ -80,6 +80,17 @@ import {
 } from '@/src/components/ChestBoutiqueAndInventory';
 import { ProgressionHud } from '@/src/components/ProgressionHud';
 import PartyGamesArena from '@/src/components/PartyGamesArena';
+import {
+  UniversalMailboxPanel,
+  MailboxStatePayload,
+  MailboxItemRecord,
+} from '@/src/components/UniversalMailboxPanel';
+import {
+  CoupleVoiceChatPanel,
+  FloatingCoupleCallBar,
+  useCoupleVoiceCallController,
+  CoupleVoiceChatState,
+} from '@/src/components/CoupleVoiceChatPanel';
 import { soundFX } from '@/src/lib/sound';
 import {
   Users,
@@ -98,6 +109,8 @@ import {
   ShieldAlert,
   Camera,
   Upload,
+  Mail,
+  X,
 } from 'lucide-react';
 
 type NavSection = ArcadeNavSection;
@@ -165,6 +178,17 @@ export default function HerLittleArcadePage() {
   const [gameHistory, setGameHistory] = useState<GameHistoryRecord[]>([]);
   const [personalizedItems, setPersonalizedItems] = useState<PersonalizedItemRecord[]>([]);
   const [incomingInvitations, setIncomingInvitations] = useState<IncomingInvitationRecord[]>([]);
+  const [mailboxState, setMailboxState] = useState<MailboxStatePayload>({
+    items: [],
+    unreadCount: 0,
+  });
+  const [initialCoupleVoiceState, setInitialCoupleVoiceState] =
+    useState<CoupleVoiceChatState | null>(null);
+  const [latestMailboxToast, setLatestMailboxToast] = useState<MailboxItemRecord | null>(null);
+  const lastNotifiedMailboxIdRef = useRef<number>(0);
+  const [activeShopTab, setActiveShopTab] = useState<
+    'shop-profile' | 'shop-banners' | 'shop-avatars' | 'shop-chests' | 'shop-keys'
+  >('shop-chests');
   const [coinTransactions, setCoinTransactions] = useState<CoinTransactionRecord[]>([]);
   const [challenges, setChallenges] = useState<ActiveChallengeRecord[]>([]);
   const [challengeHistory, setChallengeHistory] = useState<ChallengeHistoryRecord[]>([]);
@@ -450,6 +474,27 @@ export default function HerLittleArcadePage() {
         setIncomingInvitations(data.incomingInvitations);
       }
 
+      if (data.mailbox && Array.isArray(data.mailbox.items)) {
+        setMailboxState(data.mailbox);
+        const newestUnread = (data.mailbox.items as MailboxItemRecord[]).find(
+          (it) => it.isIncoming && !it.isRead && it.status === 'pending'
+        );
+        if (
+          newestUnread &&
+          hasBootstrappedOnceRef.current &&
+          newestUnread.id > lastNotifiedMailboxIdRef.current
+        ) {
+          lastNotifiedMailboxIdRef.current = newestUnread.id;
+          setLatestMailboxToast(newestUnread);
+        } else if (newestUnread && !hasBootstrappedOnceRef.current) {
+          lastNotifiedMailboxIdRef.current = newestUnread.id;
+        }
+      }
+
+      if (data.coupleVoiceState) {
+        setInitialCoupleVoiceState(data.coupleVoiceState);
+      }
+
       if (Array.isArray(data.coinTransactions)) {
         setCoinTransactions(data.coinTransactions);
       }
@@ -575,6 +620,34 @@ export default function HerLittleArcadePage() {
     sendHeartbeat();
     const interval = setInterval(() => sendHeartbeat(), 18000);
 
+    // Real-time background Mailbox poll every 8s for incoming invitations & requests
+    const mailboxPoll = setInterval(async () => {
+      try {
+        const res = await fetch('/api/arcade', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${sessionToken}`,
+          },
+          body: JSON.stringify({ action: 'get_mailbox' }),
+        });
+        const data = await res.json();
+        if (res.ok && data.mailbox && Array.isArray(data.mailbox.items)) {
+          setMailboxState(data.mailbox);
+          const newestUnread = (data.mailbox.items as MailboxItemRecord[]).find(
+            (it) => it.isIncoming && !it.isRead && it.status === 'pending'
+          );
+          if (newestUnread && newestUnread.id > lastNotifiedMailboxIdRef.current) {
+            lastNotifiedMailboxIdRef.current = newestUnread.id;
+            setLatestMailboxToast(newestUnread);
+            soundFX.playSuccess();
+          }
+        }
+      } catch {
+        // Ignore transient network error
+      }
+    }, 8000);
+
     const handleBeforeUnload = () => {
       sendHeartbeat('offline');
     };
@@ -582,9 +655,18 @@ export default function HerLittleArcadePage() {
 
     return () => {
       clearInterval(interval);
+      clearInterval(mailboxPoll);
       window.removeEventListener('beforeunload', handleBeforeUnload);
     };
   }, [currentUid, sessionToken, currentRoomCode, isPlayingMultiplayer]);
+
+  // Top-level Couple Voice Call Controller (persists across 1v1, 2v2, Party Games & all tabs)
+  const coupleVoiceController = useCoupleVoiceCallController({
+    currentUser,
+    sessionToken,
+    initialVoiceState: initialCoupleVoiceState,
+    onVoiceAchievement: () => setVoiceJoinedOnce(true),
+  });
 
   async function handlePersistRoom(nextRoom: MultiplayerRoomState) {
     setActiveRoom(nextRoom);
@@ -1359,6 +1441,8 @@ export default function HerLittleArcadePage() {
         isCollapsed={Boolean(activeGameDef) || isSidebarCollapsed}
         isLoadingData={isFetchingDatabase}
         isDarkTheme={isDarkTheme}
+        unreadMailboxCount={mailboxState.unreadCount}
+        coupleVoiceCallStatus={coupleVoiceController.connectionStatus}
         onToggleDarkTheme={() => setIsDarkTheme((prev) => !prev)}
         onToggleCollapse={() => setIsSidebarCollapsed((prev) => !prev)}
         onSelectSection={(nextSection) => {
@@ -1381,22 +1465,15 @@ export default function HerLittleArcadePage() {
             setMultiplayerFilter('party');
             setSelectedMultiplayerMode('party');
             setActiveSection('mp-party');
-          } else if (nextSection === 'mp-create-room') {
-            setRequestedDockTab('create');
-            setActiveSection('mp-create-room');
-          } else if (nextSection === 'mp-join-group') {
-            setRequestedDockTab('join');
-            setActiveSection('mp-join-group');
-          } else if (nextSection === 'mp-matchmaking') {
-            setRequestedDockTab('matchmake');
-            setMultiplayerFilter('2v2');
-            setSelectedMultiplayerMode('2v2');
-            setActiveSection('mp-matchmaking');
-          } else if (nextSection === 'mp-invitations') {
-            setRequestedDockTab('invite');
-            setActiveSection('mp-invitations');
-          } else if (nextSection === 'mp-voice-chat') {
-            setActiveSection('mp-voice-chat');
+          } else if (nextSection === 'mailbox' || nextSection === 'mp-invitations') {
+            setActiveSection('mailbox');
+          } else if (
+            nextSection === 'couple-voice-chat' ||
+            nextSection === 'mp-voice-chat'
+          ) {
+            setActiveSection('couple-voice-chat');
+          } else if (nextSection === 'shop') {
+            setActiveSection('shop');
           } else {
             setActiveSection(nextSection);
           }
@@ -1423,7 +1500,8 @@ export default function HerLittleArcadePage() {
           shieldCardArmed={currentUser.shieldCardArmed}
           onOpenShopChests={() => {
             handleLaunchGame(null);
-            setActiveSection('shop-chests');
+            setActiveShopTab('shop-chests');
+            setActiveSection('shop');
           }}
           onOpenInventoryConsumables={() => {
             handleLaunchGame(null);
@@ -1999,16 +2077,97 @@ export default function HerLittleArcadePage() {
               )}
 
               {/* ============================================================
-                  SECTION 3: MULTIPLAYER & COMPETITIVE RANKING (1v1, 2v2, Rooms, Matchmaking, Invitations, Lobby, Voice, 2v2 Trophy Road & 2v2 Couple Leaderboard)
+                  SECTION 3B: UNIVERSAL MAILBOX (Social -> Mailbox)
+                  ============================================================ */}
+              {(activeSection === 'mailbox' || activeSection === 'mp-invitations') && (
+                <UniversalMailboxPanel
+                  currentUser={currentUser}
+                  activeCouple={activeCouple}
+                  activeRoom={activeRoom}
+                  mailbox={mailboxState}
+                  authFetcher={authFetcher}
+                  onMailboxUpdated={(nextMailbox) => setMailboxState(nextMailbox)}
+                  onRefreshBootstrap={() => loadBootstrapData(currentUser.uid)}
+                  onAcceptedNavigate={({ targetSection, room, gameId, mode }) => {
+                    if (room) {
+                      setActiveRoom(room);
+                    }
+                    if (mode) {
+                      setSelectedMultiplayerMode(mode);
+                      if (mode === '1v1' || mode === '2v2' || mode === 'party') {
+                        setMultiplayerFilter(mode);
+                      }
+                    }
+                    if (targetSection === 'couple-profile') {
+                      handleLaunchGame(null);
+                      setActiveSection('couple-profile');
+                      return;
+                    }
+                    if (targetSection === 'mp-party' || mode === 'party') {
+                      handleLaunchGame(null);
+                      setActiveSection('mp-party');
+                      return;
+                    }
+                    if (room && gameId) {
+                      setActiveSection(mode === '2v2' ? 'mp-2v2' : 'mp-1v1');
+                      handleLaunchGame(gameId, {
+                        mode: mode || '1v1',
+                        autostart: true,
+                      });
+                      return;
+                    }
+                    handleLaunchGame(null);
+                    setActiveSection(targetSection);
+                    if (gameId && mode === '2v2') {
+                      setPlaySetupModal({
+                        isOpen: true,
+                        gameId,
+                        mode: '2v2',
+                      });
+                    }
+                  }}
+                />
+              )}
+
+              {/* ============================================================
+                  SECTION 3C: COUPLE VOICE CHAT (Social -> Couple Voice Chat)
+                  ============================================================ */}
+              {(activeSection === 'couple-voice-chat' ||
+                activeSection === 'mp-voice-chat') && (
+                <CoupleVoiceChatPanel
+                  currentUser={currentUser}
+                  activeCouple={activeCouple}
+                  controller={coupleVoiceController}
+                  onOpenCouplePairing={() => {
+                    handleLaunchGame(null);
+                    setActiveSection('couple-profile');
+                  }}
+                  onNavigateToGameMode={(targetMode) => {
+                    handleLaunchGame(null);
+                    if (targetMode === 'mp-1v1') {
+                      setMultiplayerFilter('1v1');
+                      setSelectedMultiplayerMode('1v1');
+                    } else if (targetMode === 'mp-2v2') {
+                      setMultiplayerFilter('2v2');
+                      setSelectedMultiplayerMode('2v2');
+                    } else {
+                      setMultiplayerFilter('party');
+                      setSelectedMultiplayerMode('party');
+                    }
+                    setActiveSection(targetMode);
+                  }}
+                />
+              )}
+
+              {/* ============================================================
+                  SECTION 3: MULTIPLAYER & COMPETITIVE RANKING (1v1 Games & 2v2 Games)
                   ============================================================ */}
               {(activeSection === 'multiplayer' ||
                 activeSection === 'mp-1v1' ||
                 activeSection === 'mp-2v2' ||
                 activeSection === 'mp-create-room' ||
                 activeSection === 'mp-join-group' ||
-                activeSection === 'mp-matchmaking' ||
-                activeSection === 'mp-invitations' ||
-                activeSection === 'mp-voice-chat') && (
+                activeSection === 'mp-matchmaking') && (
                 <div className="grid grid-cols-1 gap-6 xl:grid-cols-12">
                   <div className="space-y-5 xl:col-span-8">
                     <div className="space-y-3 border-b border-stone-800 pb-4">
@@ -3406,16 +3565,24 @@ export default function HerLittleArcadePage() {
                     activeCouple={activeCouple}
                     chestOpenings={chestOpenings}
                     activePage={
-                      (activeSection === 'shop-profile' ||
-                      activeSection === 'shop-banners' ||
-                      activeSection === 'shop-avatars' ||
-                      activeSection === 'shop-chests' ||
-                      activeSection === 'shop-keys' ||
-                      activeSection === 'inventory'
+                      (activeSection === 'inventory'
+                        ? 'inventory'
+                        : activeSection === 'shop-profile' ||
+                          activeSection === 'shop-banners' ||
+                          activeSection === 'shop-avatars' ||
+                          activeSection === 'shop-chests' ||
+                          activeSection === 'shop-keys'
                         ? activeSection
-                        : 'shop-chests') as DedicatedShopOrInventoryPage
+                        : activeShopTab) as DedicatedShopOrInventoryPage
                     }
-                    onNavigatePage={(nextPage) => setActiveSection(nextPage)}
+                    onNavigatePage={(nextPage) => {
+                      if (nextPage === 'inventory') {
+                        setActiveSection('inventory');
+                      } else {
+                        setActiveShopTab(nextPage);
+                        setActiveSection('shop');
+                      }
+                    }}
                     onBuyChest={handleBuyChest}
                     onOpenChest={handleOpenChest}
                     onPurchaseSkin={(skinId) => {
@@ -4072,6 +4239,68 @@ export default function HerLittleArcadePage() {
         onClose={() => setPhotoModalOpen(false)}
         onSavePhoto={handleSaveProfilePhoto}
       />
+
+      {/* Persistent Floating Couple Voice Call Bar across 1v1, 2v2, Party Games & Arcade */}
+      <FloatingCoupleCallBar
+        controller={coupleVoiceController}
+        isOnVoiceChatPage={
+          !activeGameDef &&
+          (activeSection === 'couple-voice-chat' || activeSection === 'mp-voice-chat')
+        }
+        onOpenCoupleVoicePage={() => {
+          handleLaunchGame(null);
+          setActiveSection('couple-voice-chat');
+        }}
+      />
+
+      {/* Real-Time Incoming Mailbox Toast Notification */}
+      {latestMailboxToast && activeSection !== 'mailbox' && (
+        <div className="fixed left-4 bottom-4 z-50 w-[360px] max-w-[92vw] rounded-2xl border border-amber-500/60 bg-stone-950/95 p-3.5 shadow-2xl backdrop-blur-md">
+          <div className="flex items-start justify-between gap-2.5">
+            <div className="flex items-center gap-2.5 min-w-0">
+              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-amber-500/20 text-amber-300">
+                <Mail className="h-4 w-4" />
+              </div>
+              <div className="min-w-0">
+                <div className="truncate text-xs font-bold text-stone-100">
+                  New Mailbox Request · @{latestMailboxToast.senderUsername}
+                </div>
+                <div className="truncate text-[11px] text-stone-400">
+                  {latestMailboxToast.inviteType === 'couple_request'
+                    ? 'Sent you a Couple Pairing Request'
+                    : latestMailboxToast.inviteType === '1v1'
+                    ? 'Challenged you to a 1v1 Partner Duel'
+                    : latestMailboxToast.inviteType === '2v2_partner_team'
+                    ? 'Invited you to join your 2v2 Couple Team'
+                    : latestMailboxToast.inviteType === 'party'
+                    ? 'Invited your couple to a Party Game'
+                    : 'Sent you a Room Invitation'}
+                </div>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setLatestMailboxToast(null)}
+              className="text-stone-400 hover:text-stone-200"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+          <div className="mt-2.5 flex items-center justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                setLatestMailboxToast(null);
+                handleLaunchGame(null);
+                setActiveSection('mailbox');
+              }}
+              className="rounded-xl bg-amber-500 px-3.5 py-1.5 text-xs font-bold text-stone-950 hover:bg-amber-400"
+            >
+              Open Mailbox
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import { AccessToken } from 'livekit-server-sdk';
 import { db } from './index.ts';
 import {
   users,
@@ -12,6 +13,7 @@ import {
   matchmakingQueue,
   coinTransactions,
   gameInvitations,
+  coupleVoiceCalls,
   coupleTeamLobbies,
   chestOpenings,
   itemTransactions,
@@ -2804,6 +2806,14 @@ export async function getArcadeBootstrapData(activeUid?: string) {
       .orderBy(desc(partyMatches.createdAt))
       .limit(20);
 
+    const mailboxBundle = activeUid
+      ? await getMailboxForUser(activeUid)
+      : { items: [], unreadCount: 0 };
+
+    const coupleVoiceState = activeUid
+      ? await getCoupleVoiceChatState(activeUid)
+      : null;
+
     return {
       players: sanitizedPlayers,
       couplesLeaderboard: enrichedCouplesLeaderboard,
@@ -2832,6 +2842,8 @@ export async function getArcadeBootstrapData(activeUid?: string) {
       incomingInvitations,
       outgoingInvitations,
       partyMatches: recentPartyMatches,
+      mailbox: mailboxBundle,
+      coupleVoiceState,
     };
   } catch (error) {
     console.error('Database getArcadeBootstrapData failed:', error);
@@ -6564,6 +6576,1354 @@ export async function respondToGameInvitation(input: {
     throw new Error(msg, { cause: error });
   }
 }
+
+/* ============================================================================
+   UNIVERSAL MAILBOX SYSTEM (ALL 7 INCOMING REQUEST TYPES + FILTERS + ACTIONS)
+   ============================================================================ */
+
+export type MailboxFilterCategory =
+  | 'all'
+  | 'unread'
+  | 'game_invitations'
+  | 'couple_requests'
+  | 'room_invitations';
+
+export interface EnrichedMailboxItem {
+  id: number;
+  inviteType:
+    | '1v1'
+    | '2v2'
+    | '2v2_partner_team'
+    | '2v2_room'
+    | 'party'
+    | 'room_invite'
+    | 'couple_request'
+    | 'other';
+  inviteCode: string;
+  categoryLabel: string;
+  filterGroup: 'game_invitations' | 'couple_requests' | 'room_invitations' | 'other';
+  mailboxFilter: 'game_invitations' | 'couple_requests' | 'room_invitations' | 'other';
+  senderUid: string;
+  senderUsername: string;
+  senderAvatar: string;
+  senderEquippedSkin: string;
+  senderCustomPhotoUrl: string;
+  senderCoupleId: number;
+  senderCoupleName: string;
+  targetUid: string;
+  targetUsername: string;
+  targetCoupleId: number;
+  targetCoupleName: string;
+  gameId: string;
+  gameTitle: string;
+  roomCode: string;
+  roomMode: string;
+  roomVisibility: string;
+  hostUsername: string;
+  hostCoupleName: string;
+  currentParticipants: number;
+  maxParticipants: number;
+  currentCouples: number;
+  maxCouples: number;
+  availableSlots: number;
+  pairingCode: string;
+  message: string;
+  status: 'pending' | 'accepted' | 'declined' | 'expired' | 'cancelled';
+  isRead: boolean;
+  isDismissed: boolean;
+  isIncoming: boolean;
+  metadata: Record<string, unknown>;
+  roomSummary: {
+    roomCode: string;
+    gameId: string;
+    mode: string;
+    visibility: string;
+    hostName: string;
+    status: string;
+    playerCount: number;
+    maxPlayers: number;
+    coupleCount: number;
+    availableSlots: number;
+  } | null;
+  expiresAt: string;
+  updatedAt: string;
+  createdAt: string;
+}
+
+export async function getMailboxForUser(actorUid: string): Promise<{
+  items: EnrichedMailboxItem[];
+  unreadCount: number;
+}> {
+  if (!actorUid) {
+    return { items: [], unreadCount: 0 };
+  }
+
+  await expireStaleGameInvitations();
+
+  const allUsers = await db.select().from(users);
+  const userByUid = new Map(allUsers.map((u) => [u.uid, sanitizeUserRow(u)]));
+  const actorUser = userByUid.get(actorUid);
+  const coupleCtx = await getCoupleContextForUser(actorUid);
+  const activeCoupleId = coupleCtx.activeCouple?.id || 0;
+
+  // Synchronize any pending incoming couple_pairings rows into gameInvitations ('couple_request')
+  const allPairings = await db.select().from(couplePairings);
+  const allInvitesRaw = await db
+    .select()
+    .from(gameInvitations)
+    .orderBy(desc(gameInvitations.createdAt));
+
+  for (const p of allPairings) {
+    if (
+      p.partnerUid === actorUid &&
+      (p.status === 'pending_partner' || p.status === 'pending_requester_confirm')
+    ) {
+      const existingReq = allInvitesRaw.find(
+        (inv) =>
+          inv.inviteType === 'couple_request' &&
+          inv.roomCode === p.pairingCode &&
+          inv.targetUid === actorUid
+      );
+      if (!existingReq) {
+        const senderProfile = userByUid.get(p.requesterUid);
+        if (senderProfile) {
+          await db.insert(gameInvitations).values({
+            inviteType: 'couple_request',
+            senderUid: senderProfile.uid,
+            senderUsername: senderProfile.username,
+            senderAvatar: senderProfile.avatar,
+            senderEquippedSkin: senderProfile.equippedSkin || 'skin-classic-notebook',
+            senderCustomPhotoUrl: senderProfile.customPhotoUrl || '',
+            senderCoupleId: p.id,
+            senderCoupleName: p.coupleName || `${senderProfile.username} & ${actorUser?.username || 'You'}`,
+            targetUid: actorUid,
+            targetUsername: actorUser?.username || 'Partner',
+            targetCoupleId: p.id,
+            targetCoupleName: p.coupleName || '',
+            gameId: 'couple-pairing',
+            roomCode: p.pairingCode,
+            status: 'pending',
+            isRead: false,
+            isDismissed: false,
+            metadataJson: JSON.stringify({
+              pairingCode: p.pairingCode,
+              pairingId: p.id,
+            }),
+          });
+        }
+      }
+    }
+  }
+
+  const refreshedInvites = await db
+    .select()
+    .from(gameInvitations)
+    .orderBy(desc(gameInvitations.createdAt))
+    .limit(100);
+
+  const allRooms = await db.select().from(rooms);
+  const roomByCode = new Map(allRooms.map((r) => [r.roomCode, r]));
+
+  const relevantInvites = refreshedInvites.filter((inv) => {
+    if (inv.isDismissed) return false;
+    // Outgoing invites sent by this user
+    if (inv.senderUid === actorUid) {
+      return true;
+    }
+    // Incoming target is either directly this user OR this user's active couple
+    if (inv.targetUid === actorUid && inv.senderUid !== actorUid) {
+      return true;
+    }
+    if (
+      activeCoupleId > 0 &&
+      inv.targetCoupleId === activeCoupleId &&
+      inv.senderUid !== actorUid &&
+      (inv.inviteType === '2v2' ||
+        inv.inviteType === '2v2_room' ||
+        inv.inviteType === 'party' ||
+        inv.inviteType === 'room_invite')
+    ) {
+      return true;
+    }
+    return false;
+  });
+
+  const enrichedItems: EnrichedMailboxItem[] = relevantInvites.map((inv) => {
+    const senderProfile = userByUid.get(inv.senderUid);
+    const roomRow = inv.roomCode ? roomByCode.get(inv.roomCode) : undefined;
+    const gameDef = ALL_ARCADE_GAMES.find((g) => g.id === inv.gameId);
+
+    let meta: Record<string, unknown> = {};
+    try {
+      meta = JSON.parse(inv.metadataJson || '{}');
+    } catch {
+      meta = {};
+    }
+
+    let playersList: RoomParticipantPayload[] = [];
+    let teamsList: RoomCoupleTeamPayload[] = [];
+    if (roomRow) {
+      try {
+        playersList = JSON.parse(roomRow.playersJson || '[]');
+      } catch {
+        playersList = [];
+      }
+      try {
+        teamsList = JSON.parse(roomRow.teamsJson || '[]');
+      } catch {
+        teamsList = [];
+      }
+    }
+
+    const rawType = inv.inviteType || '1v1';
+    let categoryLabel = '1v1 Challenge Request';
+    let filterGroup: EnrichedMailboxItem['filterGroup'] = 'game_invitations';
+
+    if (rawType === '1v1') {
+      categoryLabel = '1v1 Challenge Request';
+      filterGroup = 'game_invitations';
+    } else if (rawType === '2v2_partner_team') {
+      categoryLabel = '2v2 Team Invitation';
+      filterGroup = 'game_invitations';
+    } else if (rawType === '2v2' || rawType === '2v2_room') {
+      categoryLabel = '2v2 Room Invitation';
+      filterGroup = 'room_invitations';
+    } else if (rawType === 'party') {
+      categoryLabel = 'Party Game Invitation';
+      filterGroup = 'game_invitations';
+    } else if (rawType === 'room_invite') {
+      categoryLabel =
+        roomRow?.visibility === 'private'
+          ? 'Private Room Invitation'
+          : 'Public Room Invitation';
+      filterGroup = 'room_invitations';
+    } else if (rawType === 'couple_request') {
+      categoryLabel = 'Couple Pairing Request';
+      filterGroup = 'couple_requests';
+    } else {
+      categoryLabel = String(meta.customTitle || 'Arcade Notification');
+      filterGroup = 'other';
+    }
+
+    const roomMode =
+      roomRow?.mode ||
+      (rawType === 'party' ? 'party' : rawType.startsWith('2v2') ? '2v2' : '1v1');
+    const maxParticipants =
+      roomRow?.maxPlayers || (roomMode === 'party' ? 20 : roomMode === '2v2' ? 4 : 2);
+    const currentParticipants = playersList.length || (roomMode === '2v2' ? 2 : 1);
+    const maxCouples = roomMode === 'party' ? 10 : roomMode === '2v2' ? 2 : 1;
+    const currentCouples =
+      teamsList.length ||
+      Math.max(1, new Set(playersList.map((p) => p.coupleId).filter(Boolean)).size);
+    const availableSlots =
+      roomMode === 'party'
+        ? Math.max(0, maxCouples - currentCouples)
+        : Math.max(0, maxParticipants - currentParticipants);
+
+    // Check if the underlying room has expired while invitation was still marked pending
+    let effectiveStatus = inv.status as EnrichedMailboxItem['status'];
+    if (
+      effectiveStatus === 'pending' &&
+      roomRow &&
+      (roomRow.status === 'expired' || roomRow.status === 'finished')
+    ) {
+      effectiveStatus = 'expired';
+    }
+
+    const isIncoming = inv.senderUid !== actorUid;
+    const roomSummary = roomRow
+      ? {
+          roomCode: roomRow.roomCode,
+          gameId: roomRow.gameId,
+          mode: roomRow.mode,
+          visibility: roomRow.visibility,
+          hostName: roomRow.hostName,
+          status: roomRow.status,
+          playerCount: currentParticipants,
+          maxPlayers: maxParticipants,
+          coupleCount: currentCouples,
+          availableSlots,
+        }
+      : null;
+
+    const createdAtIso = inv.createdAt
+      ? new Date(inv.createdAt).toISOString()
+      : new Date().toISOString();
+
+    return {
+      id: inv.id,
+      inviteCode: `INV-${inv.id}`,
+      inviteType: (rawType as EnrichedMailboxItem['inviteType']) || '1v1',
+      categoryLabel,
+      filterGroup,
+      mailboxFilter: filterGroup,
+      senderUid: inv.senderUid,
+      senderUsername: senderProfile?.username || inv.senderUsername,
+      senderAvatar: senderProfile?.avatar || inv.senderAvatar || 'kitsune',
+      senderEquippedSkin:
+        senderProfile?.equippedSkin ||
+        inv.senderEquippedSkin ||
+        'skin-classic-notebook',
+      senderCustomPhotoUrl:
+        senderProfile?.customPhotoUrl || inv.senderCustomPhotoUrl || '',
+      senderCoupleId: inv.senderCoupleId || 0,
+      senderCoupleName:
+        inv.senderCoupleName ||
+        String(meta.hostCoupleName || '') ||
+        `${senderProfile?.username || inv.senderUsername}'s Couple`,
+      targetUid: inv.targetUid,
+      targetUsername: inv.targetUsername,
+      targetCoupleId: inv.targetCoupleId || 0,
+      targetCoupleName: inv.targetCoupleName || '',
+      gameId: inv.gameId,
+      gameTitle:
+        gameDef?.title ||
+        String(meta.gameTitle || '') ||
+        (rawType === 'couple_request' ? 'Couple Account Pairing' : inv.gameId),
+      roomCode: inv.roomCode || '',
+      roomMode,
+      roomVisibility: roomRow?.visibility || String(meta.visibility || 'private'),
+      hostUsername: roomRow?.hostName || senderProfile?.username || inv.senderUsername,
+      hostCoupleName:
+        inv.senderCoupleName ||
+        teamsList[0]?.coupleName ||
+        `${senderProfile?.username || inv.senderUsername}'s Couple`,
+      currentParticipants,
+      maxParticipants,
+      currentCouples,
+      maxCouples,
+      availableSlots,
+      pairingCode: String(
+        meta.pairingCode || (rawType === 'couple_request' ? inv.roomCode : '')
+      ),
+      message: String(meta.message || ''),
+      status: effectiveStatus,
+      isRead: Boolean(inv.isRead),
+      isDismissed: Boolean(inv.isDismissed),
+      isIncoming,
+      metadata: meta,
+      roomSummary,
+      expiresAt: createdAtIso,
+      updatedAt: inv.updatedAt ? new Date(inv.updatedAt).toISOString() : createdAtIso,
+      createdAt: createdAtIso,
+    };
+  });
+
+  const unreadCount = enrichedItems.filter(
+    (item) => item.isIncoming && !item.isRead
+  ).length;
+
+  return {
+    items: enrichedItems,
+    unreadCount,
+  };
+}
+
+export async function sendCouplePairingRequestByUsername(input: {
+  senderUid: string;
+  targetUsername: string;
+}) {
+  const senderCtx = await getCoupleContextForUser(input.senderUid);
+  if (senderCtx.activeCouple) {
+    throw new Error(
+      'You already have an active couple pairing. Only one active pairing per user is allowed.'
+    );
+  }
+
+  const allUsers = await db.select().from(users);
+  const senderRow = allUsers.find((u) => u.uid === input.senderUid);
+  if (!senderRow) {
+    throw new Error('Authenticated user account not found.');
+  }
+  const sender = sanitizeUserRow(senderRow);
+
+  const cleanTarget = (input.targetUsername || '').trim().replace(/^@+/, '').toLowerCase();
+  if (!cleanTarget) {
+    throw new Error('Please enter a registered username to send a Couple Pairing Request.');
+  }
+
+  const targetRow = allUsers.find(
+    (u) => u.usernameSetupCompleted && u.username.trim().toLowerCase() === cleanTarget
+  );
+  if (!targetRow) {
+    throw new Error(`No registered player found with username "@${cleanTarget}".`);
+  }
+  if (targetRow.uid === sender.uid) {
+    throw new Error('You cannot send a Couple Pairing Request to your own account.');
+  }
+
+  const target = sanitizeUserRow(targetRow);
+  const targetCtx = await getCoupleContextForUser(target.uid);
+  if (targetCtx.activeCouple) {
+    throw new Error(
+      `@${target.username} is already in an active couple pairing with another player.`
+    );
+  }
+
+  // Prevent duplicate pending couple pairing requests between these two users
+  const existingInvites = await db
+    .select()
+    .from(gameInvitations)
+    .where(
+      and(
+        eq(gameInvitations.inviteType, 'couple_request'),
+        eq(gameInvitations.senderUid, sender.uid),
+        eq(gameInvitations.targetUid, target.uid),
+        eq(gameInvitations.status, 'pending')
+      )
+    );
+  if (existingInvites.length > 0) {
+    throw new Error(`You already have a pending Couple Pairing Request sent to @${target.username}.`);
+  }
+
+  // Create or reuse a pending couple_pairings row
+  const pairingInvite = await createCouplePairingInvite(sender.uid);
+  await db
+    .update(couplePairings)
+    .set({
+      partnerUid: target.uid,
+      updatedAt: new Date(),
+    })
+    .where(eq(couplePairings.id, pairingInvite.id));
+
+  const inserted = await db
+    .insert(gameInvitations)
+    .values({
+      inviteType: 'couple_request',
+      senderUid: sender.uid,
+      senderUsername: sender.username,
+      senderAvatar: sender.avatar,
+      senderEquippedSkin: sender.equippedSkin || 'skin-classic-notebook',
+      senderCustomPhotoUrl: sender.customPhotoUrl || '',
+      senderCoupleId: pairingInvite.id,
+      senderCoupleName: `${sender.username} & ${target.username}`,
+      targetUid: target.uid,
+      targetUsername: target.username,
+      targetCoupleId: pairingInvite.id,
+      targetCoupleName: `${sender.username} & ${target.username}`,
+      gameId: 'couple-pairing',
+      roomCode: pairingInvite.pairingCode,
+      status: 'pending',
+      isRead: false,
+      isDismissed: false,
+      metadataJson: JSON.stringify({
+        pairingCode: pairingInvite.pairingCode,
+        pairingId: pairingInvite.id,
+        message: `@${sender.username} invited you to become their official Paired Partner in Her Little Arcade!`,
+      }),
+    })
+    .returning();
+
+  return {
+    invitation: inserted[0],
+    pairingCode: pairingInvite.pairingCode,
+    coupleContext: await getCoupleContextForUser(sender.uid),
+  };
+}
+
+export async function sendDirectRoomOrPartyInvitation(input: {
+  senderUid: string;
+  roomCode: string;
+  targetUsername?: string;
+  targetCoupleId?: number;
+  inviteCategory?: 'party' | '2v2_room' | 'room_invite';
+}) {
+  const cleanCode = (input.roomCode || '').trim().toUpperCase();
+  const roomRow = await getRoomByCode(cleanCode);
+  if (!roomRow || roomRow.status === 'expired' || roomRow.status === 'finished') {
+    throw new Error('Room is no longer active or open for invitations.');
+  }
+
+  const allUsers = await db.select().from(users);
+  const userByUid = new Map(allUsers.map((u) => [u.uid, sanitizeUserRow(u)]));
+  const sender = userByUid.get(input.senderUid);
+  if (!sender) {
+    throw new Error('Sender profile not found.');
+  }
+  const senderCoupleCtx = await getCoupleContextForUser(sender.uid);
+  const senderCouple = senderCoupleCtx.activeCouple;
+
+  const activeCouples = await db
+    .select()
+    .from(couplePairings)
+    .where(eq(couplePairings.status, 'active'));
+
+  let targetUser: ReturnType<typeof sanitizeUserRow> | undefined;
+  let targetCouple: typeof couplePairings.$inferSelect | undefined;
+
+  if (input.targetCoupleId) {
+    targetCouple = activeCouples.find((c) => c.id === input.targetCoupleId);
+    if (targetCouple) {
+      targetUser = userByUid.get(targetCouple.requesterUid);
+    }
+  }
+
+  if (!targetUser && input.targetUsername) {
+    const cleanQ = input.targetUsername.trim().replace(/^@+/, '').toLowerCase();
+    targetUser = Array.from(userByUid.values()).find(
+      (u) => u.username.trim().toLowerCase() === cleanQ
+    );
+    if (targetUser) {
+      targetCouple = activeCouples.find(
+        (c) => c.requesterUid === targetUser!.uid || c.partnerUid === targetUser!.uid
+      );
+    } else {
+      targetCouple = activeCouples.find(
+        (c) => c.coupleName.trim().toLowerCase() === cleanQ
+      );
+      if (targetCouple) {
+        targetUser = userByUid.get(targetCouple.requesterUid);
+      }
+    }
+  }
+
+  if (!targetUser) {
+    throw new Error('Could not find a registered player or couple matching that username.');
+  }
+  if (targetUser.uid === sender.uid) {
+    throw new Error('You cannot send a room invitation to yourself.');
+  }
+
+  const resolvedInviteType =
+    input.inviteCategory ||
+    (roomRow.mode === 'party'
+      ? 'party'
+      : roomRow.mode === '2v2'
+      ? '2v2_room'
+      : 'room_invite');
+
+  // Prevent duplicate pending invitation for the same room and target
+  const existing = await db
+    .select()
+    .from(gameInvitations)
+    .where(
+      and(
+        eq(gameInvitations.roomCode, roomRow.roomCode),
+        eq(gameInvitations.targetUid, targetUser.uid),
+        eq(gameInvitations.status, 'pending')
+      )
+    );
+  if (existing.length > 0) {
+    throw new Error(`An invitation for Room #${roomRow.roomCode} is already pending for @${targetUser.username}.`);
+  }
+
+  // Also add targetUid (and their partner if any) to room's invitedUidsJson so private rooms allow them in
+  let invitedList: string[] = [];
+  try {
+    invitedList = JSON.parse(roomRow.invitedUidsJson || '[]');
+  } catch {
+    invitedList = [];
+  }
+  invitedList.push(targetUser.uid);
+  if (targetCouple) {
+    invitedList.push(targetCouple.requesterUid);
+    if (targetCouple.partnerUid) invitedList.push(targetCouple.partnerUid);
+  }
+  await db
+    .update(rooms)
+    .set({
+      invitedUidsJson: JSON.stringify(Array.from(new Set(invitedList))),
+      updatedAt: new Date(),
+    })
+    .where(eq(rooms.roomCode, roomRow.roomCode));
+
+  const gameDef = ALL_ARCADE_GAMES.find((g) => g.id === roomRow.gameId);
+  const inserted = await db
+    .insert(gameInvitations)
+    .values({
+      inviteType: resolvedInviteType,
+      senderUid: sender.uid,
+      senderUsername: sender.username,
+      senderAvatar: sender.avatar,
+      senderEquippedSkin: sender.equippedSkin || 'skin-classic-notebook',
+      senderCustomPhotoUrl: sender.customPhotoUrl || '',
+      senderCoupleId: senderCouple?.id || 0,
+      senderCoupleName: senderCouple?.coupleName || `${sender.username}'s Couple`,
+      targetUid: targetUser.uid,
+      targetUsername: targetUser.username,
+      targetCoupleId: targetCouple?.id || 0,
+      targetCoupleName: targetCouple?.coupleName || '',
+      gameId: roomRow.gameId,
+      roomCode: roomRow.roomCode,
+      status: 'pending',
+      isRead: false,
+      isDismissed: false,
+      metadataJson: JSON.stringify({
+        roomCode: roomRow.roomCode,
+        gameId: roomRow.gameId,
+        gameTitle: gameDef?.title || roomRow.gameId,
+        mode: roomRow.mode,
+        visibility: roomRow.visibility,
+        hostCoupleName: senderCouple?.coupleName || `${sender.username}'s Couple`,
+      }),
+    })
+    .returning();
+
+  return {
+    invitation: inserted[0],
+  };
+}
+
+export async function markMailboxItemsRead(input: {
+  actorUid: string;
+  invitationIds?: number[];
+  markAll?: boolean;
+}) {
+  const mailbox = await getMailboxForUser(input.actorUid);
+  const targetIds = input.markAll
+    ? mailbox.items.filter((i) => !i.isRead).map((i) => i.id)
+    : input.invitationIds || [];
+
+  for (const id of targetIds) {
+    await db
+      .update(gameInvitations)
+      .set({ isRead: true, updatedAt: new Date() })
+      .where(eq(gameInvitations.id, id));
+  }
+
+  return await getMailboxForUser(input.actorUid);
+}
+
+export async function dismissMailboxItems(input: {
+  actorUid: string;
+  invitationIds?: number[];
+  dismissCompletedAndExpired?: boolean;
+}) {
+  const mailbox = await getMailboxForUser(input.actorUid);
+  const targetIds = input.dismissCompletedAndExpired
+    ? mailbox.items
+        .filter((i) => i.status !== 'pending')
+        .map((i) => i.id)
+    : input.invitationIds || [];
+
+  for (const id of targetIds) {
+    await db
+      .update(gameInvitations)
+      .set({ isDismissed: true, isRead: true, updatedAt: new Date() })
+      .where(eq(gameInvitations.id, id));
+  }
+
+  return await getMailboxForUser(input.actorUid);
+}
+
+export async function respondToMailboxItem(input: {
+  actorUid: string;
+  invitationId: number;
+  accept: boolean;
+}) {
+  const rows = await db
+    .select()
+    .from(gameInvitations)
+    .where(eq(gameInvitations.id, input.invitationId));
+  if (!rows.length) {
+    throw new Error('Notification or invitation not found in Mailbox.');
+  }
+  const inv = rows[0];
+
+  // Mark as read immediately
+  await db
+    .update(gameInvitations)
+    .set({ isRead: true, updatedAt: new Date() })
+    .where(eq(gameInvitations.id, inv.id));
+
+  if (inv.status !== 'pending') {
+    throw new Error(`This request has already been ${inv.status}.`);
+  }
+
+  // Handle Couple Pairing Request ('couple_request')
+  if (inv.inviteType === 'couple_request') {
+    if (!input.accept) {
+      await db
+        .update(gameInvitations)
+        .set({ status: 'declined', isRead: true, updatedAt: new Date() })
+        .where(eq(gameInvitations.id, inv.id));
+
+      if (inv.roomCode) {
+        await db
+          .update(couplePairings)
+          .set({ status: 'unpaired', updatedAt: new Date() })
+          .where(eq(couplePairings.pairingCode, inv.roomCode));
+      }
+
+      return {
+        status: 'declined',
+        targetSection: 'mailbox' as const,
+        coupleContext: await getCoupleContextForUser(input.actorUid),
+        mailbox: await getMailboxForUser(input.actorUid),
+      };
+    }
+
+    // Enforce one-active-pairing-per-user rule on both accounts before activating
+    const actorCtx = await getCoupleContextForUser(input.actorUid);
+    if (actorCtx.activeCouple) {
+      throw new Error(
+        'You are already in an active couple pairing. Only one active pairing per user is permitted.'
+      );
+    }
+    const senderCtx = await getCoupleContextForUser(inv.senderUid);
+    if (senderCtx.activeCouple) {
+      throw new Error(
+        `@${inv.senderUsername} is already in an active couple pairing with another account.`
+      );
+    }
+
+    const pairingRows = await db
+      .select()
+      .from(couplePairings)
+      .where(eq(couplePairings.pairingCode, inv.roomCode));
+    if (!pairingRows.length) {
+      throw new Error('Underlying couple pairing record was not found.');
+    }
+    const pairingRow = pairingRows[0];
+
+    const allUsers = await db.select().from(users);
+    const reqUser = allUsers.find((u) => u.uid === pairingRow.requesterUid);
+    const partUser = allUsers.find((u) => u.uid === input.actorUid);
+    const reqName = reqUser?.username || inv.senderUsername;
+    const partName = partUser?.username || inv.targetUsername;
+    const todayStr = new Date().toISOString().slice(0, 10);
+
+    await db
+      .update(couplePairings)
+      .set({
+        partnerUid: input.actorUid,
+        requesterConfirmed: true,
+        partnerConfirmed: true,
+        status: 'active',
+        coupleName: pairingRow.coupleName || `${reqName} & ${partName}`,
+        anniversaryDate: pairingRow.anniversaryDate || todayStr,
+        coupleBio:
+          pairingRow.coupleBio || 'Playing side by side in Her Little Arcade.',
+        coupleTitle: pairingRow.coupleTitle || 'Newborn Duo',
+        coupleXp: Math.max(pairingRow.coupleXp || 0, 45),
+        updatedAt: new Date(),
+      })
+      .where(eq(couplePairings.id, pairingRow.id));
+
+    await db
+      .update(gameInvitations)
+      .set({ status: 'accepted', isRead: true, updatedAt: new Date() })
+      .where(eq(gameInvitations.id, inv.id));
+
+    return {
+      status: 'accepted',
+      targetSection: 'couple-profile' as const,
+      coupleContext: await getCoupleContextForUser(input.actorUid),
+      mailbox: await getMailboxForUser(input.actorUid),
+    };
+  }
+
+  // Handle 'other' extensible system notifications
+  if (inv.inviteType === 'other') {
+    const nextStatus = input.accept ? 'accepted' : 'declined';
+    await db
+      .update(gameInvitations)
+      .set({ status: nextStatus, isRead: true, updatedAt: new Date() })
+      .where(eq(gameInvitations.id, inv.id));
+    return {
+      status: nextStatus,
+      targetSection: 'mailbox' as const,
+      mailbox: await getMailboxForUser(input.actorUid),
+    };
+  }
+
+  // Handle Game, Team, Party, and Room Invitations ('1v1', '2v2_partner_team', '2v2', '2v2_room', 'party', 'room_invite')
+  const gameResult = await respondToGameInvitation({
+    actorUid: input.actorUid,
+    invitationId: inv.id,
+    accept: input.accept,
+  });
+
+  if (!input.accept) {
+    return {
+      status: 'declined',
+      targetSection: 'mailbox' as const,
+      room: null,
+      mailbox: await getMailboxForUser(input.actorUid),
+    };
+  }
+
+  const roomMode =
+    gameResult.room?.mode ||
+    (inv.inviteType === 'party'
+      ? 'party'
+      : inv.inviteType.startsWith('2v2')
+      ? '2v2'
+      : '1v1');
+
+  const targetSection =
+    roomMode === 'party'
+      ? ('mp-party' as const)
+      : roomMode === '2v2'
+      ? ('mp-2v2' as const)
+      : ('mp-1v1' as const);
+
+  return {
+    status: 'accepted',
+    targetSection,
+    room: gameResult.room || null,
+    teamLobby: 'teamLobby' in gameResult ? gameResult.teamLobby : null,
+    gameId: gameResult.room?.gameId || inv.gameId,
+    mode: roomMode,
+    mailbox: await getMailboxForUser(input.actorUid),
+  };
+}
+
+/* ============================================================================
+   COUPLE VOICE CHAT (LIVEKIT + WEBRTC REAL-TIME AUDIO FOR PAIRED PARTNERS)
+   ============================================================================ */
+
+export interface CoupleVoiceSignalingPayload {
+  offer?: { type: string; sdp: string } | null;
+  answer?: { type: string; sdp: string } | null;
+  callerCandidates?: Array<Record<string, unknown>>;
+  calleeCandidates?: Array<Record<string, unknown>>;
+  participantState?: Record<
+    string,
+    {
+      micMuted: boolean;
+      speakerDeafened: boolean;
+      speakingLevel?: number;
+      updatedAt: number;
+    }
+  >;
+}
+
+function parseVoiceSignaling(raw: string | null | undefined): CoupleVoiceSignalingPayload & {
+  participantStates?: CoupleVoiceSignalingPayload['participantState'];
+} {
+  try {
+    const parsed = JSON.parse(raw || '{}') as CoupleVoiceSignalingPayload & {
+      participantStates?: CoupleVoiceSignalingPayload['participantState'];
+    };
+    const mergedStates = parsed.participantState || parsed.participantStates || {};
+    return {
+      ...parsed,
+      participantState: mergedStates,
+      participantStates: mergedStates,
+    };
+  } catch {
+    return {};
+  }
+}
+
+export async function getCoupleVoiceChatState(actorUid: string) {
+  const livekitConfigured = Boolean(
+    process.env.LIVEKIT_URL &&
+      process.env.LIVEKIT_API_KEY &&
+      process.env.LIVEKIT_API_SECRET
+  );
+  const livekitInfo = {
+    configured: livekitConfigured,
+    url: process.env.LIVEKIT_URL || null,
+  };
+
+  if (!actorUid) {
+    return {
+      authorized: false,
+      paired: false,
+      reason: 'Sign in required.',
+      coupleId: 0,
+      coupleName: '',
+      roomName: '',
+      selfProfile: null,
+      myProfile: null,
+      partnerProfile: null,
+      activeCall: null,
+      callHistory: [],
+      recentCalls: [],
+      livekitConfigured,
+      livekit: livekitInfo,
+    };
+  }
+
+  const coupleCtx = await getCoupleContextForUser(actorUid);
+  if (!coupleCtx.activeCouple || coupleCtx.activeCouple.status !== 'active') {
+    return {
+      authorized: false,
+      paired: false,
+      reason: 'Active couple pairing is required to access Couple Voice Chat.',
+      coupleId: 0,
+      coupleName: '',
+      roomName: '',
+      selfProfile: null,
+      myProfile: null,
+      partnerProfile: null,
+      activeCall: null,
+      callHistory: [],
+      recentCalls: [],
+      livekitConfigured,
+      livekit: livekitInfo,
+    };
+  }
+
+  const c = coupleCtx.activeCouple;
+  const actorIsReq = c.requesterUid === actorUid;
+  const selfProfile = actorIsReq ? c.requesterProfile : c.partnerProfile;
+  const partnerProfile = actorIsReq ? c.partnerProfile : c.requesterProfile;
+
+  if (!selfProfile || !partnerProfile) {
+    return {
+      authorized: false,
+      paired: false,
+      reason: 'Both partners must have registered accounts to use Couple Voice Chat.',
+      coupleId: c.id,
+      coupleName: c.coupleName,
+      roomName: `couple-voice-${c.id}`,
+      selfProfile: selfProfile || null,
+      myProfile: selfProfile || null,
+      partnerProfile: partnerProfile || null,
+      activeCall: null,
+      callHistory: [],
+      recentCalls: [],
+      livekitConfigured,
+      livekit: livekitInfo,
+    };
+  }
+
+  // Automatically expire unanswered ringing calls older than 45 seconds as 'missed'
+  const allCalls = await db
+    .select()
+    .from(coupleVoiceCalls)
+    .where(eq(coupleVoiceCalls.coupleId, c.id))
+    .orderBy(desc(coupleVoiceCalls.createdAt));
+
+  const nowMs = Date.now();
+  for (const call of allCalls) {
+    if (call.status === 'ringing') {
+      const createdMs = call.createdAt ? new Date(call.createdAt).getTime() : nowMs;
+      if (nowMs - createdMs > 45_000) {
+        await db
+          .update(coupleVoiceCalls)
+          .set({
+            status: 'missed',
+            endedAt: new Date(),
+            updatedAt: new Date(),
+          })
+          .where(eq(coupleVoiceCalls.id, call.id));
+        call.status = 'missed';
+        call.endedAt = new Date();
+      }
+    }
+  }
+
+  const activeCallRow =
+    allCalls.find(
+      (call) =>
+        call.status === 'ringing' ||
+        call.status === 'connecting' ||
+        call.status === 'connected'
+    ) || null;
+
+  const activeCall = activeCallRow
+    ? {
+        ...activeCallRow,
+        signaling: parseVoiceSignaling(activeCallRow.signalingJson),
+        elapsedSeconds:
+          activeCallRow.status === 'connected' && activeCallRow.connectedAt
+            ? Math.max(
+                0,
+                Math.floor(
+                  (nowMs - new Date(activeCallRow.connectedAt).getTime()) / 1000
+                )
+              )
+            : 0,
+      }
+    : null;
+
+  const callHistory = allCalls.slice(0, 15).map((call) => ({
+    id: call.id,
+    callId: call.callId,
+    coupleId: call.coupleId,
+    callerUid: call.callerUid,
+    callerUsername: call.callerUsername,
+    calleeUid: call.calleeUid,
+    calleeUsername: call.calleeUsername,
+    status: call.status,
+    durationSeconds: call.durationSeconds || 0,
+    createdAt: call.createdAt ? new Date(call.createdAt).toISOString() : new Date().toISOString(),
+    connectedAt: call.connectedAt ? new Date(call.connectedAt).toISOString() : null,
+    endedAt: call.endedAt ? new Date(call.endedAt).toISOString() : null,
+    updatedAt: call.updatedAt ? new Date(call.updatedAt).toISOString() : new Date().toISOString(),
+  }));
+
+  return {
+    authorized: true,
+    paired: true,
+    coupleId: c.id,
+    coupleName: c.coupleName || `${selfProfile.username} & ${partnerProfile.username}`,
+    coupleBanner: c.coupleBanner || 'banner-sketchbook-grid',
+    equippedCoupleSkin: c.equippedCoupleSkin || 'skin-classic-notebook',
+    roomName: `couple-voice-${c.id}`,
+    selfProfile,
+    myProfile: selfProfile,
+    partnerProfile,
+    activeCall,
+    callHistory,
+    recentCalls: callHistory,
+    livekitConfigured,
+    livekit: livekitInfo,
+  };
+}
+
+export async function issueCoupleLiveKitToken(actorUid: string) {
+  const state = await getCoupleVoiceChatState(actorUid);
+  if (!state.authorized || !state.selfProfile || !state.partnerProfile) {
+    throw new Error(
+      state.reason || 'Unauthorized: Only actively paired partners can access this couple voice room.'
+    );
+  }
+
+  const roomName = state.roomName;
+  const apiKey = process.env.LIVEKIT_API_KEY;
+  const apiSecret = process.env.LIVEKIT_API_SECRET;
+  const livekitUrl = process.env.LIVEKIT_URL || '';
+
+  if (apiKey && apiSecret && livekitUrl) {
+    const at = new AccessToken(apiKey, apiSecret, {
+      identity: state.selfProfile.uid,
+      name: state.selfProfile.username,
+      ttl: '2h',
+    });
+    at.addGrant({
+      roomJoin: true,
+      room: roomName,
+      canPublish: true,
+      canSubscribe: true,
+      canPublishData: true,
+    });
+    const token = await at.toJwt();
+    return {
+      mode: 'livekit' as const,
+      livekitUrl,
+      token,
+      roomName,
+      coupleId: state.coupleId,
+    };
+  }
+
+  // Fallback to authenticated server-authorized WebRTC room token when LiveKit cloud env vars are not set
+  const fallbackToken = createSignedSessionToken(state.selfProfile.uid, roomName);
+  return {
+    mode: 'webrtc_direct' as const,
+    livekitUrl: '',
+    token: fallbackToken,
+    roomName,
+    coupleId: state.coupleId,
+  };
+}
+
+export async function startCoupleVoiceCall(actorUid: string) {
+  const state = await getCoupleVoiceChatState(actorUid);
+  if (!state.authorized || !state.selfProfile || !state.partnerProfile) {
+    throw new Error(
+      state.reason || 'Only actively paired partners can start a Couple Voice Call.'
+    );
+  }
+
+  // If there is already an active call for this couple, return or connect it
+  if (state.activeCall) {
+    if (
+      state.activeCall.status === 'ringing' &&
+      state.activeCall.calleeUid === actorUid
+    ) {
+      return await respondCoupleVoiceCall({
+        actorUid,
+        callId: state.activeCall.callId,
+        accept: true,
+      });
+    }
+    return state;
+  }
+
+  const callId = `cvc-${state.coupleId}-${Date.now()}`;
+  const initialSignaling: CoupleVoiceSignalingPayload = {
+    offer: null,
+    answer: null,
+    callerCandidates: [],
+    calleeCandidates: [],
+    participantState: {
+      [state.selfProfile.uid]: {
+        micMuted: false,
+        speakerDeafened: false,
+        updatedAt: Date.now(),
+      },
+      [state.partnerProfile.uid]: {
+        micMuted: false,
+        speakerDeafened: false,
+        updatedAt: Date.now(),
+      },
+    },
+  };
+
+  await db.insert(coupleVoiceCalls).values({
+    callId,
+    coupleId: state.coupleId,
+    roomName: state.roomName,
+    callerUid: state.selfProfile.uid,
+    callerUsername: state.selfProfile.username,
+    callerAvatar: state.selfProfile.avatar,
+    calleeUid: state.partnerProfile.uid,
+    calleeUsername: state.partnerProfile.username,
+    calleeAvatar: state.partnerProfile.avatar,
+    status: 'ringing',
+    signalingJson: JSON.stringify(initialSignaling),
+    durationSeconds: 0,
+  });
+
+  return await getCoupleVoiceChatState(actorUid);
+}
+
+export async function respondCoupleVoiceCall(input: {
+  actorUid: string;
+  callId: string;
+  accept: boolean;
+}) {
+  const state = await getCoupleVoiceChatState(input.actorUid);
+  if (!state.authorized || !state.selfProfile) {
+    throw new Error('Unauthorized access to Couple Voice Call.');
+  }
+
+  const rows = await db
+    .select()
+    .from(coupleVoiceCalls)
+    .where(eq(coupleVoiceCalls.callId, input.callId));
+  if (!rows.length) {
+    throw new Error('Voice call session not found.');
+  }
+  const call = rows[0];
+  if (call.coupleId !== state.coupleId) {
+    throw new Error('You do not have permission to access another couple’s voice call.');
+  }
+
+  const now = new Date();
+  if (!input.accept) {
+    await db
+      .update(coupleVoiceCalls)
+      .set({
+        status: 'declined',
+        endedAt: now,
+        updatedAt: now,
+      })
+      .where(eq(coupleVoiceCalls.id, call.id));
+    return await getCoupleVoiceChatState(input.actorUid);
+  }
+
+  await db
+    .update(coupleVoiceCalls)
+    .set({
+      status: 'connected',
+      connectedAt: call.connectedAt || now,
+      updatedAt: now,
+    })
+    .where(eq(coupleVoiceCalls.id, call.id));
+
+  return await getCoupleVoiceChatState(input.actorUid);
+}
+
+export async function endCoupleVoiceCall(input: {
+  actorUid: string;
+  callId?: string;
+}) {
+  const state = await getCoupleVoiceChatState(input.actorUid);
+  if (!state.authorized) {
+    throw new Error('Unauthorized access to Couple Voice Call.');
+  }
+
+  const targetCallId = input.callId || state.activeCall?.callId;
+  if (!targetCallId) {
+    return state;
+  }
+
+  const rows = await db
+    .select()
+    .from(coupleVoiceCalls)
+    .where(eq(coupleVoiceCalls.callId, targetCallId));
+  if (!rows.length) {
+    return state;
+  }
+  const call = rows[0];
+  if (call.coupleId !== state.coupleId) {
+    throw new Error('Unauthorized access to voice call.');
+  }
+
+  const now = new Date();
+  const wasRinging = call.status === 'ringing';
+  const durationSeconds =
+    call.connectedAt && !wasRinging
+      ? Math.max(
+          1,
+          Math.floor((now.getTime() - new Date(call.connectedAt).getTime()) / 1000)
+        )
+      : 0;
+
+  await db
+    .update(coupleVoiceCalls)
+    .set({
+      status: wasRinging ? 'missed' : 'ended',
+      durationSeconds,
+      endedAt: now,
+      updatedAt: now,
+    })
+    .where(eq(coupleVoiceCalls.id, call.id));
+
+  return await getCoupleVoiceChatState(input.actorUid);
+}
+
+export async function syncCoupleVoiceSignaling(input: {
+  actorUid: string;
+  callId: string;
+  offer?: { type: string; sdp: string } | null;
+  answer?: { type: string; sdp: string } | null;
+  iceCandidate?: Record<string, unknown> | null;
+  micMuted?: boolean;
+  speakerDeafened?: boolean;
+  speakingLevel?: number;
+}) {
+  const state = await getCoupleVoiceChatState(input.actorUid);
+  if (!state.authorized || !state.selfProfile) {
+    throw new Error('Unauthorized access to Couple Voice Call.');
+  }
+
+  const rows = await db
+    .select()
+    .from(coupleVoiceCalls)
+    .where(eq(coupleVoiceCalls.callId, input.callId));
+  if (!rows.length) {
+    throw new Error('Voice call session not found.');
+  }
+  const call = rows[0];
+  if (call.coupleId !== state.coupleId) {
+    throw new Error('Forbidden: Call belongs to a different couple.');
+  }
+
+  const sig = parseVoiceSignaling(call.signalingJson);
+  if (input.offer) {
+    sig.offer = input.offer;
+  }
+  if (input.answer) {
+    sig.answer = input.answer;
+  }
+  if (input.iceCandidate) {
+    if (call.callerUid === input.actorUid) {
+      sig.callerCandidates = [...(sig.callerCandidates || []), input.iceCandidate].slice(-30);
+    } else {
+      sig.calleeCandidates = [...(sig.calleeCandidates || []), input.iceCandidate].slice(-30);
+    }
+  }
+
+  const prevParticipant = sig.participantState?.[input.actorUid] || {
+    micMuted: false,
+    speakerDeafened: false,
+    speakingLevel: 0,
+    updatedAt: Date.now(),
+  };
+
+  sig.participantState = {
+    ...(sig.participantState || {}),
+    [input.actorUid]: {
+      micMuted:
+        input.micMuted !== undefined ? input.micMuted : prevParticipant.micMuted,
+      speakerDeafened:
+        input.speakerDeafened !== undefined
+          ? input.speakerDeafened
+          : prevParticipant.speakerDeafened,
+      speakingLevel:
+        input.speakingLevel !== undefined
+          ? input.speakingLevel
+          : prevParticipant.speakingLevel,
+      updatedAt: Date.now(),
+    },
+  };
+
+  const now = new Date();
+  const durationSeconds =
+    call.status === 'connected' && call.connectedAt
+      ? Math.max(
+          0,
+          Math.floor((now.getTime() - new Date(call.connectedAt).getTime()) / 1000)
+        )
+      : call.durationSeconds || 0;
+
+  await db
+    .update(coupleVoiceCalls)
+    .set({
+      signalingJson: JSON.stringify(sig),
+      durationSeconds,
+      updatedAt: now,
+    })
+    .where(eq(coupleVoiceCalls.id, call.id));
+
+  return await getCoupleVoiceChatState(input.actorUid);
+}
+
+export async function testLiveKitAndVoiceDiagnostics(actorUid?: string) {
+  const hasLivekitUrl = Boolean(process.env.LIVEKIT_URL?.trim());
+  const hasLivekitApiKey = Boolean(process.env.LIVEKIT_API_KEY?.trim());
+  const hasLivekitApiSecret = Boolean(process.env.LIVEKIT_API_SECRET?.trim());
+  const livekitFullyConfigured =
+    hasLivekitUrl && hasLivekitApiKey && hasLivekitApiSecret;
+
+  // Test LiveKit AccessToken SDK signing (works with configured keys or self-test keys)
+  let sdkJwtSignWorking = false;
+  let sampleTokenLength = 0;
+  try {
+    const testKey = process.env.LIVEKIT_API_KEY?.trim() || 'APItestDiagnosticsKey';
+    const testSecret =
+      process.env.LIVEKIT_API_SECRET?.trim() ||
+      'SecretTestDiagnosticsKeyForLiveKitJwtSigning123456';
+    const at = new AccessToken(testKey, testSecret, {
+      identity: actorUid || 'diagnostic-user',
+      name: 'Diagnostic Probe',
+      ttl: '5m',
+    });
+    at.addGrant({
+      roomJoin: true,
+      room: 'couple-voice-diagnostic',
+      canPublish: true,
+      canSubscribe: true,
+    });
+    const jwt = await at.toJwt();
+    sdkJwtSignWorking = typeof jwt === 'string' && jwt.split('.').length === 3;
+    sampleTokenLength = jwt.length;
+  } catch {
+    sdkJwtSignWorking = false;
+  }
+
+  // Test database tables (couple_voice_calls & game_invitations)
+  const voiceCallsRows = await db.select().from(coupleVoiceCalls).limit(5);
+  const mailboxRows = await db.select().from(gameInvitations).limit(5);
+
+  const voiceState = actorUid ? await getCoupleVoiceChatState(actorUid) : null;
+
+  return {
+    ok: true,
+    timestamp: new Date().toISOString(),
+    livekit: {
+      sdkInstalled: true,
+      sdkJwtSignWorking,
+      sampleTokenLength,
+      envConfigured: livekitFullyConfigured,
+      hasLivekitUrl,
+      hasLivekitApiKey,
+      hasLivekitApiSecret,
+      activeTransportMode: livekitFullyConfigured
+        ? ('livekit_cloud_sfu' as const)
+        : ('webrtc_p2p_server_signaling' as const),
+      summary: livekitFullyConfigured
+        ? `LiveKit Cloud SFU is configured (${process.env.LIVEKIT_URL}) and issuing signed JWT room tokens.`
+        : 'LIVEKIT_URL / LIVEKIT_API_KEY / LIVEKIT_API_SECRET are not set in environment variables; automatic Authenticated WebRTC P2P + Server SDP/ICE Signaling fallback is active and ready.',
+    },
+    subsystems: {
+      databaseConnected: true,
+      coupleVoiceCallsTableReady: Array.isArray(voiceCallsRows),
+      universalMailboxTableReady: Array.isArray(mailboxRows),
+      coupleVoiceAuthorized: Boolean(voiceState?.authorized),
+    },
+  };
+}
+
+
 
 
 

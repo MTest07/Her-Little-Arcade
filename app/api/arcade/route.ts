@@ -57,6 +57,19 @@ import {
   kickPartyRoomParticipant,
   seedDemoPartyCouples,
   recordPartyMatchResult,
+  getMailboxForUser,
+  sendCouplePairingRequestByUsername,
+  sendDirectRoomOrPartyInvitation,
+  markMailboxItemsRead,
+  dismissMailboxItems,
+  respondToMailboxItem,
+  getCoupleVoiceChatState,
+  issueCoupleLiveKitToken,
+  startCoupleVoiceCall,
+  respondCoupleVoiceCall,
+  endCoupleVoiceCall,
+  syncCoupleVoiceSignaling,
+  testLiveKitAndVoiceDiagnostics,
 } from '@/src/db/repository';
 
 async function resolveAuthenticatedIdentity(req: NextRequest): Promise<{
@@ -98,6 +111,24 @@ export async function GET(req: NextRequest) {
     if (checkUsername !== null) {
       const check = await checkUsernameAvailability(checkUsername, actorUid);
       return NextResponse.json(check);
+    }
+
+    const mailboxParam = searchParams.get('mailbox');
+    if (mailboxParam && actorUid) {
+      const mailbox = await getMailboxForUser(actorUid);
+      return NextResponse.json({ mailbox });
+    }
+
+    const coupleVoiceParam = searchParams.get('coupleVoice');
+    if (coupleVoiceParam && actorUid) {
+      const coupleVoiceState = await getCoupleVoiceChatState(actorUid);
+      return NextResponse.json({ coupleVoiceState });
+    }
+
+    const diagnosticsParam = searchParams.get('diagnostics');
+    if (diagnosticsParam) {
+      const diagnostics = await testLiveKitAndVoiceDiagnostics(actorUid);
+      return NextResponse.json({ diagnostics });
     }
 
     const publicRooms = searchParams.get('publicRooms');
@@ -679,6 +710,126 @@ export async function POST(req: NextRequest) {
         payload: body.payload || {},
       });
       return NextResponse.json({ item });
+    }
+
+    // Universal Mailbox Actions
+    if (action === 'get_mailbox') {
+      const mailbox = await getMailboxForUser(identity.uid);
+      return NextResponse.json({ mailbox });
+    }
+
+    if (action === 'mark_mailbox_read') {
+      const mailbox = await markMailboxItemsRead({
+        actorUid: identity.uid,
+        invitationIds: Array.isArray(body.invitationIds)
+          ? body.invitationIds.map((id: unknown) => Number(id))
+          : undefined,
+        markAll: Boolean(body.markAll),
+      });
+      return NextResponse.json({ mailbox });
+    }
+
+    if (action === 'dismiss_mailbox_items') {
+      const mailbox = await dismissMailboxItems({
+        actorUid: identity.uid,
+        invitationIds: Array.isArray(body.invitationIds)
+          ? body.invitationIds.map((id: unknown) => Number(id))
+          : undefined,
+        dismissCompletedAndExpired: Boolean(body.dismissCompletedAndExpired),
+      });
+      return NextResponse.json({ mailbox });
+    }
+
+    if (action === 'respond_mailbox_item') {
+      const out = await respondToMailboxItem({
+        actorUid: identity.uid,
+        invitationId: Number(body.invitationId),
+        accept: Boolean(body.accept),
+      });
+      return NextResponse.json(out);
+    }
+
+    if (action === 'send_couple_pairing_request') {
+      const out = await sendCouplePairingRequestByUsername({
+        senderUid: identity.uid,
+        targetUsername: String(body.targetUsername || ''),
+      });
+      return NextResponse.json(out);
+    }
+
+    if (action === 'send_room_or_party_invite') {
+      const out = await sendDirectRoomOrPartyInvitation({
+        senderUid: identity.uid,
+        roomCode: String(body.roomCode || ''),
+        targetUsername: body.targetUsername ? String(body.targetUsername) : undefined,
+        targetCoupleId: body.targetCoupleId ? Number(body.targetCoupleId) : undefined,
+        inviteCategory:
+          body.inviteCategory === '2v2_room' ||
+          body.inviteCategory === 'party' ||
+          body.inviteCategory === 'room_invite'
+            ? body.inviteCategory
+            : undefined,
+      });
+      return NextResponse.json(out);
+    }
+
+    // Couple Voice Chat Actions
+    if (action === 'get_couple_voice_state') {
+      const coupleVoiceState = await getCoupleVoiceChatState(identity.uid);
+      return NextResponse.json({ coupleVoiceState });
+    }
+
+    if (action === 'issue_couple_livekit_token') {
+      const tokenPayload = await issueCoupleLiveKitToken(identity.uid);
+      return NextResponse.json(tokenPayload);
+    }
+
+    if (action === 'start_couple_voice_call') {
+      const coupleVoiceState = await startCoupleVoiceCall(identity.uid);
+      return NextResponse.json({ coupleVoiceState });
+    }
+
+    if (action === 'respond_couple_voice_call') {
+      const coupleVoiceState = await respondCoupleVoiceCall({
+        actorUid: identity.uid,
+        callId: String(body.callId || ''),
+        accept: Boolean(body.accept),
+      });
+      return NextResponse.json({ coupleVoiceState });
+    }
+
+    if (action === 'end_couple_voice_call') {
+      const coupleVoiceState = await endCoupleVoiceCall({
+        actorUid: identity.uid,
+        callId: body.callId ? String(body.callId) : undefined,
+      });
+      return NextResponse.json({ coupleVoiceState });
+    }
+
+    if (action === 'sync_couple_voice_signaling') {
+      const coupleVoiceState = await syncCoupleVoiceSignaling({
+        actorUid: identity.uid,
+        callId: String(body.callId || ''),
+        offer: body.offer,
+        answer: body.answer,
+        iceCandidate: body.iceCandidate,
+        micMuted:
+          typeof body.micMuted === 'boolean' ? body.micMuted : undefined,
+        speakerDeafened:
+          typeof body.speakerDeafened === 'boolean'
+            ? body.speakerDeafened
+            : undefined,
+        speakingLevel:
+          typeof body.speakingLevel === 'number'
+            ? body.speakingLevel
+            : undefined,
+      });
+      return NextResponse.json({ coupleVoiceState });
+    }
+
+    if (action === 'test_livekit_diagnostics') {
+      const diagnostics = await testLiveKitAndVoiceDiagnostics(identity.uid);
+      return NextResponse.json({ diagnostics });
     }
 
     return NextResponse.json({ error: 'Unknown action' }, { status: 400 });

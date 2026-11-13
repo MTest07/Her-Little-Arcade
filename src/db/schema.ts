@@ -225,10 +225,12 @@ export const coinTransactions = pgTable('coin_transactions', {
 
 export const gameInvitations = pgTable('game_invitations', {
   id: serial('id').primaryKey(),
-  inviteType: text('invite_type').notNull().default('1v1'), // '1v1' | '2v2'
+  inviteType: text('invite_type').notNull().default('1v1'), // '1v1' | '2v2' | '2v2_partner_team' | '2v2_room' | 'party' | 'room_invite' | 'couple_request' | 'other'
   senderUid: text('sender_uid').notNull(),
   senderUsername: text('sender_username').notNull(),
   senderAvatar: text('sender_avatar').notNull().default('kitsune'),
+  senderEquippedSkin: text('sender_equipped_skin').notNull().default('skin-classic-notebook'),
+  senderCustomPhotoUrl: text('sender_custom_photo_url').notNull().default(''),
   senderCoupleId: integer('sender_couple_id').notNull().default(0),
   senderCoupleName: text('sender_couple_name').notNull().default(''),
   targetUid: text('target_uid').notNull(),
@@ -237,7 +239,30 @@ export const gameInvitations = pgTable('game_invitations', {
   targetCoupleName: text('target_couple_name').notNull().default(''),
   gameId: text('game_id').notNull().default('chess'),
   roomCode: text('room_code').notNull().default(''),
-  status: text('status').notNull().default('pending'), // 'pending' | 'accepted' | 'declined' | 'expired'
+  status: text('status').notNull().default('pending'), // 'pending' | 'accepted' | 'declined' | 'expired' | 'cancelled'
+  isRead: boolean('is_read').notNull().default(false),
+  isDismissed: boolean('is_dismissed').notNull().default(false),
+  metadataJson: text('metadata_json').notNull().default('{}'),
+  updatedAt: timestamp('updated_at').defaultNow(),
+  createdAt: timestamp('created_at').defaultNow(),
+});
+
+export const coupleVoiceCalls = pgTable('couple_voice_calls', {
+  id: serial('id').primaryKey(),
+  callId: text('call_id').notNull().unique(),
+  coupleId: integer('couple_id').notNull(),
+  roomName: text('room_name').notNull(),
+  callerUid: text('caller_uid').notNull(),
+  callerUsername: text('caller_username').notNull(),
+  callerAvatar: text('caller_avatar').notNull().default('kitsune'),
+  calleeUid: text('callee_uid').notNull(),
+  calleeUsername: text('callee_username').notNull(),
+  calleeAvatar: text('callee_avatar').notNull().default('star-cat'),
+  status: text('status').notNull().default('ringing'), // 'ringing' | 'connecting' | 'connected' | 'declined' | 'missed' | 'ended'
+  signalingJson: text('signaling_json').notNull().default('{}'),
+  durationSeconds: integer('duration_seconds').notNull().default(0),
+  connectedAt: timestamp('connected_at'),
+  endedAt: timestamp('ended_at'),
   updatedAt: timestamp('updated_at').defaultNow(),
   createdAt: timestamp('created_at').defaultNow(),
 });
@@ -309,4 +334,5 @@ export const gameRecordsRelations = relations(gameRecords, ({ one }) => ({
     references: [users.uid],
   }),
 }));
+
 

@@ -20,17 +20,10 @@ import {
   ShieldCheck,
   Sun,
   Moon,
-  UserCircle2,
-  Image as ImageIcon,
-  Frame,
   Package,
-  KeyRound,
   Backpack,
   Swords,
   PartyPopper,
-  PlusCircle,
-  LogIn,
-  Radio,
   Mail,
   Mic,
 } from 'lucide-react';
@@ -53,6 +46,8 @@ export type ArcadeNavSection =
   | 'mp-matchmaking'
   | 'mp-invitations'
   | 'mp-voice-chat'
+  | 'mailbox'
+  | 'couple-voice-chat'
   | 'couple-profile'
   | 'trophy-road'
   | 'leaderboard'
@@ -71,6 +66,7 @@ export type ArcadeNavSection =
 
 export interface SidebarNavItem {
   id: ArcadeNavSection;
+  section: string;
   label: string;
   purpose: string;
   icon: React.ComponentType<{ className?: string }>;
@@ -80,12 +76,14 @@ export interface SidebarNavItem {
 export const SIDEBAR_NAV_ITEMS: SidebarNavItem[] = [
   {
     id: 'home',
+    section: 'Arcade',
     label: 'Home',
     purpose: 'Main arcade notebook',
     icon: Home,
   },
   {
     id: 'single',
+    section: 'Games',
     label: 'Single Player',
     purpose: 'All 7 solo cozy games',
     icon: Gamepad2,
@@ -93,124 +91,90 @@ export const SIDEBAR_NAV_ITEMS: SidebarNavItem[] = [
   },
   {
     id: 'mp-1v1',
-    label: 'MP · 1v1 Partner',
-    purpose: 'Partner-only 1v1 duels (14 games)',
+    section: 'Multiplayer',
+    label: '1v1 Games',
+    purpose: 'Play with your paired partner',
     icon: Swords,
     badge: '1V1',
   },
   {
     id: 'mp-2v2',
-    label: 'MP · 2v2 Couples',
-    purpose: '2v2 couple battles (10 games)',
+    section: 'Multiplayer',
+    label: '2v2 Games',
+    purpose: 'Compete with another couple',
     icon: Users,
     badge: '2V2',
   },
   {
     id: 'mp-party',
-    label: 'MP · Party Games',
-    purpose: '3–10 couple party games (12 games)',
+    section: 'Multiplayer',
+    label: 'Party Games',
+    purpose: 'Play with 3–10 couples',
     icon: PartyPopper,
-    badge: '12',
+    badge: '3–10',
   },
   {
-    id: 'mp-create-room',
-    label: 'MP · Create Room',
-    purpose: 'Host public or private couple/party rooms',
-    icon: PlusCircle,
-  },
-  {
-    id: 'mp-join-group',
-    label: 'MP · Join Group',
-    purpose: 'Browse public rooms or enter room code',
-    icon: LogIn,
-  },
-  {
-    id: 'mp-matchmaking',
-    label: 'MP · Matchmaking',
-    purpose: '2v2 trophy-based couple queue',
-    icon: Radio,
-  },
-  {
-    id: 'mp-invitations',
-    label: 'MP · Invitations',
-    purpose: 'Partner & couple game invites',
+    id: 'mailbox',
+    section: 'Social',
+    label: 'Mailbox',
+    purpose: 'Receive and manage invitations',
     icon: Mail,
   },
   {
-    id: 'mp-voice-chat',
-    label: 'MP · Voice Chat',
-    purpose: 'Live room voice & text chat dock',
+    id: 'couple-voice-chat',
+    section: 'Social',
+    label: 'Couple Voice Chat',
+    purpose: 'Couple voice communication',
     icon: Mic,
   },
   {
     id: 'couple-profile',
+    section: 'Couple',
     label: 'Couple Profile',
     purpose: 'Shared couple keepsake & stats',
     icon: HeartHandshake,
   },
   {
     id: 'trophy-road',
+    section: 'Competition',
     label: 'Trophy Road',
     purpose: '2v2 couple milestones',
     icon: Crown,
-    badge: '2v2',
+    badge: '2V2',
   },
   {
     id: 'leaderboard',
-    label: 'Leaderboard',
+    section: 'Competition',
+    label: 'Couple Leaderboard',
     purpose: '2v2 couple standings',
     icon: Trophy,
-    badge: '2v2',
+    badge: '2V2',
   },
   {
-    id: 'shop-profile',
-    label: 'Shop · Profile',
-    purpose: 'Profile customization & appearance',
-    icon: UserCircle2,
-    badge: 'SHOP',
-  },
-  {
-    id: 'shop-banners',
-    label: 'Shop · Banners',
-    purpose: 'Browse & purchase profile banners',
-    icon: ImageIcon,
-    badge: 'SHOP',
-  },
-  {
-    id: 'shop-avatars',
-    label: 'Shop · Avatars',
-    purpose: 'Avatar skins, frames & animations',
-    icon: Frame,
-    badge: 'SHOP',
-  },
-  {
-    id: 'shop-chests',
-    label: 'Shop · Chests',
-    purpose: 'Purchase & open rarity chests',
+    id: 'shop',
+    section: 'Collection',
+    label: 'Shop',
+    purpose: 'Profile, banners, avatars, chests & keys',
     icon: Package,
-    badge: 'SHOP',
-  },
-  {
-    id: 'shop-keys',
-    label: 'Shop · Keys',
-    purpose: 'View & manage chest keys',
-    icon: KeyRound,
-    badge: 'SHOP',
+    badge: '5 TABS',
   },
   {
     id: 'inventory',
+    section: 'Collection',
     label: 'Inventory',
     purpose: 'Owned skins, banners, chests & shields',
     icon: Backpack,
   },
   {
     id: 'achievements',
+    section: 'Progression',
     label: 'Achievements',
     purpose: '21 games & custom studio',
     icon: Sparkles,
   },
   {
     id: 'settings',
+    section: 'Account',
     label: 'Settings',
     purpose: 'Audio & theme preferences',
     icon: Settings,
@@ -247,6 +211,8 @@ interface ArcadeSidebarProps {
   isCollapsed: boolean;
   isLoadingData?: boolean;
   isDarkTheme?: boolean;
+  unreadMailboxCount?: number;
+  coupleVoiceCallStatus?: 'idle' | 'ringing' | 'connecting' | 'connected' | 'ended';
   onToggleDarkTheme?: () => void;
   onToggleCollapse: () => void;
   onSelectSection: (section: ArcadeNavSection) => void;
@@ -264,6 +230,8 @@ export function ArcadeSidebar({
   isCollapsed,
   isLoadingData = false,
   isDarkTheme = false,
+  unreadMailboxCount = 0,
+  coupleVoiceCallStatus = 'idle',
   onToggleDarkTheme,
   onToggleCollapse,
   onSelectSection,
@@ -284,8 +252,18 @@ export function ArcadeSidebar({
   const normalizedSection: ArcadeNavSection =
     activeSection === 'profile'
       ? 'couple-profile'
-      : activeSection === 'rewards' || activeSection === 'shop'
-      ? 'shop-chests'
+      : activeSection === 'rewards' ||
+        activeSection === 'shop' ||
+        activeSection === 'shop-profile' ||
+        activeSection === 'shop-banners' ||
+        activeSection === 'shop-avatars' ||
+        activeSection === 'shop-chests' ||
+        activeSection === 'shop-keys'
+      ? 'shop'
+      : activeSection === 'mp-invitations'
+      ? 'mailbox'
+      : activeSection === 'mp-voice-chat'
+      ? 'couple-voice-chat'
       : activeSection === 'our-games'
       ? 'achievements'
       : activeSection;
@@ -651,44 +629,76 @@ export function ArcadeSidebar({
                 </div>
               </div>
 
-              {/* Mobile Navigation List (Clean Unboxed Marker Rows) */}
+              {/* Mobile Navigation List (Clean Unboxed Marker Rows with Section Headers) */}
               <nav aria-label="Mobile Arcade Navigation" className="space-y-1">
-                {SIDEBAR_NAV_ITEMS.map((item) => {
+                {SIDEBAR_NAV_ITEMS.map((item, idx) => {
                   const Icon = item.icon;
                   const isActive = normalizedSection === item.id && !activeGameTitle;
+                  const showSectionHeader =
+                    idx === 0 || SIDEBAR_NAV_ITEMS[idx - 1].section !== item.section;
+                  const dynamicBadge =
+                    item.id === 'mailbox'
+                      ? unreadMailboxCount > 0
+                        ? String(unreadMailboxCount)
+                        : undefined
+                      : item.id === 'couple-voice-chat'
+                      ? coupleVoiceCallStatus === 'connected'
+                        ? 'LIVE'
+                        : coupleVoiceCallStatus === 'ringing'
+                        ? 'RING'
+                        : coupleVoiceCallStatus === 'connecting'
+                        ? 'CALL'
+                        : undefined
+                      : item.badge;
+
                   return (
-                    <button
-                      key={item.id}
-                      type="button"
-                      onClick={() => {
-                        soundFX.playMove();
-                        closeMobileDrawerWithAnimation(() => onSelectSection(item.id));
-                      }}
-                      className={`mobile-nav-item arcade-sidebar-nav-item flex w-full items-center justify-between px-3 py-2 text-left text-xs font-semibold ${
-                        isActive ? 'arcade-sidebar-nav-item-active font-bold' : ''
-                      }`}
-                    >
-                      <div className="flex items-center gap-3 min-w-0">
-                        <Icon
-                          className={`h-4 w-4 shrink-0 ${
-                            isActive
-                              ? 'text-[var(--dp-color-accent)]'
-                              : 'text-[var(--dp-color-ink-muted)]'
-                          }`}
-                        />
-                        <div className="min-w-0">
-                          <div className="truncate text-[var(--dp-color-ink)]">{item.label}</div>
-                          <div className="truncate text-[11px] font-normal text-[var(--dp-color-ink-muted)]">
-                            {item.purpose}
+                    <div key={item.id}>
+                      {showSectionHeader && (
+                        <div className="px-3 pb-0.5 pt-2.5 font-mono text-[10px] font-bold uppercase tracking-wider text-[var(--dp-color-annotation)]">
+                          {item.section}
+                        </div>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          soundFX.playMove();
+                          closeMobileDrawerWithAnimation(() => onSelectSection(item.id));
+                        }}
+                        className={`mobile-nav-item arcade-sidebar-nav-item flex w-full items-center justify-between px-3 py-2 text-left text-xs font-semibold ${
+                          isActive ? 'arcade-sidebar-nav-item-active font-bold' : ''
+                        }`}
+                      >
+                        <div className="flex items-center gap-3 min-w-0">
+                          <Icon
+                            className={`h-4 w-4 shrink-0 ${
+                              isActive
+                                ? 'text-[var(--dp-color-accent)]'
+                                : 'text-[var(--dp-color-ink-muted)]'
+                            }`}
+                          />
+                          <div className="min-w-0">
+                            <div className="truncate text-[var(--dp-color-ink)]">{item.label}</div>
+                            <div className="truncate text-[11px] font-normal text-[var(--dp-color-ink-muted)]">
+                              {item.purpose}
+                            </div>
                           </div>
                         </div>
-                      </div>
-                      {item.badge && (
-                        <span className="font-mono text-[11px] font-bold text-[var(--dp-color-annotation)] tabular-nums">
-                          {item.badge}
-                        </span>
-                      )}
-                    </button>
+                        {dynamicBadge && (
+                          <span
+                            className={`font-mono text-[11px] font-bold tabular-nums ${
+                              item.id === 'mailbox' && unreadMailboxCount > 0
+                                ? 'rounded bg-[var(--dp-color-accent)] px-1.5 py-0.5 text-white'
+                                : item.id === 'couple-voice-chat' &&
+                                  coupleVoiceCallStatus !== 'idle'
+                                ? 'rounded bg-emerald-600 px-1.5 py-0.5 text-white'
+                                : 'text-[var(--dp-color-annotation)]'
+                            }`}
+                          >
+                            {dynamicBadge}
+                          </span>
+                        )}
+                      </button>
+                    </div>
                   );
                 })}
               </nav>
@@ -912,19 +922,40 @@ export function ArcadeSidebar({
             )}
           </div>
 
-          {/* 3. Primary Navigation Items (Playful Sketchbook Marker Highlight) */}
+          {/* 3. Primary Navigation Items (Playful Sketchbook Marker Highlight + Section Headers) */}
           <nav
             ref={navListRef}
             aria-label="Primary Sidebar Navigation"
             className="arcade-no-scrollbar flex-1 space-y-1 overflow-y-auto overflow-x-hidden"
           >
-            {SIDEBAR_NAV_ITEMS.map((item) => {
+            {SIDEBAR_NAV_ITEMS.map((item, idx) => {
               const Icon = item.icon;
               const isActive = normalizedSection === item.id && !activeGameTitle;
               const isHovered = hoveredItem === item.id;
+              const showSectionHeader =
+                idx === 0 || SIDEBAR_NAV_ITEMS[idx - 1].section !== item.section;
+              const dynamicBadge =
+                item.id === 'mailbox'
+                  ? unreadMailboxCount > 0
+                    ? String(unreadMailboxCount)
+                    : undefined
+                  : item.id === 'couple-voice-chat'
+                  ? coupleVoiceCallStatus === 'connected'
+                    ? 'LIVE'
+                    : coupleVoiceCallStatus === 'ringing'
+                    ? 'RING'
+                    : coupleVoiceCallStatus === 'connecting'
+                    ? 'CALL'
+                    : undefined
+                  : item.badge;
 
               return (
                 <div key={item.id} className="relative">
+                  {!isCollapsed && showSectionHeader && (
+                    <div className="sidebar-label-item px-3 pb-0.5 pt-2.5 font-mono text-[10px] font-bold uppercase tracking-wider text-[var(--dp-color-annotation)]">
+                      {item.section}
+                    </div>
+                  )}
                   <button
                     type="button"
                     onClick={() => {
@@ -947,7 +978,7 @@ export function ArcadeSidebar({
                       isActive ? 'arcade-sidebar-nav-item-active font-bold' : ''
                     }`}
                   >
-                    <div className="flex min-w-0 items-center gap-2.5">
+                    <div className="relative flex min-w-0 items-center gap-2.5">
                       <Icon
                         className={`sidebar-nav-icon h-4 w-4 shrink-0 transition-colors ${
                           isActive
@@ -955,6 +986,17 @@ export function ArcadeSidebar({
                             : 'text-[var(--dp-color-ink-muted)] group-hover:text-[var(--dp-color-ink)]'
                         }`}
                       />
+                      {isCollapsed && item.id === 'mailbox' && unreadMailboxCount > 0 && (
+                        <span className="absolute -right-1.5 -top-1.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-[var(--dp-color-accent)] px-1 font-mono text-[9px] font-bold text-white">
+                          {unreadMailboxCount}
+                        </span>
+                      )}
+                      {isCollapsed &&
+                        item.id === 'couple-voice-chat' &&
+                        coupleVoiceCallStatus !== 'idle' &&
+                        coupleVoiceCallStatus !== 'ended' && (
+                          <span className="absolute -right-1 -top-1 h-2.5 w-2.5 rounded-full bg-emerald-500 ring-2 ring-[var(--dp-color-ground)]" />
+                        )}
                       {!isCollapsed && (
                         <span className="sidebar-label-item truncate text-sm">
                           {item.label}
@@ -964,15 +1006,21 @@ export function ArcadeSidebar({
 
                     {!isCollapsed && (
                       <div className="sidebar-label-item flex items-center gap-1.5">
-                        {item.badge && (
+                        {dynamicBadge && (
                           <span
                             className={`font-mono text-[11px] font-bold tabular-nums ${
-                              isActive
+                              item.id === 'mailbox' && unreadMailboxCount > 0
+                                ? 'rounded bg-[var(--dp-color-accent)] px-1.5 py-0.5 text-white'
+                                : item.id === 'couple-voice-chat' &&
+                                  coupleVoiceCallStatus !== 'idle' &&
+                                  coupleVoiceCallStatus !== 'ended'
+                                ? 'rounded bg-emerald-600 px-1.5 py-0.5 text-white'
+                                : isActive
                                 ? 'text-[var(--dp-color-accent)]'
                                 : 'text-[var(--dp-color-annotation)]'
                             }`}
                           >
-                            {item.badge}
+                            {dynamicBadge}
                           </span>
                         )}
                         {isActive && (
@@ -993,6 +1041,9 @@ export function ArcadeSidebar({
                       role="tooltip"
                       className="sketch-scrap pointer-events-none fixed left-20 z-50 ml-2 w-48 px-3 py-2 text-xs"
                     >
+                      <div className="font-mono text-[10px] font-bold uppercase text-[var(--dp-color-annotation)]">
+                        {item.section}
+                      </div>
                       <div className="font-bold text-[var(--dp-color-ink)]">{item.label}</div>
                       <div className="mt-0.5 text-[11px] text-[var(--dp-color-ink-muted)]">
                         {item.purpose}

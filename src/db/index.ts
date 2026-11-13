@@ -26,6 +26,8 @@ function reviveRowDates(row: Record<string, unknown>): Record<string, unknown> {
     'endsAt',
     'completedAt',
     'claimedAt',
+    'connectedAt',
+    'endedAt',
   ]) {
     if (typeof copy[key] === 'string') {
       const parsed = new Date(copy[key] as string);
