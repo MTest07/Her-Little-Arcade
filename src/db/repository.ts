@@ -3,6 +3,7 @@ import { AccessToken } from 'livekit-server-sdk';
 import { db } from './index.ts';
 import {
   users,
+  profilePictures,
   couplePairings,
   gameRecords,
   rooms,
@@ -69,6 +70,8 @@ export function isTimestampOnline(
 }
 
 const PASSWORD_SALT = 'her-little-arcade-v2-salt';
+export const PERSISTENT_SESSION_DURATION_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+export const TEMPORARY_SESSION_DURATION_MS = 24 * 60 * 60 * 1000; // 24 hours
 
 export function hashPassword(rawPassword: string): string {
   return crypto
@@ -76,9 +79,16 @@ export function hashPassword(rawPassword: string): string {
     .toString('hex');
 }
 
-export function createSignedSessionToken(uid: string, email: string): string {
+export function createSignedSessionToken(
+  uid: string,
+  email: string,
+  keepSignedIn = true
+): string {
+  const iat = Date.now();
+  const exp =
+    iat + (keepSignedIn ? PERSISTENT_SESSION_DURATION_MS : TEMPORARY_SESSION_DURATION_MS);
   const payload = Buffer.from(
-    JSON.stringify({ uid, email, iat: Date.now() })
+    JSON.stringify({ uid, email, iat, exp, keepSignedIn: Boolean(keepSignedIn) })
   ).toString('base64url');
   const sig = crypto
     .createHmac('sha256', PASSWORD_SALT)
@@ -87,9 +97,13 @@ export function createSignedSessionToken(uid: string, email: string): string {
   return `hla.${payload}.${sig}`;
 }
 
-export function verifySignedSessionToken(
-  token: string
-): { uid: string; email: string } | null {
+export function verifySignedSessionToken(token: string): {
+  uid: string;
+  email: string;
+  keepSignedIn: boolean;
+  iat: number;
+  exp: number;
+} | null {
   if (!token || !token.startsWith('hla.')) return null;
   const parts = token.split('.');
   if (parts.length !== 3) return null;
@@ -102,7 +116,21 @@ export function verifySignedSessionToken(
   try {
     const parsed = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
     if (parsed && typeof parsed.uid === 'string' && typeof parsed.email === 'string') {
-      return { uid: parsed.uid, email: parsed.email };
+      const now = Date.now();
+      const exp =
+        typeof parsed.exp === 'number'
+          ? parsed.exp
+          : (Number(parsed.iat) || now) + PERSISTENT_SESSION_DURATION_MS;
+      if (now > exp) {
+        return null;
+      }
+      return {
+        uid: parsed.uid,
+        email: parsed.email,
+        keepSignedIn: parsed.keepSignedIn !== false,
+        iat: Number(parsed.iat) || now,
+        exp,
+      };
     }
     return null;
   } catch {
@@ -110,7 +138,11 @@ export function verifySignedSessionToken(
   }
 }
 
-export function sanitizeUserRow(row: typeof users.$inferSelect) {
+export function sanitizeUserRow(
+  row: typeof users.$inferSelect,
+  options?: { isOwner?: boolean }
+) {
+  const isOwner = options?.isOwner !== false;
   const online = isTimestampOnline(row.lastSeenAt, row.presenceStatus);
   const hasCompletedUsername = Boolean(
     row.usernameSetupCompleted &&
@@ -143,19 +175,20 @@ export function sanitizeUserRow(row: typeof users.$inferSelect) {
   const safeCoins = Math.max(0, Math.min(MAX_COIN_CAPACITY, Number(row.coins) || 0));
   const safeShieldCards = Math.max(0, Number(row.shieldCards) || 0);
   const safeShieldArmed = Boolean(safeShieldCards > 0 && row.shieldCardArmed);
+  const resolvedPhotoUrl = (row.customPhotoUrl || row.customAvatarUrl || '').trim();
 
   return {
     id: row.id,
     uid: row.uid,
-    email: row.email,
+    email: isOwner ? row.email : '',
     username: hasCompletedUsername ? row.username.trim() : '',
     usernameSetupCompleted: hasCompletedUsername,
-    renameCards: row.renameCards ?? 0,
-    shieldCards: safeShieldCards,
-    shieldCardArmed: safeShieldArmed,
+    renameCards: isOwner ? (row.renameCards ?? 0) : 0,
+    shieldCards: isOwner ? safeShieldCards : 0,
+    shieldCardArmed: isOwner ? safeShieldArmed : false,
     emailVerified: row.emailVerified,
     avatar: row.avatar,
-    customPhotoUrl: row.customPhotoUrl || '',
+    customPhotoUrl: resolvedPhotoUrl,
     xp: levelInfo.clampedTotalXp,
     level: levelInfo.level,
     currentLevelXp: levelInfo.currentLevelXp,
@@ -163,7 +196,7 @@ export function sanitizeUserRow(row: typeof users.$inferSelect) {
     xpProgressPercent: levelInfo.progressPercent,
     isMaxLevel: levelInfo.isMaxLevel,
     maxLevel: MAX_PLAYER_LEVEL,
-    coins: safeCoins,
+    coins: isOwner ? safeCoins : 0,
     maxCoinCapacity: MAX_COIN_CAPACITY,
     streak: row.streak,
     wins: row.wins,
@@ -172,18 +205,93 @@ export function sanitizeUserRow(row: typeof users.$inferSelect) {
     theme: row.theme,
     equippedSkin: row.equippedSkin || 'skin-classic-notebook',
     equippedBanner: row.equippedBanner || 'banner-sketchbook-grid',
-    unlockedBanners: JSON.stringify(unlockedBannersParsed),
-    chestInventory: JSON.stringify(chestInventoryParsed),
-    keyInventory: JSON.stringify(keyInventoryParsed),
-    favoriteGames: row.favoriteGames,
-    unlockedItems: JSON.stringify(unlockedParsed),
-    petState: row.petState,
+    unlockedBanners: isOwner ? JSON.stringify(unlockedBannersParsed) : '[]',
+    chestInventory: isOwner
+      ? JSON.stringify(chestInventoryParsed)
+      : '{"Common":0,"Uncommon":0,"Rare":0,"Epic":0,"Legendary":0}',
+    keyInventory: isOwner
+      ? JSON.stringify(keyInventoryParsed)
+      : '{"Common":0,"Uncommon":0,"Rare":0,"Epic":0,"Legendary":0}',
+    favoriteGames: isOwner ? row.favoriteGames : '[]',
+    unlockedItems: isOwner ? JSON.stringify(unlockedParsed) : '[]',
+    petState: isOwner ? row.petState : '{}',
     presenceStatus: online ? row.presenceStatus || 'online' : 'offline',
     activeRoomCode: row.activeRoomCode || '',
     isOnline: online,
     lastSeenAt: row.lastSeenAt,
     createdAt: row.createdAt,
   };
+}
+
+export async function restoreAuthenticatedUserSession(
+  uid: string,
+  email: string,
+  keepSignedIn = true
+) {
+  try {
+    let rows = await db.select().from(users).where(eq(users.uid, uid));
+    if (!rows.length && email) {
+      rows = await db
+        .select()
+        .from(users)
+        .where(eq(users.email, email.trim().toLowerCase()));
+    }
+    if (!rows.length) {
+      return null;
+    }
+
+    const user = rows[0];
+    let resolvedPhoto = (user.customPhotoUrl || user.customAvatarUrl || '').trim();
+    if (!resolvedPhoto) {
+      const picRows = await db
+        .select()
+        .from(profilePictures)
+        .where(eq(profilePictures.userUid, user.uid));
+      if (picRows[0]?.imageDataUrl) {
+        resolvedPhoto = picRows[0].imageDataUrl;
+      }
+    }
+
+    const updated = await db
+      .update(users)
+      .set({
+        presenceStatus: 'online',
+        lastSeenAt: new Date(),
+        ...(resolvedPhoto && !user.customPhotoUrl
+          ? { customPhotoUrl: resolvedPhoto, customAvatarUrl: resolvedPhoto }
+          : {}),
+      })
+      .where(eq(users.uid, user.uid))
+      .returning();
+
+    const row = updated[0] || user;
+    const refreshedToken = createSignedSessionToken(row.uid, row.email, keepSignedIn);
+    return {
+      profile: sanitizeUserRow(row, { isOwner: true }),
+      sessionToken: refreshedToken,
+      keepSignedIn,
+    };
+  } catch (error) {
+    console.error('Database restoreAuthenticatedUserSession failed:', error);
+    return null;
+  }
+}
+
+export async function terminateAuthenticatedUserSession(uid: string) {
+  try {
+    if (!uid) return { loggedOut: true };
+    await db
+      .update(users)
+      .set({
+        presenceStatus: 'offline',
+        lastSeenAt: new Date(Date.now() - 120_000),
+      })
+      .where(eq(users.uid, uid));
+    return { loggedOut: true };
+  } catch (error) {
+    console.error('Database terminateAuthenticatedUserSession failed:', error);
+    return { loggedOut: true };
+  }
 }
 
 function generateRandomCode(length = 6): string {
@@ -576,34 +684,90 @@ export async function updateUserProfilePhoto(uid: string, customPhotoUrl: string
     }
 
     const cleanUrl = (customPhotoUrl || '').trim();
+    let mimeType = 'image/webp';
+    let byteLength = 0;
+
     if (cleanUrl.length > 0) {
-      const isValidDataImage = /^data:image\/(png|jpeg|jpg|webp);base64,[A-Za-z0-9+/=]+$/i.test(
-        cleanUrl
+      const mimeMatch = cleanUrl.match(
+        /^data:(image\/(?:png|jpeg|jpg|webp));base64,([A-Za-z0-9+/=]+)$/i
       );
-      if (!isValidDataImage) {
+      if (!mimeMatch) {
         throw new Error(
           'Unsupported image format. Please upload a PNG, JPG, JPEG, or WebP image.'
         );
       }
-      // Enforce maximum ~1.5MB cropped data URL payload (corresponds to <= 5MB source image after crop)
-      if (cleanUrl.length > 2_000_000) {
+      mimeType = mimeMatch[1].toLowerCase();
+      const base64Body = mimeMatch[2];
+      byteLength = Math.floor((base64Body.length * 3) / 4);
+
+      if (byteLength > 5 * 1024 * 1024) {
         throw new Error(
-          'Cropped profile image is too large. Please choose an image under 5 MB.'
+          'Profile picture exceeds the 5 MB maximum size limit. Please choose an image under 5 MB.'
         );
       }
     }
 
-    // Strictly keep customPhotoUrl independent from equippedSkin and equippedBanner
+    const now = new Date();
+
+    // 1. Save or remove in persistent profile_pictures table associated with unique user_uid
+    const existingPic = await db
+      .select()
+      .from(profilePictures)
+      .where(eq(profilePictures.userUid, uid));
+
+    if (cleanUrl.length > 0) {
+      if (existingPic.length > 0) {
+        await db
+          .update(profilePictures)
+          .set({
+            mimeType,
+            byteLength,
+            imageDataUrl: cleanUrl,
+            updatedAt: now,
+          })
+          .where(eq(profilePictures.userUid, uid));
+      } else {
+        await db.insert(profilePictures).values({
+          userUid: uid,
+          mimeType,
+          byteLength,
+          imageDataUrl: cleanUrl,
+          updatedAt: now,
+          createdAt: now,
+        });
+      }
+    } else if (existingPic.length > 0) {
+      await db
+        .update(profilePictures)
+        .set({
+          byteLength: 0,
+          imageDataUrl: '',
+          updatedAt: now,
+        })
+        .where(eq(profilePictures.userUid, uid));
+    }
+
+    // 2. Save in users profile record (both customPhotoUrl and customAvatarUrl for full compatibility)
     const updated = await db
       .update(users)
       .set({
         customPhotoUrl: cleanUrl,
-        lastSeenAt: new Date(),
+        customAvatarUrl: cleanUrl,
+        lastSeenAt: now,
       })
       .where(eq(users.uid, uid))
       .returning();
 
-    return sanitizeUserRow(updated[0]);
+    // 3. Cascade updated photo to pending invitations sent by this user
+    await db
+      .update(gameInvitations)
+      .set({
+        senderCustomPhotoUrl: cleanUrl,
+        updatedAt: now,
+      })
+      .where(eq(gameInvitations.senderUid, uid));
+
+    return sanitizeUserRow(updated[0], { isOwner: true });
   } catch (error) {
     console.error('Database updateUserProfilePhoto failed:', error);
     const msg =
@@ -1177,8 +1341,10 @@ export async function registerUserWithEmail(input: {
   password: string;
   username?: string;
   firebaseUid?: string;
+  keepSignedIn?: boolean;
 }) {
   try {
+    const keepSignedIn = input.keepSignedIn !== false;
     const cleanEmail = input.email.trim().toLowerCase();
     if (!cleanEmail || !cleanEmail.includes('@')) {
       throw new Error('Please provide a valid email address.');
@@ -1216,15 +1382,17 @@ export async function registerUserWithEmail(input: {
           usernameSetupCompleted: hasCompletedUsername,
           passwordHash,
           verificationCode,
+          presenceStatus: 'online',
           lastSeenAt: new Date(),
         })
         .where(eq(users.uid, existing[0].uid))
         .returning();
 
       return {
-        profile: sanitizeUserRow(updated[0]),
+        profile: sanitizeUserRow(updated[0], { isOwner: true }),
         verificationCode,
-        sessionToken: createSignedSessionToken(updated[0].uid, cleanEmail),
+        sessionToken: createSignedSessionToken(updated[0].uid, cleanEmail, keepSignedIn),
+        keepSignedIn,
       };
     }
 
@@ -1249,13 +1417,15 @@ export async function registerUserWithEmail(input: {
         wins: 0,
         losses: 0,
         draws: 0,
+        presenceStatus: 'online',
       })
       .returning();
 
     return {
-      profile: sanitizeUserRow(inserted[0]),
+      profile: sanitizeUserRow(inserted[0], { isOwner: true }),
       verificationCode,
-      sessionToken: createSignedSessionToken(inserted[0].uid, cleanEmail),
+      sessionToken: createSignedSessionToken(inserted[0].uid, cleanEmail, keepSignedIn),
+      keepSignedIn,
     };
   } catch (error) {
     console.error('Database registerUserWithEmail failed:', error);
@@ -1267,8 +1437,10 @@ export async function registerUserWithEmail(input: {
 export async function signInUserWithEmail(input: {
   email: string;
   password: string;
+  keepSignedIn?: boolean;
 }) {
   try {
+    const keepSignedIn = input.keepSignedIn !== false;
     const cleanEmail = input.email.trim().toLowerCase();
     const existing = await db
       .select()
@@ -1285,15 +1457,33 @@ export async function signInUserWithEmail(input: {
       throw new Error('Invalid email or password. Please check your credentials.');
     }
 
+    let resolvedPhoto = (user.customPhotoUrl || user.customAvatarUrl || '').trim();
+    if (!resolvedPhoto) {
+      const picRows = await db
+        .select()
+        .from(profilePictures)
+        .where(eq(profilePictures.userUid, user.uid));
+      if (picRows[0]?.imageDataUrl) {
+        resolvedPhoto = picRows[0].imageDataUrl;
+      }
+    }
+
     const updated = await db
       .update(users)
-      .set({ lastSeenAt: new Date() })
+      .set({
+        presenceStatus: 'online',
+        lastSeenAt: new Date(),
+        ...(resolvedPhoto && !user.customPhotoUrl
+          ? { customPhotoUrl: resolvedPhoto, customAvatarUrl: resolvedPhoto }
+          : {}),
+      })
       .where(eq(users.uid, user.uid))
       .returning();
 
     return {
-      profile: sanitizeUserRow(updated[0]),
-      sessionToken: createSignedSessionToken(updated[0].uid, updated[0].email),
+      profile: sanitizeUserRow(updated[0], { isOwner: true }),
+      sessionToken: createSignedSessionToken(updated[0].uid, updated[0].email, keepSignedIn),
+      keepSignedIn,
     };
   } catch (error) {
     console.error('Database signInUserWithEmail failed:', error);
@@ -1310,7 +1500,7 @@ export async function verifyUserEmailCode(uid: string, code: string) {
     }
     const user = rows[0];
     if (user.emailVerified) {
-      return sanitizeUserRow(user);
+      return sanitizeUserRow(user, { isOwner: true });
     }
     const cleanCode = code.trim().toUpperCase();
     if (user.verificationCode && cleanCode !== user.verificationCode.toUpperCase()) {
@@ -1330,7 +1520,7 @@ export async function verifyUserEmailCode(uid: string, code: string) {
       .where(eq(users.uid, uid))
       .returning();
 
-    return sanitizeUserRow(updated[0]);
+    return sanitizeUserRow(updated[0], { isOwner: true });
   } catch (error) {
     console.error('Database verifyUserEmailCode failed:', error);
     const msg = error instanceof Error ? error.message : 'Email verification failed.';
@@ -1389,8 +1579,8 @@ export async function completePasswordResetWithToken(input: {
       .returning();
 
     return {
-      profile: sanitizeUserRow(updated[0]),
-      sessionToken: createSignedSessionToken(updated[0].uid, updated[0].email),
+      profile: sanitizeUserRow(updated[0], { isOwner: true }),
+      sessionToken: createSignedSessionToken(updated[0].uid, updated[0].email, true),
     };
   } catch (error) {
     console.error('Database completePasswordResetWithToken failed:', error);
@@ -1402,7 +1592,8 @@ export async function completePasswordResetWithToken(input: {
 export async function getOrCreateOAuthPlayerProfile(
   uid: string,
   email: string,
-  googleDisplayName?: string
+  googleDisplayName?: string,
+  keepSignedIn = true
 ) {
   try {
     const cleanEmail = email.trim().toLowerCase();
@@ -1425,18 +1616,42 @@ export async function getOrCreateOAuthPlayerProfile(
         }
       }
 
+      let resolvedPhoto = (
+        existingByEmail[0].customPhotoUrl ||
+        existingByEmail[0].customAvatarUrl ||
+        ''
+      ).trim();
+      if (!resolvedPhoto) {
+        const picRows = await db
+          .select()
+          .from(profilePictures)
+          .where(eq(profilePictures.userUid, existingByEmail[0].uid));
+        if (picRows[0]?.imageDataUrl) {
+          resolvedPhoto = picRows[0].imageDataUrl;
+        }
+      }
+
       const updated = await db
         .update(users)
         .set({
           emailVerified: true,
           petState: nextPetState,
+          presenceStatus: 'online',
           lastSeenAt: new Date(),
+          ...(resolvedPhoto && !existingByEmail[0].customPhotoUrl
+            ? { customPhotoUrl: resolvedPhoto, customAvatarUrl: resolvedPhoto }
+            : {}),
         })
         .where(eq(users.uid, existingByEmail[0].uid))
         .returning();
       return {
-        profile: sanitizeUserRow(updated[0]),
-        sessionToken: createSignedSessionToken(updated[0].uid, updated[0].email),
+        profile: sanitizeUserRow(updated[0], { isOwner: true }),
+        sessionToken: createSignedSessionToken(
+          updated[0].uid,
+          updated[0].email,
+          keepSignedIn
+        ),
+        keepSignedIn,
       };
     }
 
@@ -1468,6 +1683,7 @@ export async function getOrCreateOAuthPlayerProfile(
         level: 1,
         coins: 0,
         streak: 1,
+        presenceStatus: 'online',
         petState: JSON.stringify(defaultPetState),
       })
       .onConflictDoUpdate({
@@ -1475,14 +1691,16 @@ export async function getOrCreateOAuthPlayerProfile(
         set: {
           email: cleanEmail,
           emailVerified: true,
+          presenceStatus: 'online',
           lastSeenAt: new Date(),
         },
       })
       .returning();
 
     return {
-      profile: sanitizeUserRow(result[0]),
-      sessionToken: createSignedSessionToken(result[0].uid, result[0].email),
+      profile: sanitizeUserRow(result[0], { isOwner: true }),
+      sessionToken: createSignedSessionToken(result[0].uid, result[0].email, keepSignedIn),
+      keepSignedIn,
     };
   } catch (error) {
     console.error('Database getOrCreateOAuthPlayerProfile failed:', error);
@@ -1532,8 +1750,12 @@ export async function getCoupleContextForUser(uid: string) {
       const partUserRows = row.partnerUid
         ? await db.select().from(users).where(eq(users.uid, row.partnerUid))
         : [];
-      const reqProfile = reqUserRows[0] ? sanitizeUserRow(reqUserRows[0]) : null;
-      const partProfile = partUserRows[0] ? sanitizeUserRow(partUserRows[0]) : null;
+      const reqProfile = reqUserRows[0]
+        ? sanitizeUserRow(reqUserRows[0], { isOwner: reqUserRows[0].uid === uid })
+        : null;
+      const partProfile = partUserRows[0]
+        ? sanitizeUserRow(partUserRows[0], { isOwner: partUserRows[0].uid === uid })
+        : null;
 
       const combinedXp =
         row.coupleXp + (reqProfile?.xp || 0) + (partProfile?.xp || 0);
@@ -2608,7 +2830,24 @@ export async function getArcadeBootstrapData(activeUid?: string) {
     const bracketConfig = parseSeasonalBracketConfig(activeSeason?.bracketConfigJson);
 
     const allUserRows = await db.select().from(users).orderBy(desc(users.xp));
-    const sanitizedPlayers = allUserRows.map(sanitizeUserRow);
+    const allProfilePics = await db.select().from(profilePictures);
+    const photoByUid = new Map(
+      allProfilePics
+        .filter((p) => p.imageDataUrl && p.imageDataUrl.trim().length > 0)
+        .map((p) => [p.userUid, p.imageDataUrl])
+    );
+
+    const sanitizedPlayers = allUserRows.map((u) => {
+      const fallbackPhoto =
+        u.customPhotoUrl || u.customAvatarUrl || photoByUid.get(u.uid) || '';
+      const rowWithPhoto =
+        fallbackPhoto && fallbackPhoto !== u.customPhotoUrl
+          ? { ...u, customPhotoUrl: fallbackPhoto }
+          : u;
+      return sanitizeUserRow(rowWithPhoto, {
+        isOwner: Boolean(activeUid && u.uid === activeUid),
+      });
+    });
     const userByUid = new Map(sanitizedPlayers.map((p) => [p.uid, p]));
 
     const activeCouplesRaw = await db
@@ -5269,6 +5508,7 @@ export async function get2v2CoupleTeamLobby(actorUid: string, gameId?: string) {
       uid: hostProfile.uid,
       username: hostProfile.username,
       avatar: hostProfile.avatar,
+      customPhotoUrl: hostProfile.customPhotoUrl || '',
       equippedSkin: hostProfile.equippedSkin || 'skin-classic-notebook',
       shieldCards: hostProfile.shieldCards ?? 0,
       shieldCardArmed: Boolean(hostProfile.shieldCardArmed),
@@ -5279,6 +5519,7 @@ export async function get2v2CoupleTeamLobby(actorUid: string, gameId?: string) {
       uid: partnerProfile.uid,
       username: partnerProfile.username,
       avatar: partnerProfile.avatar,
+      customPhotoUrl: partnerProfile.customPhotoUrl || '',
       equippedSkin: partnerProfile.equippedSkin || 'skin-classic-notebook',
       shieldCards: partnerProfile.shieldCards ?? 0,
       shieldCardArmed: Boolean(partnerProfile.shieldCardArmed),
@@ -6061,7 +6302,7 @@ export async function searchUsersAndCouplesForInvite(input: {
     const allUsers = await db.select().from(users).orderBy(desc(users.lastSeenAt));
     // Only include registered accounts that have completed unique arcade username setup
     const sanitizedUsers = allUsers
-      .map(sanitizeUserRow)
+      .map((row) => sanitizeUserRow(row, { isOwner: row.uid === input.actorUid }))
       .filter((u) => u.usernameSetupCompleted && u.username.trim().length >= 3);
     const userMap = new Map(sanitizedUsers.map((u) => [u.uid, u]));
 

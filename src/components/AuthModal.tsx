@@ -8,6 +8,9 @@ import {
   sendPasswordResetEmail,
   sendEmailVerification,
   signOut,
+  setPersistence,
+  browserLocalPersistence,
+  browserSessionPersistence,
 } from 'firebase/auth';
 import { auth, googleAuthProvider, syncPlayerProfileToFirestore } from '@/src/lib/firebase';
 import { HERO_BANNER_IMAGE, SkinRarity, parseTierCountMap } from '@/src/lib/arcade-data';
@@ -176,6 +179,7 @@ export function AuthModal({
   const [mode, setMode] = useState<'signin' | 'signup' | 'reset' | 'verify'>('signup');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [keepSignedIn, setKeepSignedIn] = useState<boolean>(true);
 
   // Dedicated Choose Your Username or Rename Card input (always starts empty for new username setup)
   const [newUsernameInput, setNewUsernameInput] = useState('');
@@ -281,6 +285,7 @@ export function AuthModal({
       // 2. Save the chosen username to the user's profile only after validation succeeds
       const res = await fetch('/api/arcade', {
         method: 'POST',
+        credentials: 'include',
         headers: {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${sessionToken}`,
@@ -347,6 +352,10 @@ export function AuthModal({
     setStatusMsg(null);
     setLoading(true);
     try {
+      await setPersistence(
+        auth,
+        keepSignedIn ? browserLocalPersistence : browserSessionPersistence
+      ).catch(() => {});
       const cred = await signInWithPopup(auth, googleAuthProvider);
       const idToken = await cred.user.getIdToken();
       const userEmail = cred.user.email || `${cred.user.uid}@herlittlearcade.app`;
@@ -355,6 +364,7 @@ export function AuthModal({
 
       const res = await fetch('/api/arcade', {
         method: 'POST',
+        credentials: 'include',
         headers: {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${idToken}`,
@@ -364,6 +374,7 @@ export function AuthModal({
           uid: cred.user.uid,
           email: userEmail,
           googleDisplayName,
+          keepSignedIn,
         }),
       });
       const data = await res.json();
@@ -464,6 +475,11 @@ export function AuthModal({
 
     setLoading(true);
     try {
+      await setPersistence(
+        auth,
+        keepSignedIn ? browserLocalPersistence : browserSessionPersistence
+      ).catch(() => {});
+
       if (mode === 'signup') {
         let firebaseUid: string | undefined;
         try {
@@ -476,12 +492,14 @@ export function AuthModal({
 
         const res = await fetch('/api/arcade', {
           method: 'POST',
+          credentials: 'include',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             action: 'register_email',
             email: cleanEmail,
             password,
             firebaseUid,
+            keepSignedIn,
           }),
         });
         const data = await res.json();
@@ -504,11 +522,13 @@ export function AuthModal({
 
         const res = await fetch('/api/arcade', {
           method: 'POST',
+          credentials: 'include',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             action: 'signin_email',
             email: cleanEmail,
             password,
+            keepSignedIn,
           }),
         });
         const data = await res.json();
@@ -540,6 +560,7 @@ export function AuthModal({
     try {
       const res = await fetch('/api/arcade', {
         method: 'POST',
+        credentials: 'include',
         headers: {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${sessionToken}`,
@@ -564,6 +585,15 @@ export function AuthModal({
   }
 
   async function handleSignOutClick() {
+    await fetch('/api/arcade', {
+      method: 'POST',
+      credentials: 'include',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}),
+      },
+      body: JSON.stringify({ action: 'logout' }),
+    }).catch(() => {});
     await signOut(auth).catch(() => {});
     setNewUsernameInput('');
     setNewUsernameAvail({ checking: false, available: null, reason: '' });
@@ -1018,6 +1048,28 @@ export function AuthModal({
                     className="w-full rounded-lg border border-stone-800 bg-stone-950 py-2 pl-9 pr-3 text-sm text-stone-100 focus:border-amber-500 focus:outline-none"
                   />
                 </div>
+
+                {/* Keep Me Signed In Checkbox */}
+                <label
+                  htmlFor="keep-me-signed-in-checkbox"
+                  className="mt-3 flex cursor-pointer items-start gap-2.5 rounded-lg border border-stone-800 bg-stone-950/80 p-2.5 transition-colors hover:border-stone-700"
+                >
+                  <input
+                    id="keep-me-signed-in-checkbox"
+                    type="checkbox"
+                    checked={keepSignedIn}
+                    onChange={(e) => setKeepSignedIn(e.target.checked)}
+                    className="mt-0.5 h-4 w-4 rounded border-stone-700 bg-stone-900 text-amber-500 focus:ring-amber-500"
+                  />
+                  <div className="text-xs leading-snug">
+                    <span className="font-semibold text-stone-100">Keep me signed in</span>
+                    <span className="block text-[11px] text-stone-400">
+                      {keepSignedIn
+                        ? 'Maintains your session for 30 days with rolling renewal across browser restarts.'
+                        : 'Temporary session — expires when you close the browser or after 24 hours.'}
+                    </span>
+                  </div>
+                </label>
               </div>
             )}
 

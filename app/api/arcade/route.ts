@@ -41,6 +41,8 @@ import {
   updatePlayerProfileFields,
   addPersonalizedItem,
   verifySignedSessionToken,
+  restoreAuthenticatedUserSession,
+  terminateAuthenticatedUserSession,
   updateUserPresenceHeartbeat,
   getMatchmakingStateForUser,
   enqueueMatchmaking,
@@ -72,62 +74,147 @@ import {
   testLiveKitAndVoiceDiagnostics,
 } from '@/src/db/repository';
 
+const SESSION_COOKIE_NAME = 'hla_session';
+const THIRTY_DAYS_SECONDS = 30 * 24 * 60 * 60;
+
+function attachSessionCookie(
+  req: NextRequest,
+  res: NextResponse,
+  sessionToken: string,
+  keepSignedIn: boolean
+): NextResponse {
+  const proto =
+    req.headers.get('x-forwarded-proto') ||
+    (req.url.startsWith('https://') ? 'https' : 'http');
+  const isHttps = proto === 'https' || process.env.NODE_ENV === 'production';
+
+  res.cookies.set(SESSION_COOKIE_NAME, sessionToken, {
+    httpOnly: true,
+    path: '/',
+    secure: isHttps,
+    sameSite: isHttps ? 'none' : 'lax',
+    ...(keepSignedIn ? { maxAge: THIRTY_DAYS_SECONDS } : {}),
+  });
+  return res;
+}
+
+function clearSessionCookie(req: NextRequest, res: NextResponse): NextResponse {
+  const proto =
+    req.headers.get('x-forwarded-proto') ||
+    (req.url.startsWith('https://') ? 'https' : 'http');
+  const isHttps = proto === 'https' || process.env.NODE_ENV === 'production';
+
+  res.cookies.set(SESSION_COOKIE_NAME, '', {
+    httpOnly: true,
+    path: '/',
+    secure: isHttps,
+    sameSite: isHttps ? 'none' : 'lax',
+    maxAge: 0,
+  });
+  return res;
+}
+
 async function resolveAuthenticatedIdentity(req: NextRequest): Promise<{
   uid: string;
   email: string;
+  keepSignedIn: boolean;
 } | null> {
+  const candidateTokens: string[] = [];
+
   const authHeader = req.headers.get('authorization');
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return null;
-  }
-  const token = authHeader.slice(7).trim();
-  if (!token) return null;
-
-  // 1. Check HMAC-signed server session token (hla.<payload>.<sig>)
-  const signed = verifySignedSessionToken(token);
-  if (signed) {
-    return signed;
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    const headerToken = authHeader.slice(7).trim();
+    if (headerToken) candidateTokens.push(headerToken);
   }
 
-  // 2. Check Firebase ID token
-  try {
-    const decoded = await adminAuth.verifyIdToken(token);
-    return {
-      uid: decoded.uid,
-      email: decoded.email || `${decoded.uid}@herlittlearcade.app`,
-    };
-  } catch {
-    return null;
+  const cookieToken = req.cookies.get(SESSION_COOKIE_NAME)?.value?.trim();
+  if (cookieToken && !candidateTokens.includes(cookieToken)) {
+    candidateTokens.push(cookieToken);
   }
+
+  for (const token of candidateTokens) {
+    // 1. Check HMAC-signed server session token (hla.<payload>.<sig>)
+    const signed = verifySignedSessionToken(token);
+    if (signed) {
+      return {
+        uid: signed.uid,
+        email: signed.email,
+        keepSignedIn: signed.keepSignedIn,
+      };
+    }
+
+    // 2. Check Firebase ID token
+    try {
+      const decoded = await adminAuth.verifyIdToken(token);
+      return {
+        uid: decoded.uid,
+        email: decoded.email || `${decoded.uid}@herlittlearcade.app`,
+        keepSignedIn: true,
+      };
+    } catch {
+      // try next candidate token
+    }
+  }
+
+  return null;
 }
 
 export async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
     const inspectRoomCode = searchParams.get('inspectRoom');
-    const actorUid = searchParams.get('uid') || undefined;
+    const requestedUid = searchParams.get('uid') || undefined;
+    const identity = await resolveAuthenticatedIdentity(req);
+    const verifiedUid = identity?.uid;
 
     const checkUsername = searchParams.get('checkUsername');
     if (checkUsername !== null) {
-      const check = await checkUsernameAvailability(checkUsername, actorUid);
+      const check = await checkUsernameAvailability(
+        checkUsername,
+        verifiedUid || requestedUid
+      );
       return NextResponse.json(check);
     }
 
     const mailboxParam = searchParams.get('mailbox');
-    if (mailboxParam && actorUid) {
-      const mailbox = await getMailboxForUser(actorUid);
+    if (mailboxParam) {
+      if (!verifiedUid) {
+        return NextResponse.json(
+          { error: 'Unauthorized: Sign in required to view Mailbox.' },
+          { status: 401 }
+        );
+      }
+      if (requestedUid && requestedUid !== verifiedUid) {
+        return NextResponse.json(
+          { error: 'Forbidden: Cannot access another user’s Mailbox.' },
+          { status: 403 }
+        );
+      }
+      const mailbox = await getMailboxForUser(verifiedUid);
       return NextResponse.json({ mailbox });
     }
 
     const coupleVoiceParam = searchParams.get('coupleVoice');
-    if (coupleVoiceParam && actorUid) {
-      const coupleVoiceState = await getCoupleVoiceChatState(actorUid);
+    if (coupleVoiceParam) {
+      if (!verifiedUid) {
+        return NextResponse.json(
+          { error: 'Unauthorized: Sign in required for Couple Voice Chat.' },
+          { status: 401 }
+        );
+      }
+      if (requestedUid && requestedUid !== verifiedUid) {
+        return NextResponse.json(
+          { error: 'Forbidden: Cannot access another user’s voice state.' },
+          { status: 403 }
+        );
+      }
+      const coupleVoiceState = await getCoupleVoiceChatState(verifiedUid);
       return NextResponse.json({ coupleVoiceState });
     }
 
     const diagnosticsParam = searchParams.get('diagnostics');
     if (diagnosticsParam) {
-      const diagnostics = await testLiveKitAndVoiceDiagnostics(actorUid);
+      const diagnostics = await testLiveKitAndVoiceDiagnostics(verifiedUid);
       return NextResponse.json({ diagnostics });
     }
 
@@ -142,23 +229,41 @@ export async function GET(req: NextRequest) {
       const roomsList = await listJoinablePublicRooms({
         gameId,
         mode,
-        actorUid,
+        actorUid: verifiedUid,
       });
       return NextResponse.json({ publicRooms: roomsList });
     }
 
     const teamLobby2v2 = searchParams.get('teamLobby2v2');
-    if (teamLobby2v2 && actorUid) {
+    if (teamLobby2v2) {
+      if (!verifiedUid) {
+        return NextResponse.json(
+          { error: 'Unauthorized: Sign in required for 2v2 Team Lobby.' },
+          { status: 401 }
+        );
+      }
+      if (requestedUid && requestedUid !== verifiedUid) {
+        return NextResponse.json(
+          { error: 'Forbidden: Cannot access another user’s 2v2 Team Lobby.' },
+          { status: 403 }
+        );
+      }
       const gameId = searchParams.get('gameId') || undefined;
-      const teamLobby = await get2v2CoupleTeamLobby(actorUid, gameId);
+      const teamLobby = await get2v2CoupleTeamLobby(verifiedUid, gameId);
       return NextResponse.json({ teamLobby });
     }
 
     const searchUsername = searchParams.get('searchUsername');
-    if (searchUsername !== null && actorUid) {
+    if (searchUsername !== null) {
+      if (!verifiedUid) {
+        return NextResponse.json(
+          { error: 'Unauthorized: Sign in required to search players.' },
+          { status: 401 }
+        );
+      }
       const inviteType = searchParams.get('inviteType') === '2v2' ? '2v2' : '1v1';
       const results = await searchUsersAndCouplesForInvite({
-        actorUid,
+        actorUid: verifiedUid,
         query: searchUsername,
         inviteType,
       });
@@ -166,13 +271,25 @@ export async function GET(req: NextRequest) {
     }
 
     if (inspectRoomCode) {
-      const inspection = await inspectRoomForJoin(inspectRoomCode, actorUid);
+      const inspection = await inspectRoomForJoin(inspectRoomCode, verifiedUid);
       return NextResponse.json(inspection);
     }
 
     const matchmakingStatus = searchParams.get('matchmakingStatus');
-    if (matchmakingStatus && actorUid) {
-      const state = await getMatchmakingStateForUser(actorUid);
+    if (matchmakingStatus) {
+      if (!verifiedUid) {
+        return NextResponse.json(
+          { error: 'Unauthorized: Sign in required for matchmaking status.' },
+          { status: 401 }
+        );
+      }
+      if (requestedUid && requestedUid !== verifiedUid) {
+        return NextResponse.json(
+          { error: 'Forbidden: Cannot access another user’s matchmaking status.' },
+          { status: 403 }
+        );
+      }
+      const state = await getMatchmakingStateForUser(verifiedUid);
       return NextResponse.json(state);
     }
 
@@ -182,7 +299,16 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ room });
     }
 
-    const data = await getArcadeBootstrapData(actorUid);
+    // Enforce user data isolation: if caller requested a specific ?uid= that does not match their verified session, reject with 403
+    if (requestedUid && verifiedUid && requestedUid !== verifiedUid) {
+      return NextResponse.json(
+        { error: 'Forbidden: Cannot request private bootstrap data for another user.' },
+        { status: 403 }
+      );
+    }
+
+    // Only load private user collections for the cryptographically verified user identity
+    const data = await getArcadeBootstrapData(verifiedUid);
     return NextResponse.json(data);
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : 'Failed to fetch arcade data';
@@ -204,25 +330,71 @@ export async function POST(req: NextRequest) {
       return NextResponse.json(check);
     }
 
+    if (action === 'restore_session') {
+      const identity = await resolveAuthenticatedIdentity(req);
+      if (!identity) {
+        const unauthRes = NextResponse.json({
+          authenticated: false,
+          profile: null,
+        });
+        return clearSessionCookie(req, unauthRes);
+      }
+      const restored = await restoreAuthenticatedUserSession(
+        identity.uid,
+        identity.email,
+        identity.keepSignedIn
+      );
+      if (!restored) {
+        const unauthRes = NextResponse.json({
+          authenticated: false,
+          profile: null,
+        });
+        return clearSessionCookie(req, unauthRes);
+      }
+      const res = NextResponse.json({
+        authenticated: true,
+        profile: restored.profile,
+        sessionToken: restored.sessionToken,
+        keepSignedIn: restored.keepSignedIn,
+      });
+      return attachSessionCookie(req, res, restored.sessionToken, restored.keepSignedIn);
+    }
+
+    if (action === 'logout') {
+      const identity = await resolveAuthenticatedIdentity(req);
+      if (identity?.uid) {
+        await terminateAuthenticatedUserSession(identity.uid);
+      }
+      const res = NextResponse.json({ loggedOut: true });
+      return clearSessionCookie(req, res);
+    }
+
     // Public authentication actions
     if (action === 'register_email') {
+      const keepSignedIn = body.keepSignedIn !== false;
       const out = await registerUserWithEmail({
         email: String(body.email || ''),
         password: String(body.password || ''),
         firebaseUid: body.firebaseUid ? String(body.firebaseUid) : undefined,
+        keepSignedIn,
       });
-      return NextResponse.json(out);
+      const res = NextResponse.json(out);
+      return attachSessionCookie(req, res, out.sessionToken, keepSignedIn);
     }
 
     if (action === 'signin_email') {
+      const keepSignedIn = body.keepSignedIn !== false;
       const out = await signInUserWithEmail({
         email: String(body.email || ''),
         password: String(body.password || ''),
+        keepSignedIn,
       });
-      return NextResponse.json(out);
+      const res = NextResponse.json(out);
+      return attachSessionCookie(req, res, out.sessionToken, keepSignedIn);
     }
 
     if (action === 'oauth_sync') {
+      const keepSignedIn = body.keepSignedIn !== false;
       const identity = await resolveAuthenticatedIdentity(req);
       const targetUid = identity?.uid || String(body.uid || '');
       const targetEmail = identity?.email || String(body.email || '');
@@ -235,9 +407,11 @@ export async function POST(req: NextRequest) {
       const out = await getOrCreateOAuthPlayerProfile(
         targetUid,
         targetEmail,
-        body.googleDisplayName ? String(body.googleDisplayName) : undefined
+        body.googleDisplayName ? String(body.googleDisplayName) : undefined,
+        keepSignedIn
       );
-      return NextResponse.json(out);
+      const res = NextResponse.json(out);
+      return attachSessionCookie(req, res, out.sessionToken, keepSignedIn);
     }
 
     if (action === 'request_password_reset') {
@@ -251,7 +425,8 @@ export async function POST(req: NextRequest) {
         resetToken: String(body.resetToken || ''),
         newPassword: String(body.newPassword || ''),
       });
-      return NextResponse.json(out);
+      const res = NextResponse.json(out);
+      return attachSessionCookie(req, res, out.sessionToken, true);
     }
 
     // Authenticated actions require a verified session token or Firebase ID token
@@ -294,16 +469,20 @@ export async function POST(req: NextRequest) {
         Boolean(body.applyToCouple)
       );
       const coupleContext = await getCoupleContextForUser(identity.uid);
-      return NextResponse.json({ profile, coupleContext });
+      return NextResponse.json({ profile, user: profile, coupleContext });
     }
 
     if (action === 'update_profile_photo') {
+      const rawPhotoInput =
+        body.photoDataUrl !== undefined
+          ? String(body.photoDataUrl)
+          : String(body.customPhotoUrl || '');
       const profile = await updateUserProfilePhoto(
         identity.uid,
-        String(body.customPhotoUrl || '')
+        rawPhotoInput
       );
       const coupleContext = await getCoupleContextForUser(identity.uid);
-      return NextResponse.json({ profile, coupleContext });
+      return NextResponse.json({ profile, user: profile, coupleContext });
     }
 
     if (action === 'purchase_banner') {
@@ -321,7 +500,7 @@ export async function POST(req: NextRequest) {
         Boolean(body.applyToCouple)
       );
       const coupleContext = await getCoupleContextForUser(identity.uid);
-      return NextResponse.json({ profile, coupleContext });
+      return NextResponse.json({ profile, user: profile, coupleContext });
     }
 
     if (action === 'buy_chest') {

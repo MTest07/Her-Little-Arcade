@@ -24,6 +24,7 @@ export const users = pgTable('users', {
   draws: integer('draws').notNull().default(0),
   theme: text('theme').notNull().default('twilight-cocoa'),
   equippedSkin: text('equipped_skin').notNull().default('skin-classic-notebook'),
+  customAvatarUrl: text('custom_avatar_url').notNull().default(''),
   customPhotoUrl: text('custom_photo_url').notNull().default(''),
   equippedBanner: text('equipped_banner').notNull().default('banner-warm-sketchbook'),
   unlockedBannersJson: text('unlocked_banners_json')
@@ -44,6 +45,16 @@ export const users = pgTable('users', {
   createdAt: timestamp('created_at').defaultNow(),
 });
 
+export const profilePictures = pgTable('profile_pictures', {
+  id: serial('id').primaryKey(),
+  userUid: text('user_uid').notNull().unique(),
+  mimeType: text('mime_type').notNull().default('image/webp'),
+  byteLength: integer('byte_length').notNull().default(0),
+  imageDataUrl: text('image_data_url').notNull().default(''),
+  updatedAt: timestamp('updated_at').defaultNow(),
+  createdAt: timestamp('created_at').defaultNow(),
+});
+
 export const couplePairings = pgTable('couple_pairings', {
   id: serial('id').primaryKey(),
   pairingCode: text('pairing_code').notNull().unique(),
@@ -56,6 +67,7 @@ export const couplePairings = pgTable('couple_pairings', {
   anniversaryDate: text('anniversary_date').notNull().default(''),
   coupleBio: text('couple_bio').notNull().default(''),
   coupleBanner: text('couple_banner').notNull().default('twilight-lanterns'),
+  equippedCoupleBanner: text('equipped_couple_banner').notNull().default('banner-none'),
   coupleTitle: text('couple_title').notNull().default('Newborn Duo'),
   equippedCoupleSkin: text('equipped_couple_skin').notNull().default('skin-classic-notebook'),
   coupleTrophies: integer('couple_trophies').notNull().default(0),
@@ -147,6 +159,7 @@ export const dailyChallenges = pgTable('daily_challenges', {
   completed: integer('completed').notNull().default(0),
   claimed: integer('claimed').notNull().default(0),
   xpAwarded: integer('xp_awarded').notNull().default(0),
+  keyRewardedRarity: text('key_rewarded_rarity').notNull().default('Common'),
   keyRewardTier: text('key_reward_tier').notNull().default('Common'),
   keyAwardedCount: integer('key_awarded_count').notNull().default(0),
   claimedAt: timestamp('claimed_at'),
@@ -270,13 +283,19 @@ export const coupleVoiceCalls = pgTable('couple_voice_calls', {
 export const chestOpenings = pgTable('chest_openings', {
   id: serial('id').primaryKey(),
   userUid: text('user_uid').notNull(),
-  chestTier: text('chest_tier').notNull(), // 'Common' | 'Uncommon' | 'Rare' | 'Epic' | 'Legendary'
-  openMethod: text('open_method').notNull(), // 'coins' | 'key' | 'inventory'
-  rewardCategory: text('reward_category').notNull(), // 'skin' | 'banner' | 'consumable'
+  chestId: text('chest_id').notNull().default(''),
+  chestRarity: text('chest_rarity').notNull().default('Common'),
+  chestTier: text('chest_tier').notNull().default('Common'), // 'Common' | 'Uncommon' | 'Rare' | 'Epic' | 'Legendary'
+  openMethod: text('open_method').notNull().default('coins'), // 'coins' | 'key' | 'inventory'
+  coinsSpent: integer('coins_spent').notNull().default(0),
+  keyUsedId: text('key_used_id').notNull().default(''),
+  rewardType: text('reward_type').notNull().default('skin'),
+  rewardCategory: text('reward_category').notNull().default('skin'), // 'skin' | 'banner' | 'consumable'
   rewardId: text('reward_id').notNull(),
   rewardName: text('reward_name').notNull(),
   rewardRarity: text('reward_rarity').notNull(), // 'Common' | 'Uncommon' | 'Rare' | 'Epic' | 'Legendary'
   wasDuplicate: boolean('was_duplicate').notNull().default(false),
+  bonusXpAwarded: integer('bonus_xp_awarded').notNull().default(0),
   duplicateCoinsAwarded: integer('duplicate_coins_awarded').notNull().default(0),
   createdAt: timestamp('created_at').defaultNow(),
 });

@@ -1264,7 +1264,7 @@ export function ProfilePhotoUploadAndCropModal({
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    const size = 280; // Output 280x280 crisp square avatar
+    const size = 512; // Output 512x512 crisp square optimized avatar
     canvas.width = size;
     canvas.height = size;
 
@@ -1288,11 +1288,11 @@ export function ProfilePhotoUploadAndCropModal({
     ctx.drawImage(sourceImageObj, dx, dy, drawW, drawH);
 
     try {
-      const webpUrl = canvas.toDataURL('image/webp', 0.88);
+      const webpUrl = canvas.toDataURL('image/webp', 0.85);
       if (webpUrl.startsWith('data:image/webp')) {
         setCroppedPreviewUrl(webpUrl);
       } else {
-        setCroppedPreviewUrl(canvas.toDataURL('image/jpeg', 0.9));
+        setCroppedPreviewUrl(canvas.toDataURL('image/jpeg', 0.86));
       }
     } catch {
       setCroppedPreviewUrl(canvas.toDataURL('image/png'));
@@ -1423,8 +1423,8 @@ export function ProfilePhotoUploadAndCropModal({
 
   const handlePointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
     if (!isDragging || !sourceImageObj) return;
-    const nextX = Math.max(-180, Math.min(180, e.clientX - dragStart.x));
-    const nextY = Math.max(-180, Math.min(180, e.clientY - dragStart.y));
+    const nextX = Math.max(-256, Math.min(256, e.clientX - dragStart.x));
+    const nextY = Math.max(-256, Math.min(256, e.clientY - dragStart.y));
     setPan({ x: nextX, y: nextY });
   };
 

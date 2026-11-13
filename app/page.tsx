@@ -24,6 +24,8 @@ import {
   getBannerById,
 } from '@/src/lib/arcade-data';
 import { calculateLevelFromXp } from '@/src/lib/game-rules';
+import { onAuthStateChanged, signOut } from 'firebase/auth';
+import { auth, syncPlayerProfileToFirestore } from '@/src/lib/firebase';
 import {
   AuthModal,
   PlayerProfile,
@@ -284,13 +286,10 @@ export default function HerLittleArcadePage() {
     document.documentElement.classList.toggle('dark', isDarkTheme);
   }, [isDarkTheme]);
 
-  // Smooth initial website boot transition
+  const sessionTokenRef = useRef<string>('');
   useEffect(() => {
-    const timer = setTimeout(() => {
-      setIsInitialBoot(false);
-    }, 380);
-    return () => clearTimeout(timer);
-  }, []);
+    sessionTokenRef.current = sessionToken;
+  }, [sessionToken]);
 
   // Helper to launch or switch between games with a smooth circular loading transition
   const handleLaunchGame = useCallback(
@@ -421,15 +420,16 @@ export default function HerLittleArcadePage() {
   const authFetcher = useCallback(
     async (url: string, options?: RequestInit) => {
       const headers = new Headers(options?.headers || {});
-      if (sessionToken) {
-        headers.set('Authorization', `Bearer ${sessionToken}`);
+      const activeToken = sessionToken || sessionTokenRef.current;
+      if (activeToken) {
+        headers.set('Authorization', `Bearer ${activeToken}`);
       }
-      return fetch(url, { ...options, headers });
+      return fetch(url, { ...options, credentials: 'include', headers });
     },
     [sessionToken]
   );
 
-  const loadBootstrapData = useCallback(async (uid: string) => {
+  const loadBootstrapData = useCallback(async (uid: string, tokenOverride?: string) => {
     if (!uid) return;
     const isFirstBootstrap = !hasBootstrappedOnceRef.current;
     if (isFirstBootstrap) {
@@ -437,7 +437,15 @@ export default function HerLittleArcadePage() {
     }
     setIsFetchingDatabase(true);
     try {
-      const res = await fetch(`/api/arcade?uid=${encodeURIComponent(uid)}`);
+      const activeToken = tokenOverride || sessionTokenRef.current;
+      const headers: Record<string, string> = {};
+      if (activeToken) {
+        headers.Authorization = `Bearer ${activeToken}`;
+      }
+      const res = await fetch(`/api/arcade?uid=${encodeURIComponent(uid)}`, {
+        credentials: 'include',
+        headers,
+      });
       if (!res.ok) return;
       const data = await res.json();
 
@@ -527,6 +535,82 @@ export default function HerLittleArcadePage() {
       setIsBootstrappingProfile(false);
     }
   }, []);
+
+  // Restore persistent or active session on initial website boot
+  useEffect(() => {
+    let cancelled = false;
+
+    async function restoreInitialSession() {
+      try {
+        const res = await fetch('/api/arcade', {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'restore_session' }),
+        });
+        const data = await res.json();
+        if (!cancelled && res.ok && data.authenticated && data.profile) {
+          const restoredProfile = normalizePlayerProfile(data.profile);
+          const restoredToken = String(data.sessionToken || '');
+          sessionTokenRef.current = restoredToken;
+          setSessionToken(restoredToken);
+          setCurrentUser(restoredProfile);
+          if (restoredProfile.usernameSetupCompleted && restoredProfile.username) {
+            await loadBootstrapData(restoredProfile.uid, restoredToken);
+          }
+          if (!cancelled) {
+            setIsInitialBoot(false);
+          }
+          return;
+        }
+      } catch {
+        // Fallback to Firebase Auth state check
+      }
+
+      // Fallback: Check Firebase Auth persistence if cookie was partitioned
+      const unsubscribe = onAuthStateChanged(auth, async (fbUser) => {
+        unsubscribe();
+        if (cancelled) return;
+        if (fbUser) {
+          try {
+            const idToken = await fbUser.getIdToken();
+            const res = await fetch('/api/arcade', {
+              method: 'POST',
+              credentials: 'include',
+              headers: {
+                'Content-Type': 'application/json',
+                Authorization: `Bearer ${idToken}`,
+              },
+              body: JSON.stringify({
+                action: 'restore_session',
+              }),
+            });
+            const data = await res.json();
+            if (!cancelled && res.ok && data.authenticated && data.profile) {
+              const restoredProfile = normalizePlayerProfile(data.profile);
+              const restoredToken = String(data.sessionToken || idToken);
+              sessionTokenRef.current = restoredToken;
+              setSessionToken(restoredToken);
+              setCurrentUser(restoredProfile);
+              if (restoredProfile.usernameSetupCompleted && restoredProfile.username) {
+                await loadBootstrapData(restoredProfile.uid, restoredToken);
+              }
+            }
+          } catch {
+            // Non-fatal
+          }
+        }
+        if (!cancelled) {
+          setIsInitialBoot(false);
+        }
+      });
+    }
+
+    restoreInitialSession();
+    return () => {
+      cancelled = true;
+    };
+  }, [loadBootstrapData]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -982,6 +1066,7 @@ export default function HerLittleArcadePage() {
     if (!currentUser || !sessionToken) return;
     const res = await fetch('/api/arcade', {
       method: 'POST',
+      credentials: 'include',
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${sessionToken}`,
@@ -997,15 +1082,17 @@ export default function HerLittleArcadePage() {
       throw new Error(data.error || 'Could not update profile picture.');
     }
     if (data.user) {
-      setCurrentUser(normalizePlayerProfile(data.user));
+      const updated = normalizePlayerProfile(data.user);
+      setCurrentUser(updated);
+      await syncPlayerProfileToFirestore(updated).catch(() => {});
     }
     setRewardStatusBanner(
       croppedDataUrl
-        ? 'Updated your custom profile picture! Your equipped skin frame & banner remain untouched.'
+        ? 'Updated your custom profile picture! Saved to your persistent database profile.'
         : 'Removed custom profile picture and restored your default avatar.'
     );
     soundFX.playSuccess();
-    await loadBootstrapData(currentUser.uid);
+    await loadBootstrapData(currentUser.uid, sessionToken);
   }
 
   async function handlePurchaseBanner(bannerId: string) {
@@ -1366,21 +1453,23 @@ export default function HerLittleArcadePage() {
           currentUser={currentUser}
           sessionToken={sessionToken}
           onAuthenticated={(profile, token, verifyCode) => {
+            sessionTokenRef.current = token;
             setSessionToken(token);
             setCurrentUser(profile);
             if (verifyCode) setVerificationCodeHint(verifyCode);
             if (profile.usernameSetupCompleted && profile.username) {
-              loadBootstrapData(profile.uid);
+              loadBootstrapData(profile.uid, token);
             }
           }}
           onProfileUpdated={(updatedProfile) => {
             setCurrentUser(updatedProfile);
             if (updatedProfile.usernameSetupCompleted && updatedProfile.username) {
-              loadBootstrapData(updatedProfile.uid);
+              loadBootstrapData(updatedProfile.uid, sessionTokenRef.current);
             }
           }}
           onLogout={() => {
             hasBootstrappedOnceRef.current = false;
+            sessionTokenRef.current = '';
             setCurrentUser(null);
             setSessionToken('');
           }}
@@ -1482,7 +1571,19 @@ export default function HerLittleArcadePage() {
           }
         }}
         onOpenAccountModal={() => setAuthModalOpen(true)}
-        onLogout={() => {
+        onLogout={async () => {
+          await fetch('/api/arcade', {
+            method: 'POST',
+            credentials: 'include',
+            headers: {
+              'Content-Type': 'application/json',
+              ...(sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}),
+            },
+            body: JSON.stringify({ action: 'logout' }),
+          }).catch(() => {});
+          await signOut(auth).catch(() => {});
+          hasBootstrappedOnceRef.current = false;
+          sessionTokenRef.current = '';
           setCurrentUser(null);
           setSessionToken('');
           setActiveRoom(null);
@@ -4140,7 +4241,9 @@ export default function HerLittleArcadePage() {
           uid: currentUser.uid,
           username: currentUser.username,
           avatar: currentUser.avatar,
+          customPhotoUrl: currentUser.customPhotoUrl,
           equippedSkin: currentUser.equippedSkin,
+          equippedBanner: currentUser.equippedBanner,
           shieldCards: currentUser.shieldCards,
           shieldCardArmed: currentUser.shieldCardArmed,
         }}
@@ -4161,6 +4264,7 @@ export default function HerLittleArcadePage() {
                       uid: pairedPartnerProfile.uid,
                       username: pairedPartnerProfile.username,
                       avatar: pairedPartnerProfile.avatar,
+                      customPhotoUrl: pairedPartnerProfile.customPhotoUrl,
                       equippedSkin: pairedPartnerProfile.equippedSkin,
                       presenceStatus: pairedPartnerProfile.presenceStatus,
                     }
@@ -4200,7 +4304,7 @@ export default function HerLittleArcadePage() {
           setActiveSection('profile');
           smoothScrollToTop();
         }}
-        onShieldCardUpdated={() => loadBootstrapData(currentUser.uid)}
+        onShieldCardUpdated={() => loadBootstrapData(currentUser.uid, sessionToken)}
       />
 
       {/* Account Management Modal (when already authenticated) */}
@@ -4211,16 +4315,19 @@ export default function HerLittleArcadePage() {
         currentUser={currentUser}
         sessionToken={sessionToken}
         onAuthenticated={(profile, token, verifyCode) => {
+          sessionTokenRef.current = token;
           setSessionToken(token);
           setCurrentUser(profile);
           if (verifyCode) setVerificationCodeHint(verifyCode);
-          loadBootstrapData(profile.uid);
+          loadBootstrapData(profile.uid, token);
         }}
         onProfileUpdated={(updated) => {
           setCurrentUser(updated);
-          loadBootstrapData(updated.uid);
+          loadBootstrapData(updated.uid, sessionTokenRef.current);
         }}
         onLogout={() => {
+          hasBootstrappedOnceRef.current = false;
+          sessionTokenRef.current = '';
           setCurrentUser(null);
           setSessionToken('');
           setActiveRoom(null);

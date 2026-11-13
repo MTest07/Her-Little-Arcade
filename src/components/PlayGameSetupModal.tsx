@@ -97,6 +97,7 @@ export interface CoupleTeamLobbyState {
     uid: string;
     username: string;
     avatar: string;
+    customPhotoUrl?: string;
     equippedSkin: string;
     isOnline: boolean;
     ready: boolean;
@@ -107,6 +108,7 @@ export interface CoupleTeamLobbyState {
     uid: string;
     username: string;
     avatar: string;
+    customPhotoUrl?: string;
     equippedSkin: string;
     isOnline: boolean;
     ready: boolean;
@@ -1352,9 +1354,12 @@ export function PlayGameSetupModal({
                   {/* Member 1: Current User */}
                   <div className="p-3.5 rounded-2xl bg-white border-2 border-[#2C2523] flex items-center justify-between gap-3">
                     <div className="flex items-center gap-3 min-w-0">
-                      <div className="w-12 h-12 rounded-2xl bg-[#FDFBF7] border-2 border-[#2C2523] flex items-center justify-center text-2xl shrink-0">
-                        {currentUser.avatar || '🦊'}
-                      </div>
+                      <AnimatedSkinnedAvatar
+                        avatarId={currentUser.avatar || 'kitsune'}
+                        customPhotoUrl={currentUser.customPhotoUrl}
+                        skinId={currentUser.equippedSkin}
+                        size="md"
+                      />
                       <div className="min-w-0">
                         <div className="flex items-center gap-1.5">
                           <span className="font-bold text-sm text-[#2C2523] truncate">
@@ -1386,9 +1391,12 @@ export function PlayGameSetupModal({
                     {pairedPartner ? (
                       <>
                         <div className="flex items-center gap-3 min-w-0">
-                          <div className="w-12 h-12 rounded-2xl bg-[#FDFBF7] border-2 border-[#2C2523] flex items-center justify-center text-2xl shrink-0">
-                            {pairedPartner.avatar || '🐼'}
-                          </div>
+                          <AnimatedSkinnedAvatar
+                            avatarId={pairedPartner.avatar || 'star-cat'}
+                            customPhotoUrl={pairedPartner.customPhotoUrl}
+                            skinId={pairedPartner.equippedSkin}
+                            size="md"
+                          />
                           <div className="min-w-0">
                             <div className="flex items-center gap-1.5 flex-wrap">
                               <span className="font-bold text-sm text-[#2C2523] truncate">
