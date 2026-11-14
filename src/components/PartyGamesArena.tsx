@@ -469,7 +469,7 @@ export default function PartyGamesArena({
     text: string;
   } | null>(null);
   const [copiedCode, setCopiedCode] = useState(false);
-  const [targetSeedCouples, setTargetSeedCouples] = useState<number>(4);
+  const [inviteCoupleUsername, setInviteCoupleUsername] = useState<string>('');
 
   // Local interactive states for specific party games
   const [selectedOptionIdx, setSelectedOptionIdx] = useState<number | null>(null);
@@ -864,35 +864,35 @@ export default function PartyGamesArena({
     }
   };
 
-  const handleSeedReadyCouples = async () => {
-    if (!activeRoom) return;
-    setBusyAction('seed');
+  const handleInviteCoupleToParty = async () => {
+    if (!activeRoom || !inviteCoupleUsername.trim()) return;
+    setBusyAction('invite-couple');
     setStatusMessage(null);
     try {
       const res = await authFetcher('/api/arcade', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          action: 'seed_demo_party_couples',
+          action: 'send_game_invitation',
+          inviteType: 'party',
+          targetUsername: inviteCoupleUsername.trim().replace(/^@/, ''),
+          gameId: activePartyGame.id,
           roomCode: activeRoom.roomCode,
-          targetCouples: targetSeedCouples,
         }),
       });
       const data = await res.json();
       if (!res.ok) {
-        throw new Error(data.error || 'Could not sync ready couples.');
+        throw new Error(data.error || 'Could not send Party invitation.');
       }
-      if (data.room) {
-        onRoomUpdated(data.room);
-        setStatusMessage({
-          type: 'success',
-          text: `Synced your partner & filled ${targetSeedCouples} Ready Couples (${targetSeedCouples * 2} players)!`,
-        });
-      }
+      setInviteCoupleUsername('');
+      setStatusMessage({
+        type: 'success',
+        text: `Party invitation sent! Both partners of that couple can accept from their Mailbox or join via Room #${activeRoom.roomCode}.`,
+      });
     } catch (err: unknown) {
       setStatusMessage({
         type: 'error',
-        text: err instanceof Error ? err.message : 'Failed to sync party couples.',
+        text: err instanceof Error ? err.message : 'Failed to send Party invitation.',
       });
     } finally {
       setBusyAction(null);
@@ -1040,35 +1040,6 @@ export default function PartyGamesArena({
         submittedAt: partyState.roundIndex + 1,
       },
     };
-
-    // Also simulate realistic rival couple scores when seeded couples are present so the scoreboard is competitive
-    for (const slot of coupleSlots) {
-      if (slot.coupleId !== activeCouple.id) {
-        const rivalSubKey = `${partyState.roundIndex}_rival_${slot.coupleId}`;
-        if (!updatedSubmissions[rivalSubKey]) {
-          const seedVal =
-            ((activeRoom.sessionSeed || 101) +
-              partyState.roundIndex * 17 +
-              slot.coupleId * 31) %
-            100;
-          const rivalPts = seedVal > 30 ? 80 + (seedVal % 50) : 40;
-          updatedCoupleScores[String(slot.coupleId)] =
-            Number(updatedCoupleScores[String(slot.coupleId)] || 0) + rivalPts;
-          for (const m of slot.members) {
-            updatedPartnerScores[m.uid] =
-              Number(updatedPartnerScores[m.uid] || 0) + Math.round(rivalPts / 2);
-          }
-          updatedSubmissions[rivalSubKey] = {
-            coupleId: slot.coupleId,
-            uid: slot.members[0]?.uid || `rival_${slot.coupleId}`,
-            username: slot.coupleName,
-            answer: 'Synced Couple Submission',
-            pointsAwarded: rivalPts,
-            submittedAt: partyState.roundIndex + 1,
-          };
-        }
-      }
-    }
 
     const nextGameState: PartySessionGameState = {
       ...partyState,
@@ -1608,29 +1579,20 @@ export default function PartyGamesArena({
                 </select>
 
                 <div className="flex items-center gap-1.5 bg-[#FDFBF7] px-3 py-1.5 rounded-2xl border-2 border-[#2C2523]">
-                  <span className="text-[11px] font-bold text-[#6B5E58]">
-                    Target Couples:
-                  </span>
-                  <select
-                    value={targetSeedCouples}
-                    onChange={(e) => setTargetSeedCouples(Number(e.target.value))}
-                    className="bg-transparent text-xs font-black text-[#2C2523] focus:outline-none"
-                  >
-                    {[3, 4, 5, 6, 8, 10].map((cnt) => (
-                      <option key={cnt} value={cnt}>
-                        {cnt} Couples ({cnt * 2} Players)
-                      </option>
-                    ))}
-                  </select>
+                  <input
+                    type="text"
+                    value={inviteCoupleUsername}
+                    onChange={(e) => setInviteCoupleUsername(e.target.value)}
+                    placeholder="Invite couple @username..."
+                    className="bg-transparent text-xs font-bold text-[#2C2523] placeholder:text-[#6B5E58]/70 focus:outline-none w-36"
+                  />
                   <button
                     type="button"
-                    disabled={busyAction === 'seed'}
-                    onClick={handleSeedReadyCouples}
-                    className="ml-1 px-3 py-1.5 rounded-xl bg-[#E3E8FF] hover:bg-[#D0D8FF] border border-[#2C2523] text-[11px] font-black text-[#3B4CCA]"
+                    disabled={busyAction === 'invite-couple' || !inviteCoupleUsername.trim()}
+                    onClick={handleInviteCoupleToParty}
+                    className="ml-1 px-3 py-1.5 rounded-xl bg-[#E3E8FF] hover:bg-[#D0D8FF] border border-[#2C2523] text-[11px] font-black text-[#3B4CCA] disabled:opacity-45"
                   >
-                    {busyAction === 'seed'
-                      ? 'Syncing...'
-                      : 'Sync Partner & Fill Ready Couples'}
+                    {busyAction === 'invite-couple' ? 'Sending...' : 'Invite Couple'}
                   </button>
                 </div>
               </>

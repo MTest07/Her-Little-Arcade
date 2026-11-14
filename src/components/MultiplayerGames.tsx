@@ -28,11 +28,11 @@ import {
 } from '@/src/lib/game-randomizer';
 import { PersonalizedItemRecord } from './SinglePlayerGames';
 import { soundFX } from '@/src/lib/sound';
+import { AnimatedSkinnedAvatar } from './CosmeticAvatarAndBanner';
+import { MultiplayerRoomState, RoomCoupleTeam } from './VoiceAndLobbyDock';
 import {
   ArrowLeft,
   Play,
-  Pause,
-  RotateCcw,
   Eraser,
   Compass,
   UtensilsCrossed,
@@ -42,14 +42,24 @@ import {
   Crosshair,
   Sparkles,
   Shuffle,
+  Users,
+  Wifi,
+  WifiOff,
+  ShieldCheck,
 } from 'lucide-react';
-
-import { RoomCoupleTeam } from './VoiceAndLobbyDock';
 
 interface MultiplayerGamesProps {
   gameId: string;
   playerName: string;
   partnerName: string;
+  currentUser?: {
+    uid: string;
+    username: string;
+    avatar: string;
+    customPhotoUrl?: string;
+    equippedSkin?: string;
+  };
+  activeRoom?: MultiplayerRoomState | null;
   roomMode?: '1v1' | '2v2';
   roomTeams?: RoomCoupleTeam[];
   roomGameState?: Record<string, unknown>;
@@ -72,6 +82,8 @@ export function MultiplayerGameArena({
   gameId,
   playerName,
   partnerName,
+  currentUser,
+  activeRoom,
   roomMode = '1v1',
   roomTeams = [],
   roomGameState,
@@ -84,14 +96,23 @@ export function MultiplayerGameArena({
   const gameDef =
     MULTIPLAYER_GAMES.find((g) => g.id === gameId) || MULTIPLAYER_GAMES[0];
 
-  const [shellState, setShellState] = useState<'title' | 'playing' | 'paused' | 'gameover'>(
-    autostart ? 'playing' : 'title'
+  const effectiveRoomState = (activeRoom?.gameState || roomGameState || {}) as Record<
+    string,
+    unknown
+  >;
+
+  const [shellState, setShellState] = useState<'title' | 'playing' | 'gameover'>(
+    autostart || activeRoom?.status === 'playing' ? 'playing' : 'title'
   );
   const [selectedMatchMode, setSelectedMatchMode] = useState<'1v1' | '2v2'>(
-    gameDef.supports2v2 && roomMode === '2v2' ? '2v2' : '1v1'
+    gameDef.supports2v2 && (activeRoom?.mode === '2v2' || roomMode === '2v2')
+      ? '2v2'
+      : '1v1'
   );
   const effectiveMode: '1v1' | '2v2' =
-    gameDef.supports2v2 && selectedMatchMode === '2v2' ? '2v2' : '1v1';
+    gameDef.supports2v2 && (activeRoom?.mode === '2v2' || selectedMatchMode === '2v2')
+      ? '2v2'
+      : '1v1';
 
   const [score, setScore] = useState<number>(0);
   const [partnerScore, setPartnerScore] = useState<number>(0);
@@ -100,12 +121,47 @@ export function MultiplayerGameArena({
   const [outcomeText, setOutcomeText] = useState<string>('Match Complete!');
   const [musicActive, setMusicActive] = useState<boolean>(soundFX.musicEnabled);
 
-  const sessionSeed = Number(roomGameState?.sessionSeed || localSeed);
+  const lastRecordedSeedRef = useRef<string>('');
 
-  const team1Name =
-    roomTeams[0]?.coupleName || `${playerName} & ${partnerName}`;
-  const team2Name =
-    roomTeams[1]?.coupleName || 'Challenger Couple';
+  const sessionSeed = Number(effectiveRoomState.sessionSeed || localSeed);
+
+  const roomPlayers = activeRoom?.players || [];
+  const effectiveTeams = activeRoom?.teams?.length ? activeRoom.teams : roomTeams;
+
+  // Determine human slots (Slot 1 vs Slot 2)
+  const slot1Player =
+    roomPlayers.find((p) => p.uid === activeRoom?.hostUid) || roomPlayers[0] || null;
+  const slot2Player =
+    roomPlayers.find((p) => p.uid !== slot1Player?.uid) || roomPlayers[1] || null;
+
+  const mySlot: 1 | 2 = (() => {
+    if (!currentUser?.uid) return 1;
+    if (effectiveMode === '2v2' && effectiveTeams.length >= 2) {
+      if (effectiveTeams[1]?.members?.some((m) => m.uid === currentUser.uid)) {
+        return 2;
+      }
+      return 1;
+    }
+    if (slot2Player?.uid === currentUser.uid) return 2;
+    return 1;
+  })();
+
+  const minHumanPlayersRequired = effectiveMode === '2v2' ? 4 : 2;
+  const allHumanPlayersJoined = roomPlayers.length >= minHumanPlayersRequired;
+
+  const slot1Label =
+    effectiveMode === '2v2'
+      ? effectiveTeams[0]?.coupleName || `${playerName} & ${partnerName}`
+      : slot1Player?.username
+      ? `@${slot1Player.username}`
+      : `@${playerName}`;
+
+  const slot2Label =
+    effectiveMode === '2v2'
+      ? effectiveTeams[1]?.coupleName || 'Opponent Couple'
+      : slot2Player?.username
+      ? `@${slot2Player.username}`
+      : `@${partnerName}`;
 
   useEffect(() => {
     if (typeof document !== 'undefined') {
@@ -113,17 +169,179 @@ export function MultiplayerGameArena({
     }
   }, [shellState]);
 
+  // Synchronize live scores and shared gameover state across all connected human players
+  useEffect(() => {
+    const s1 =
+      typeof effectiveRoomState.p1Score === 'number'
+        ? effectiveRoomState.p1Score
+        : null;
+    const s2 =
+      typeof effectiveRoomState.p2Score === 'number'
+        ? effectiveRoomState.p2Score
+        : null;
+    if (s1 !== null || s2 !== null) {
+      Promise.resolve().then(() => {
+        if (s1 !== null) setScore(mySlot === 1 ? s1 : s2 ?? 0);
+        if (s2 !== null) setPartnerScore(mySlot === 1 ? s2 : s1 ?? 0);
+      });
+    }
+
+    const incomingOutcome = effectiveRoomState.matchOutcome as
+      | {
+          seed?: number;
+          winnerSlot?: 1 | 2 | 'draw' | 'coop';
+          p1Score?: number;
+          p2Score?: number;
+          summaryText?: string;
+        }
+      | undefined;
+
+    if (
+      incomingOutcome &&
+      Number(incomingOutcome.seed) === sessionSeed &&
+      lastRecordedSeedRef.current !== `${gameDef.id}:${sessionSeed}`
+    ) {
+      lastRecordedSeedRef.current = `${gameDef.id}:${sessionSeed}`;
+      const myRes: 'win' | 'loss' | 'draw' | 'completed' =
+        incomingOutcome.winnerSlot === 'coop'
+          ? 'completed'
+          : incomingOutcome.winnerSlot === 'draw'
+          ? 'draw'
+          : incomingOutcome.winnerSlot === mySlot
+          ? 'win'
+          : 'loss';
+
+      const myFinalScore =
+        mySlot === 1
+          ? Number(incomingOutcome.p1Score ?? score)
+          : Number(incomingOutcome.p2Score ?? partnerScore);
+      const summary = String(incomingOutcome.summaryText || 'Match Complete!');
+
+      Promise.resolve().then(() => {
+        setScore(myFinalScore);
+        setLastResult(myRes);
+        setOutcomeText(summary);
+        setShellState('gameover');
+        soundFX.playFanfare();
+
+        const recordedMode =
+          effectiveMode === '2v2'
+            ? '2v2_couple'
+            : gameDef.category === 'cooperative'
+            ? 'cooperative'
+            : '1v1';
+        const earnedXp =
+          effectiveMode === '2v2' ? gameDef.xpReward + 10 : gameDef.xpReward;
+        const earnedCoins =
+          effectiveMode === '2v2'
+            ? myRes === 'win' || myRes === 'completed'
+              ? 25
+              : myRes === 'draw'
+              ? 12
+              : 8
+            : 0;
+
+        onMatchFinished(
+          gameDef.id,
+          recordedMode,
+          myRes,
+          myFinalScore,
+          earnedXp,
+          earnedCoins,
+          {
+            sessionSeed,
+            matchMode: effectiveMode,
+            team1: slot1Label,
+            team2: slot2Label,
+            team1Score: incomingOutcome.p1Score ?? 0,
+            team2Score: incomingOutcome.p2Score ?? 0,
+          }
+        );
+      });
+    } else if (
+      !incomingOutcome &&
+      shellState === 'gameover' &&
+      activeRoom?.status === 'playing'
+    ) {
+      Promise.resolve().then(() => {
+        setShellState('playing');
+      });
+    }
+  }, [
+    effectiveRoomState,
+    sessionSeed,
+    mySlot,
+    gameDef.id,
+    gameDef.category,
+    gameDef.xpReward,
+    effectiveMode,
+    slot1Label,
+    slot2Label,
+    score,
+    partnerScore,
+    shellState,
+    activeRoom?.status,
+    onMatchFinished,
+  ]);
+
+  function handleSyncScores(slot1Pts: number, slot2Pts: number) {
+    setScore(mySlot === 1 ? slot1Pts : slot2Pts);
+    setPartnerScore(mySlot === 1 ? slot2Pts : slot1Pts);
+    if (onSyncRoomGameState) {
+      onSyncRoomGameState({
+        p1Score: slot1Pts,
+        p2Score: slot2Pts,
+      });
+    }
+  }
+
   function finishMatch(
-    result: 'win' | 'loss' | 'draw' | 'completed',
+    resultFromCallerPerspective: 'win' | 'loss' | 'draw' | 'completed',
     finalScore: number,
     summaryText: string,
     details?: Record<string, unknown>
   ) {
+    const winnerSlot: 1 | 2 | 'draw' | 'coop' =
+      resultFromCallerPerspective === 'completed'
+        ? 'coop'
+        : resultFromCallerPerspective === 'draw'
+        ? 'draw'
+        : resultFromCallerPerspective === 'win'
+        ? mySlot
+        : mySlot === 1
+        ? 2
+        : 1;
+
+    const p1Final =
+      mySlot === 1 ? finalScore : Number(details?.opponentScore ?? partnerScore);
+    const p2Final =
+      mySlot === 2 ? finalScore : Number(details?.opponentScore ?? partnerScore);
+
+    if (onSyncRoomGameState) {
+      onSyncRoomGameState({
+        p1Score: p1Final,
+        p2Score: p2Final,
+        matchOutcome: {
+          seed: sessionSeed,
+          winnerSlot,
+          p1Score: p1Final,
+          p2Score: p2Final,
+          summaryText,
+        },
+      });
+    }
+
+    if (lastRecordedSeedRef.current === `${gameDef.id}:${sessionSeed}`) {
+      return;
+    }
+    lastRecordedSeedRef.current = `${gameDef.id}:${sessionSeed}`;
+
     setScore(finalScore);
-    setLastResult(result);
+    setLastResult(resultFromCallerPerspective);
     setOutcomeText(summaryText);
     setShellState('gameover');
     soundFX.playFanfare();
+
     const recordedMode =
       effectiveMode === '2v2'
         ? '2v2_couple'
@@ -134,16 +352,17 @@ export function MultiplayerGameArena({
       effectiveMode === '2v2' ? gameDef.xpReward + 10 : gameDef.xpReward;
     const earnedCoins =
       effectiveMode === '2v2'
-        ? result === 'win' || result === 'completed'
+        ? resultFromCallerPerspective === 'win' ||
+          resultFromCallerPerspective === 'completed'
           ? 25
-          : result === 'draw'
+          : resultFromCallerPerspective === 'draw'
           ? 12
           : 8
         : 0;
     onMatchFinished(
       gameDef.id,
       recordedMode,
-      result,
+      resultFromCallerPerspective,
       finalScore,
       earnedXp,
       earnedCoins,
@@ -151,12 +370,51 @@ export function MultiplayerGameArena({
         ...details,
         sessionSeed,
         matchMode: effectiveMode,
-        team1: effectiveMode === '2v2' ? team1Name : playerName,
-        team2: effectiveMode === '2v2' ? team2Name : partnerName,
-        team1Score: finalScore,
-        team2Score: partnerScore,
+        team1: slot1Label,
+        team2: slot2Label,
+        team1Score: p1Final,
+        team2Score: p2Final,
       }
     );
+  }
+
+  function triggerFreshSession() {
+    const freshSeed = generateFreshGameSeed();
+    setLocalSeed(freshSeed);
+    setScore(0);
+    setPartnerScore(0);
+    setShellState('playing');
+    soundFX.playSuccess();
+    if (onSyncRoomGameState) {
+      onSyncRoomGameState({
+        sessionSeed: freshSeed,
+        p1Score: 0,
+        p2Score: 0,
+        matchOutcome: null,
+        tttBoard: null,
+        tttTurn: null,
+        c4Grid: null,
+        c4Turn: null,
+        bsFleets: null,
+        bsShots: null,
+        bsTurn: null,
+        dgStrokes: [],
+        dgPromptIdx: 0,
+        qbQuestionIdx: 0,
+        wbFoundWords: [],
+        rrTimesBySlot: {},
+        todCardIdx: 0,
+        todCompletedCount: 0,
+        holCurrentVal: null,
+        holHistory: null,
+        mazePos: [0, 0],
+        mazeGateUnlocked: false,
+        cookStepIdx: 0,
+        cookDishesServed: 0,
+        jigsawTiles: null,
+        treasureDug: {},
+      });
+    }
   }
 
   return (
@@ -173,14 +431,23 @@ export function MultiplayerGameArena({
             <span>Arcade Hub</span>
           </button>
           <div>
-            <h2 className="text-lg font-bold tracking-tight text-stone-100">
-              {gameDef.title}
-            </h2>
+            <div className="flex items-center gap-2 flex-wrap">
+              <h2 className="text-lg font-bold tracking-tight text-stone-100">
+                {gameDef.title}
+              </h2>
+              {activeRoom?.roomCode && (
+                <span className="rounded-md border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 font-mono text-[11px] font-bold text-amber-300">
+                  Room #{activeRoom.roomCode}
+                </span>
+              )}
+              <span className="inline-flex items-center gap-1 rounded-md border border-teal-500/40 bg-teal-500/10 px-2 py-0.5 text-[10px] font-bold text-teal-200">
+                <ShieldCheck className="h-3 w-3 text-teal-400" />
+                <span>Human Multiplayer · Zero Bots</span>
+              </span>
+            </div>
             <p className="text-xs text-stone-400">
-              {effectiveMode === '2v2' ? '2v2 Couple Mode' : '1v1 Mode'} · {gameDef.category} ·{' '}
-              {effectiveMode === '2v2'
-                ? `${team1Name} vs ${team2Name}`
-                : `${playerName} & ${partnerName}`}
+              {effectiveMode === '2v2' ? '2v2 Couple Mode' : '1v1 Partner Duel'} ·{' '}
+              {gameDef.category} · {slot1Label} vs {slot2Label}
             </p>
           </div>
         </div>
@@ -188,14 +455,14 @@ export function MultiplayerGameArena({
         <div className="flex flex-wrap items-center gap-2.5">
           <div className="flex items-center gap-3 rounded-xl border border-stone-800 bg-stone-950 px-3.5 py-1.5 font-mono text-xs tabular-nums">
             <span>
-              {effectiveMode === '2v2' ? team1Name : playerName}:{' '}
+              You ({mySlot === 1 ? slot1Label : slot2Label}):{' '}
               <strong className="text-amber-300">{score}</strong>
             </span>
             <span aria-hidden="true" className="text-stone-700">
               ·
             </span>
             <span>
-              {effectiveMode === '2v2' ? team2Name : partnerName}:{' '}
+              {mySlot === 1 ? slot2Label : slot1Label}:{' '}
               <strong className="text-teal-300">{partnerScore}</strong>
             </span>
           </div>
@@ -212,146 +479,162 @@ export function MultiplayerGameArena({
             <Music className="h-3.5 w-3.5" />
             <span>{musicActive ? 'BGM ON' : 'BGM OFF'}</span>
           </button>
-
-          {shellState === 'playing' && (
-            <button
-              type="button"
-              onClick={() => setShellState('paused')}
-              aria-label="Pause Multiplayer Game"
-              className="flex items-center gap-1.5 rounded-lg border border-stone-700 bg-stone-950 px-3 py-1.5 text-xs font-medium text-stone-200 hover:bg-stone-800 whitespace-nowrap shrink-0"
-            >
-              <Pause className="h-3.5 w-3.5" />
-              <span>Pause</span>
-            </button>
-          )}
         </div>
       </div>
 
-      {/* 2v2 COUPLE TEAMS BANNER */}
-      {effectiveMode === '2v2' && (
+      {/* LIVE HUMAN PARTICIPANTS STRIP (1v1 or 2v2) */}
+      {effectiveMode === '1v1' ? (
+        <div className="grid grid-cols-1 gap-3 rounded-xl border border-stone-800 bg-stone-950/90 p-3 text-xs sm:grid-cols-2">
+          {[
+            { slot: 1 as const, player: slot1Player, fallbackName: playerName },
+            { slot: 2 as const, player: slot2Player, fallbackName: partnerName },
+          ].map(({ slot, player, fallbackName }) => {
+            const isOnline = player ? player.isOnline !== false : false;
+            return (
+              <div
+                key={slot}
+                className="flex items-center justify-between rounded-lg border border-stone-800 bg-stone-900 px-3 py-2"
+              >
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <AnimatedSkinnedAvatar
+                    avatarId={player?.avatar || (slot === 1 ? '🦊' : '🐼')}
+                    customPhotoUrl={player?.customPhotoUrl}
+                    skinId={player?.equippedSkin}
+                    size="sm"
+                  />
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-1.5">
+                      <span className="font-bold text-stone-100 truncate">
+                        @{player?.username || fallbackName}
+                      </span>
+                      {mySlot === slot && (
+                        <span className="rounded bg-amber-500/20 px-1.5 py-0.5 text-[10px] font-bold text-amber-300">
+                          You (Slot {slot})
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-1 text-[11px] text-stone-400">
+                      {player ? (
+                        isOnline ? (
+                          <span className="inline-flex items-center gap-1 text-emerald-300">
+                            <Wifi className="h-3 w-3" /> Online in Room
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 text-amber-300">
+                            <WifiOff className="h-3 w-3" /> Disconnected · Reconnecting...
+                          </span>
+                        )
+                      ) : (
+                        <span className="text-amber-300">
+                          Waiting for human player to accept invite...
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+                <div className="font-mono text-sm font-bold text-amber-300 tabular-nums">
+                  {mySlot === slot ? score : partnerScore} pts
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      ) : (
         <div className="grid grid-cols-1 gap-3 rounded-xl border border-rose-500/30 bg-stone-950/90 p-3 text-xs sm:grid-cols-2">
-          <div className="flex items-center justify-between rounded-lg border border-stone-800 bg-stone-900 px-3 py-2">
-            <div>
-              <div className="text-[11px] font-semibold text-amber-300">Couple Team 1</div>
-              <div className="font-bold text-stone-100">{team1Name}</div>
-              <div className="text-[11px] text-stone-400">
-                🦊 {playerName} &amp; 🐱 {partnerName}
+          {[0, 1].map((tIdx) => {
+            const team = effectiveTeams[tIdx];
+            const slotNum = (tIdx + 1) as 1 | 2;
+            return (
+              <div
+                key={tIdx}
+                className="flex items-center justify-between rounded-lg border border-stone-800 bg-stone-900 px-3 py-2"
+              >
+                <div className="min-w-0">
+                  <div
+                    className={`text-[11px] font-semibold ${
+                      tIdx === 0 ? 'text-amber-300' : 'text-teal-300'
+                    }`}
+                  >
+                    Couple Team {slotNum} {mySlot === slotNum ? '· Your Couple' : ''}
+                  </div>
+                  <div className="font-bold text-stone-100 truncate">
+                    {team?.coupleName || (tIdx === 0 ? slot1Label : slot2Label)}
+                  </div>
+                  <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-stone-300">
+                    {team?.members?.length ? (
+                      team.members.map((m) => (
+                        <span
+                          key={m.uid}
+                          className="inline-flex items-center gap-1 rounded bg-stone-950 px-2 py-0.5"
+                        >
+                          <span>@{m.username}</span>
+                          <span
+                            className={`h-1.5 w-1.5 rounded-full ${
+                              m.isOnline !== false ? 'bg-emerald-400' : 'bg-amber-400'
+                            }`}
+                          />
+                        </span>
+                      ))
+                    ) : (
+                      <span className="text-stone-400">Waiting for paired couple...</span>
+                    )}
+                  </div>
+                </div>
+                <div
+                  className={`font-mono text-base font-bold tabular-nums ${
+                    tIdx === 0 ? 'text-amber-300' : 'text-teal-300'
+                  }`}
+                >
+                  {mySlot === slotNum ? score : partnerScore} pts
+                </div>
               </div>
-            </div>
-            <div className="font-mono text-base font-bold text-amber-300 tabular-nums">
-              {score} pts
-            </div>
-          </div>
+            );
+          })}
+        </div>
+      )}
 
-          <div className="flex items-center justify-between rounded-lg border border-stone-800 bg-stone-900 px-3 py-2">
-            <div>
-              <div className="text-[11px] font-semibold text-teal-300">Couple Team 2</div>
-              <div className="font-bold text-stone-100">{team2Name}</div>
-              <div className="text-[11px] text-stone-400">
-                {roomTeams[1]?.members?.length
-                  ? roomTeams[1].members.map((m) => m.username).join(' & ')
-                  : 'Paired Couple Slot 2'}
-              </div>
-            </div>
-            <div className="font-mono text-base font-bold text-teal-300 tabular-nums">
-              {partnerScore} pts
-            </div>
+      {/* WAITING FOR HUMAN PLAYERS GATE (NO BOTS ALLOWED) */}
+      {!allHumanPlayersJoined && (
+        <div className="rounded-2xl border-2 border-amber-500/40 bg-amber-500/10 p-5 text-center">
+          <div className="mx-auto flex h-10 w-10 items-center justify-center rounded-xl bg-amber-500/20 text-amber-300">
+            <Users className="h-5 w-5 animate-pulse" />
           </div>
+          <h3 className="mt-2 text-base font-bold text-stone-100">
+            Waiting for Human Players ({roomPlayers.length}/{minHumanPlayersRequired}{' '}
+            Joined)
+          </h3>
+          <p className="mx-auto mt-1 max-w-lg text-xs text-stone-300">
+            No bots or simulated opponents are ever used. As soon as your partner{' '}
+            {effectiveMode === '2v2' ? 'and opponent couple ' : ''}accepts the invitation and enters Room{' '}
+            {activeRoom?.roomCode ? `#${activeRoom.roomCode}` : ''}, live synchronized gameplay unlocks automatically!
+          </p>
         </div>
       )}
 
       {/* TITLE STAGE */}
       {shellState === 'title' && (
         <div className="mx-auto flex w-full max-w-2xl flex-col items-center py-6 text-center">
-          <svg
-            className="h-14 w-14 text-teal-400"
-            viewBox="0 0 64 64"
-            fill="none"
-            aria-hidden="true"
-          >
-            <circle
-              cx="24"
-              cy="32"
-              r="14"
-              stroke="currentColor"
-              strokeWidth="2.5"
-              fill="rgba(20,184,166,0.1)"
-            />
-            <circle
-              cx="40"
-              cy="32"
-              r="14"
-              stroke="#F59E0B"
-              strokeWidth="2.5"
-              fill="rgba(245,158,11,0.1)"
-            />
-          </svg>
-          <h3 className="mt-4 text-2xl font-bold tracking-tight text-stone-100">
+          <h3 className="mt-2 text-2xl font-bold tracking-tight text-stone-100">
             {gameDef.title}
           </h3>
           <p className="mt-2 max-w-lg text-sm leading-relaxed text-stone-400">
             {gameDef.rulesSummary}
           </p>
 
-          {gameDef.supports2v2 && (
-            <div className="mt-4 flex items-center gap-2 rounded-xl border border-stone-800 bg-stone-900 p-1">
-              <button
-                type="button"
-                onClick={() => setSelectedMatchMode('1v1')}
-                className={`rounded-lg px-4 py-1.5 text-xs font-bold transition-colors ${
-                  effectiveMode === '1v1'
-                    ? 'bg-amber-500 text-stone-950'
-                    : 'text-stone-400 hover:text-stone-100'
-                }`}
-              >
-                1v1 Mode (Individual)
-              </button>
-              <button
-                type="button"
-                onClick={() => setSelectedMatchMode('2v2')}
-                className={`rounded-lg px-4 py-1.5 text-xs font-bold transition-colors ${
-                  effectiveMode === '2v2'
-                    ? 'bg-rose-500 text-stone-950'
-                    : 'text-stone-400 hover:text-stone-100'
-                }`}
-              >
-                2v2 Couple Mode (Team vs Team)
-              </button>
-            </div>
-          )}
-
           <button
             type="button"
             data-start="true"
-            onClick={() => {
-              const freshSeed = generateFreshGameSeed();
-              setLocalSeed(freshSeed);
-              if (onSyncRoomGameState) {
-                onSyncRoomGameState({
-                  sessionSeed: freshSeed,
-                  tttBoard: null,
-                  c4Grid: null,
-                });
-              }
-              setScore(0);
-              setPartnerScore(0);
-              setShellState('playing');
-              soundFX.playSuccess();
-            }}
-            className="mt-6 flex items-center gap-2 rounded-xl bg-amber-500 px-8 py-3 text-sm font-bold text-stone-950 transition-colors hover:bg-amber-400 whitespace-nowrap shrink-0"
+            disabled={!allHumanPlayersJoined}
+            onClick={triggerFreshSession}
+            className="mt-6 flex items-center gap-2 rounded-xl bg-amber-500 px-8 py-3 text-sm font-bold text-stone-950 transition-colors hover:bg-amber-400 disabled:opacity-45 whitespace-nowrap shrink-0"
           >
             <Play className="h-4 w-4 fill-current" />
             <span>
-              Start {effectiveMode === '2v2' ? '2v2 Couple Match' : '1v1 Multiplayer Session'}
+              {allHumanPlayersJoined
+                ? `Start ${effectiveMode === '2v2' ? '2v2 Couple Match' : '1v1 Human Duel'}`
+                : `Waiting for Human Opponent (${roomPlayers.length}/${minHumanPlayersRequired})...`}
             </span>
           </button>
-
-          <p className="mt-4 text-xs text-stone-500">
-            {gameDef.controlsHint} ·{' '}
-            {effectiveMode === '2v2'
-              ? `2v2 Rewards: +${gameDef.xpReward + 10} XP, +25 Coins & +30 Couple Trophies`
-              : `1v1 Rewards: +${gameDef.xpReward} XP · 0 Coins (Coins & Trophies are exclusive to 2v2)`}
-          </p>
         </div>
       )}
 
@@ -362,14 +645,13 @@ export function MultiplayerGameArena({
             <TicTacToeDuel
               key={`ttt-${sessionSeed}`}
               sessionSeed={sessionSeed}
-              playerName={playerName}
-              partnerName={partnerName}
-              roomGameState={roomGameState}
+              mySlot={mySlot}
+              slot1Label={slot1Label}
+              slot2Label={slot2Label}
+              allHumanPlayersJoined={allHumanPlayersJoined}
+              roomGameState={effectiveRoomState}
               onSyncRoomGameState={onSyncRoomGameState}
-              onScores={(s1, s2) => {
-                setScore(s1);
-                setPartnerScore(s2);
-              }}
+              onScores={handleSyncScores}
               onFinish={finishMatch}
             />
           )}
@@ -377,14 +659,13 @@ export function MultiplayerGameArena({
             <ConnectFourDuel
               key={`c4-${sessionSeed}`}
               sessionSeed={sessionSeed}
-              playerName={playerName}
-              partnerName={partnerName}
-              roomGameState={roomGameState}
+              mySlot={mySlot}
+              slot1Label={slot1Label}
+              slot2Label={slot2Label}
+              allHumanPlayersJoined={allHumanPlayersJoined}
+              roomGameState={effectiveRoomState}
               onSyncRoomGameState={onSyncRoomGameState}
-              onScores={(s1, s2) => {
-                setScore(s1);
-                setPartnerScore(s2);
-              }}
+              onScores={handleSyncScores}
               onFinish={finishMatch}
             />
           )}
@@ -392,14 +673,13 @@ export function MultiplayerGameArena({
             <BattleshipDuel
               key={`battleship-${sessionSeed}`}
               sessionSeed={sessionSeed}
-              playerName={playerName}
-              partnerName={partnerName}
-              roomGameState={roomGameState}
+              mySlot={mySlot}
+              slot1Label={slot1Label}
+              slot2Label={slot2Label}
+              allHumanPlayersJoined={allHumanPlayersJoined}
+              roomGameState={effectiveRoomState}
               onSyncRoomGameState={onSyncRoomGameState}
-              onScores={(s1, s2) => {
-                setScore(s1);
-                setPartnerScore(s2);
-              }}
+              onScores={handleSyncScores}
               onFinish={finishMatch}
             />
           )}
@@ -407,12 +687,12 @@ export function MultiplayerGameArena({
             <DrawAndGuessParty
               key={`draw-${sessionSeed}`}
               sessionSeed={sessionSeed}
-              playerName={playerName}
-              partnerName={partnerName}
-              onScores={(s1, s2) => {
-                setScore(s1);
-                setPartnerScore(s2);
-              }}
+              mySlot={mySlot}
+              slot1Label={slot1Label}
+              slot2Label={slot2Label}
+              roomGameState={effectiveRoomState}
+              onSyncRoomGameState={onSyncRoomGameState}
+              onScores={handleSyncScores}
               onFinish={finishMatch}
             />
           )}
@@ -420,13 +700,13 @@ export function MultiplayerGameArena({
             <QuizBattleDuel
               key={`quiz-${sessionSeed}`}
               sessionSeed={sessionSeed}
-              playerName={playerName}
-              partnerName={partnerName}
+              mySlot={mySlot}
+              slot1Label={slot1Label}
+              slot2Label={slot2Label}
               personalizedItems={personalizedItems}
-              onScores={(s1, s2) => {
-                setScore(s1);
-                setPartnerScore(s2);
-              }}
+              roomGameState={effectiveRoomState}
+              onSyncRoomGameState={onSyncRoomGameState}
+              onScores={handleSyncScores}
               onFinish={finishMatch}
             />
           )}
@@ -434,10 +714,11 @@ export function MultiplayerGameArena({
             <WordBattleDuel
               key={`word-${sessionSeed}`}
               sessionSeed={sessionSeed}
-              onScores={(s1, s2) => {
-                setScore(s1);
-                setPartnerScore(s2);
-              }}
+              mySlot={mySlot}
+              playerName={currentUser?.username || playerName}
+              roomGameState={effectiveRoomState}
+              onSyncRoomGameState={onSyncRoomGameState}
+              onScores={handleSyncScores}
               onFinish={finishMatch}
             />
           )}
@@ -445,12 +726,12 @@ export function MultiplayerGameArena({
             <ReactionRaceDuel
               key={`reaction-${sessionSeed}`}
               sessionSeed={sessionSeed}
-              playerName={playerName}
-              partnerName={partnerName}
-              onScores={(s1, s2) => {
-                setScore(s1);
-                setPartnerScore(s2);
-              }}
+              mySlot={mySlot}
+              slot1Label={slot1Label}
+              slot2Label={slot2Label}
+              roomGameState={effectiveRoomState}
+              onSyncRoomGameState={onSyncRoomGameState}
+              onScores={handleSyncScores}
               onFinish={finishMatch}
             />
           )}
@@ -458,13 +739,12 @@ export function MultiplayerGameArena({
             <TruthOrDareParty
               key={`tod-${sessionSeed}`}
               sessionSeed={sessionSeed}
-              playerName={playerName}
-              partnerName={partnerName}
+              slot1Label={slot1Label}
+              slot2Label={slot2Label}
               personalizedItems={personalizedItems}
-              onScores={(s1, s2) => {
-                setScore(s1);
-                setPartnerScore(s2);
-              }}
+              roomGameState={effectiveRoomState}
+              onSyncRoomGameState={onSyncRoomGameState}
+              onScores={handleSyncScores}
               onFinish={finishMatch}
             />
           )}
@@ -472,10 +752,12 @@ export function MultiplayerGameArena({
             <HigherOrLowerDuel
               key={`hol-${sessionSeed}`}
               sessionSeed={sessionSeed}
-              onScores={(s1, s2) => {
-                setScore(s1);
-                setPartnerScore(s2);
-              }}
+              mySlot={mySlot}
+              slot1Label={slot1Label}
+              slot2Label={slot2Label}
+              roomGameState={effectiveRoomState}
+              onSyncRoomGameState={onSyncRoomGameState}
+              onScores={handleSyncScores}
               onFinish={finishMatch}
             />
           )}
@@ -483,12 +765,9 @@ export function MultiplayerGameArena({
             <EscapeTheMazeCoop
               key={`maze-${sessionSeed}`}
               sessionSeed={sessionSeed}
-              playerName={playerName}
-              partnerName={partnerName}
-              onScores={(s1, s2) => {
-                setScore(s1);
-                setPartnerScore(s2);
-              }}
+              roomGameState={effectiveRoomState}
+              onSyncRoomGameState={onSyncRoomGameState}
+              onScores={handleSyncScores}
               onFinish={finishMatch}
             />
           )}
@@ -496,12 +775,9 @@ export function MultiplayerGameArena({
             <CookingTogetherCoop
               key={`cooking-${sessionSeed}`}
               sessionSeed={sessionSeed}
-              playerName={playerName}
-              partnerName={partnerName}
-              onScores={(s1, s2) => {
-                setScore(s1);
-                setPartnerScore(s2);
-              }}
+              roomGameState={effectiveRoomState}
+              onSyncRoomGameState={onSyncRoomGameState}
+              onScores={handleSyncScores}
               onFinish={finishMatch}
             />
           )}
@@ -509,10 +785,9 @@ export function MultiplayerGameArena({
             <JigsawPuzzleCoop
               key={`jigsaw-${sessionSeed}`}
               sessionSeed={sessionSeed}
-              onScores={(s1, s2) => {
-                setScore(s1);
-                setPartnerScore(s2);
-              }}
+              roomGameState={effectiveRoomState}
+              onSyncRoomGameState={onSyncRoomGameState}
+              onScores={handleSyncScores}
               onFinish={finishMatch}
             />
           )}
@@ -520,38 +795,12 @@ export function MultiplayerGameArena({
             <TreasureHuntCoop
               key={`treasure-${sessionSeed}`}
               sessionSeed={sessionSeed}
-              onScores={(s1, s2) => {
-                setScore(s1);
-                setPartnerScore(s2);
-              }}
+              roomGameState={effectiveRoomState}
+              onSyncRoomGameState={onSyncRoomGameState}
+              onScores={handleSyncScores}
               onFinish={finishMatch}
             />
           )}
-        </div>
-      )}
-
-      {/* PAUSE MODAL */}
-      {shellState === 'paused' && (
-        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/75 p-4">
-          <div className="w-full max-w-sm rounded-2xl border border-stone-700 bg-stone-900 p-6 text-center shadow-2xl">
-            <h3 className="text-xl font-bold text-stone-100">{gameDef.title} Paused</h3>
-            <div className="mt-5 flex flex-col gap-2">
-              <button
-                type="button"
-                onClick={() => setShellState('playing')}
-                className="w-full rounded-lg bg-amber-500 py-2.5 text-xs font-bold text-stone-950 hover:bg-amber-400"
-              >
-                Resume Match
-              </button>
-              <button
-                type="button"
-                onClick={() => setShellState('title')}
-                className="w-full rounded-lg border border-stone-700 bg-stone-800 py-2.5 text-xs font-semibold text-stone-200"
-              >
-                Restart Session
-              </button>
-            </div>
-          </div>
         </div>
       )}
 
@@ -604,19 +853,7 @@ export function MultiplayerGameArena({
               <button
                 type="button"
                 data-start="true"
-                onClick={() => {
-                  const freshSeed = generateFreshGameSeed();
-                  setLocalSeed(freshSeed);
-                  if (onSyncRoomGameState) {
-                    onSyncRoomGameState({
-                      sessionSeed: freshSeed,
-                      tttBoard: null,
-                      c4Grid: null,
-                    });
-                  }
-                  setScore(0);
-                  setShellState('playing');
-                }}
+                onClick={triggerFreshSession}
                 className="flex-1 rounded-lg bg-amber-500 py-2.5 text-xs font-bold text-stone-950 hover:bg-amber-400"
               >
                 Rematch Together (Fresh Board)
@@ -637,104 +874,106 @@ export function MultiplayerGameArena({
 }
 
 /* ============================================================================
-   1. TIC-TAC-TOE (Winning Line Highlight, Room Sync & Tactical Partner Reply)
+   1. TIC-TAC-TOE (100% Human Turn Enforcement & Real-Time Room Sync)
    ============================================================================ */
 function TicTacToeDuel({
   sessionSeed,
-  playerName,
-  partnerName,
+  mySlot,
+  slot1Label,
+  slot2Label,
+  allHumanPlayersJoined,
   roomGameState,
   onSyncRoomGameState,
   onScores,
   onFinish,
 }: {
   sessionSeed: number;
-  playerName: string;
-  partnerName: string;
+  mySlot: 1 | 2;
+  slot1Label: string;
+  slot2Label: string;
+  allHumanPlayersJoined: boolean;
   roomGameState?: Record<string, unknown>;
   onSyncRoomGameState?: (nextState: Record<string, unknown>) => void;
   onScores: (s1: number, s2: number) => void;
-  onFinish: (res: 'win' | 'loss' | 'draw', score: number, text: string) => void;
+  onFinish: (
+    res: 'win' | 'loss' | 'draw',
+    score: number,
+    text: string,
+    details?: Record<string, unknown>
+  ) => void;
 }) {
+  const mySymbol: 'X' | 'O' = mySlot === 1 ? 'X' : 'O';
   const [board, setBoard] = useState<TicTacToeCell[]>(Array(9).fill(null));
   const [turn, setTurn] = useState<'X' | 'O'>(() =>
     getRandomStartingTurnSymbol(sessionSeed)
   );
-  const [autoPartner, setAutoPartner] = useState(true);
   const [winningLine, setWinningLine] = useState<number[] | null>(null);
 
-  // Sync incoming board from shared room
   useEffect(() => {
     if (Array.isArray(roomGameState?.tttBoard) && roomGameState.tttBoard.length === 9) {
+      const incomingBoard = roomGameState.tttBoard as TicTacToeCell[];
+      const check = checkTicTacToeWinner(incomingBoard);
       Promise.resolve().then(() => {
-        setBoard(roomGameState.tttBoard as TicTacToeCell[]);
+        setBoard(incomingBoard);
         if (roomGameState.tttTurn === 'X' || roomGameState.tttTurn === 'O') {
           setTurn(roomGameState.tttTurn);
         }
+        if (check.line) setWinningLine(check.line);
       });
     }
   }, [roomGameState]);
 
   function handleSquare(idx: number) {
+    if (!allHumanPlayersJoined) return;
+    if (turn !== mySymbol) return;
     if (board[idx]) return;
     const check = checkTicTacToeWinner(board);
     if (check.winner) return;
 
     const next = [...board];
-    next[idx] = turn;
+    next[idx] = mySymbol;
+    const nextTurn: 'X' | 'O' = mySymbol === 'X' ? 'O' : 'X';
     setBoard(next);
+    setTurn(nextTurn);
     soundFX.playMove();
 
-    if (onSyncRoomGameState) {
-      onSyncRoomGameState({
-        tttBoard: next,
-        tttTurn: turn === 'X' ? 'O' : 'X',
-      });
-    }
-
-    const afterPlayer = checkTicTacToeWinner(next);
-    if (afterPlayer.winner) {
-      setWinningLine(afterPlayer.line);
-      if (afterPlayer.winner === 'X') {
-        onScores(300, 100);
-        setTimeout(() => onFinish('win', 300, `${playerName} Wins Tic-Tac-Toe!`), 380);
-      } else if (afterPlayer.winner === 'O') {
-        onScores(100, 300);
-        setTimeout(() => onFinish('loss', 100, `${partnerName} Wins Tic-Tac-Toe!`), 380);
-      } else {
+    const afterMove = checkTicTacToeWinner(next);
+    if (afterMove.winner) {
+      setWinningLine(afterMove.line);
+      if (afterMove.winner === 'draw') {
         onScores(200, 200);
-        setTimeout(() => onFinish('draw', 200, 'Stalemate Draw!'), 380);
+        if (onSyncRoomGameState) {
+          onSyncRoomGameState({ tttBoard: next, tttTurn: nextTurn });
+        }
+        setTimeout(
+          () => onFinish('draw', 200, 'Tic-Tac-Toe Draw!', { opponentScore: 200 }),
+          300
+        );
+      } else {
+        const winnerIsSlot1 = afterMove.winner === 'X';
+        const s1 = winnerIsSlot1 ? 300 : 100;
+        const s2 = winnerIsSlot1 ? 100 : 300;
+        onScores(s1, s2);
+        if (onSyncRoomGameState) {
+          onSyncRoomGameState({ tttBoard: next, tttTurn: nextTurn });
+        }
+        const winnerName = winnerIsSlot1 ? slot1Label : slot2Label;
+        setTimeout(
+          () =>
+            onFinish('win', 300, `${winnerName} Wins Tic-Tac-Toe!`, {
+              opponentScore: 100,
+            }),
+          300
+        );
       }
       return;
     }
 
-    if (autoPartner && turn === 'X') {
-      setTurn('O');
-      setTimeout(() => {
-        const empties = next
-          .map((v, i) => (v === null ? i : -1))
-          .filter((i) => i !== -1);
-        if (empties.length === 0) return;
-        const pick = empties.includes(4) ? 4 : empties[0];
-        const afterBot = [...next];
-        afterBot[pick] = 'O';
-        setBoard(afterBot);
-        setTurn('X');
-        soundFX.playMove();
-        const botRes = checkTicTacToeWinner(afterBot);
-        if (botRes.winner) {
-          setWinningLine(botRes.line);
-          if (botRes.winner === 'O') {
-            onScores(120, 300);
-            setTimeout(() => onFinish('loss', 120, `${partnerName} Wins!`), 380);
-          } else if (botRes.winner === 'draw') {
-            onScores(200, 200);
-            setTimeout(() => onFinish('draw', 200, 'Tic-Tac-Toe Draw!'), 380);
-          }
-        }
-      }, 420);
-    } else {
-      setTurn(turn === 'X' ? 'O' : 'X');
+    if (onSyncRoomGameState) {
+      onSyncRoomGameState({
+        tttBoard: next,
+        tttTurn: nextTurn,
+      });
     }
   }
 
@@ -742,18 +981,19 @@ function TicTacToeDuel({
     <div className="mx-auto flex max-w-md flex-col items-center gap-4">
       <div className="flex w-full items-center justify-between rounded-xl border border-stone-800 bg-stone-950 px-4 py-2 text-xs text-stone-300">
         <span>
-          Active Turn:{' '}
-          <strong className={turn === 'X' ? 'text-amber-300' : 'text-teal-300'}>
-            {turn === 'X' ? `${playerName} (X)` : `${partnerName} (O)`}
+          Your Symbol:{' '}
+          <strong className={mySymbol === 'X' ? 'text-amber-300' : 'text-teal-300'}>
+            {mySymbol} ({mySlot === 1 ? slot1Label : slot2Label})
           </strong>
         </span>
-        <button
-          type="button"
-          onClick={() => setAutoPartner(!autoPartner)}
-          className="text-amber-400 hover:underline"
-        >
-          {autoPartner ? `Partner Auto-Move: ON` : `2P Shared Clicks: ON`}
-        </button>
+        <span>
+          Turn:{' '}
+          <strong className={turn === mySymbol ? 'text-emerald-300' : 'text-amber-300'}>
+            {turn === mySymbol
+              ? 'Your Turn to Mark!'
+              : `Waiting for ${turn === 'X' ? slot1Label : slot2Label} (${turn})`}
+          </strong>
+        </span>
       </div>
 
       <div className="grid aspect-square w-full max-w-[330px] grid-cols-3 gap-3 rounded-2xl border-2 border-stone-700 bg-stone-950 p-4 shadow-xl">
@@ -763,12 +1003,13 @@ function TicTacToeDuel({
             <button
               key={idx}
               type="button"
+              disabled={!allHumanPlayersJoined || turn !== mySymbol || Boolean(val)}
               onClick={() => handleSquare(idx)}
               aria-label={`Tic Tac Toe Square ${idx + 1} ${val || 'Empty'}`}
               className={`flex aspect-square items-center justify-center rounded-xl border text-4xl font-bold transition-all ${
                 isWinCell
                   ? 'border-emerald-400 bg-emerald-500/25 scale-105 shadow-lg'
-                  : 'border-stone-800 bg-stone-900 hover:border-amber-500/60'
+                  : 'border-stone-800 bg-stone-900 hover:border-amber-500/60 disabled:cursor-not-allowed'
               }`}
             >
               <span className={val === 'X' ? 'text-amber-400' : 'text-teal-400'}>
@@ -783,24 +1024,33 @@ function TicTacToeDuel({
 }
 
 /* ============================================================================
-   2. CONNECT FOUR (Vertical Blue/Brass Slotted Grid, Disc Drop & Winning Line)
+   2. CONNECT FOUR (100% Human Turn Enforcement & Real-Time Room Sync)
    ============================================================================ */
 function ConnectFourDuel({
   sessionSeed,
-  playerName,
-  partnerName,
+  mySlot,
+  slot1Label,
+  slot2Label,
+  allHumanPlayersJoined,
   roomGameState,
   onSyncRoomGameState,
   onScores,
   onFinish,
 }: {
   sessionSeed: number;
-  playerName: string;
-  partnerName: string;
+  mySlot: 1 | 2;
+  slot1Label: string;
+  slot2Label: string;
+  allHumanPlayersJoined: boolean;
   roomGameState?: Record<string, unknown>;
   onSyncRoomGameState?: (nextState: Record<string, unknown>) => void;
   onScores: (s1: number, s2: number) => void;
-  onFinish: (res: 'win' | 'loss' | 'draw', score: number, text: string) => void;
+  onFinish: (
+    res: 'win' | 'loss' | 'draw',
+    score: number,
+    text: string,
+    details?: Record<string, unknown>
+  ) => void;
 }) {
   const [grid, setGrid] = useState<ConnectFourCell[][]>(() =>
     Array.from({ length: 6 }, () => Array(7).fill(0))
@@ -811,67 +1061,76 @@ function ConnectFourDuel({
   const [turn, setTurn] = useState<1 | 2>(() =>
     getRandomStartingPlayerNumber(sessionSeed)
   );
-  const [autoPartner, setAutoPartner] = useState(true);
 
   useEffect(() => {
     if (Array.isArray(roomGameState?.c4Grid) && roomGameState.c4Grid.length === 6) {
+      const nextGrid = roomGameState.c4Grid as ConnectFourCell[][];
+      const res = checkConnectFourWinnerWithLine(nextGrid);
       Promise.resolve().then(() => {
-        setGrid(roomGameState.c4Grid as ConnectFourCell[][]);
+        setGrid(nextGrid);
+        if (roomGameState.c4Turn === 1 || roomGameState.c4Turn === 2) {
+          setTurn(roomGameState.c4Turn);
+        }
+        if (Array.isArray(roomGameState.c4LastPlaced)) {
+          setLastPlaced(roomGameState.c4LastPlaced as [number, number]);
+        }
+        if (res.line) setWinCells(res.line);
       });
     }
   }, [roomGameState]);
 
   function handleColumnDrop(col: number) {
-    if (winCells) return;
-    const step1 = dropConnectFourDisc(grid, col, turn);
-    if (!step1) return;
+    if (!allHumanPlayersJoined || winCells || turn !== mySlot) return;
+    const step = dropConnectFourDisc(grid, col, mySlot);
+    if (!step) return;
 
-    setGrid(step1.nextGrid);
-    setLastPlaced([step1.placedRow, col]);
+    const nextTurn: 1 | 2 = mySlot === 1 ? 2 : 1;
+    setGrid(step.nextGrid);
+    setLastPlaced([step.placedRow, col]);
+    setTurn(nextTurn);
     soundFX.playDrop();
+
+    const res = checkConnectFourWinnerWithLine(step.nextGrid);
+    if (res.winner) {
+      setWinCells(res.line);
+      if (onSyncRoomGameState) {
+        onSyncRoomGameState({
+          c4Grid: step.nextGrid,
+          c4Turn: nextTurn,
+          c4LastPlaced: [step.placedRow, col],
+        });
+      }
+      if (res.winner === 'draw') {
+        onScores(250, 250);
+        setTimeout(
+          () =>
+            onFinish('draw', 250, 'Connect Four Grid Full — Draw!', {
+              opponentScore: 250,
+            }),
+          350
+        );
+      } else {
+        const s1 = res.winner === 1 ? 450 : 150;
+        const s2 = res.winner === 2 ? 450 : 150;
+        onScores(s1, s2);
+        const winnerName = res.winner === 1 ? slot1Label : slot2Label;
+        setTimeout(
+          () =>
+            onFinish('win', 450, `${winnerName} Connected Four!`, {
+              opponentScore: 150,
+            }),
+          350
+        );
+      }
+      return;
+    }
 
     if (onSyncRoomGameState) {
       onSyncRoomGameState({
-        c4Grid: step1.nextGrid,
+        c4Grid: step.nextGrid,
+        c4Turn: nextTurn,
+        c4LastPlaced: [step.placedRow, col],
       });
-    }
-
-    const res1 = checkConnectFourWinnerWithLine(step1.nextGrid);
-    if (res1.winner === 1) {
-      setWinCells(res1.line);
-      onScores(450, 150);
-      setTimeout(() => onFinish('win', 450, `${playerName} Connected Four!`), 420);
-      return;
-    } else if (res1.winner === 2) {
-      setWinCells(res1.line);
-      onScores(180, 450);
-      setTimeout(() => onFinish('loss', 180, `${partnerName} Connected Four!`), 420);
-      return;
-    } else if (res1.winner === 'draw') {
-      onScores(250, 250);
-      setTimeout(() => onFinish('draw', 250, 'Connect Four Grid Full — Draw!'), 420);
-      return;
-    }
-
-    if (autoPartner && turn === 1) {
-      setTimeout(() => {
-        const validCols = [0, 1, 2, 3, 4, 5, 6].filter((c) => step1.nextGrid[0][c] === 0);
-        if (!validCols.length) return;
-        const botCol = validCols[(col + 3) % validCols.length];
-        const step2 = dropConnectFourDisc(step1.nextGrid, botCol, 2);
-        if (!step2) return;
-        setGrid(step2.nextGrid);
-        setLastPlaced([step2.placedRow, botCol]);
-        soundFX.playDrop();
-        const res2 = checkConnectFourWinnerWithLine(step2.nextGrid);
-        if (res2.winner === 2) {
-          setWinCells(res2.line);
-          onScores(180, 450);
-          setTimeout(() => onFinish('loss', 180, `${partnerName} Connected Four!`), 420);
-        }
-      }, 420);
-    } else {
-      setTurn(turn === 1 ? 2 : 1);
     }
   }
 
@@ -879,32 +1138,32 @@ function ConnectFourDuel({
     <div className="mx-auto flex max-w-lg flex-col items-center gap-4">
       <div className="flex w-full items-center justify-between rounded-xl border border-stone-800 bg-stone-950 px-4 py-2 text-xs text-stone-300">
         <span>
-          Click any column (1–7) to drop your{' '}
-          <strong className="text-amber-300">Amber</strong> or{' '}
-          <strong className="text-teal-300">Teal</strong> disc!
+          Your Disc:{' '}
+          <strong className={mySlot === 1 ? 'text-amber-300' : 'text-teal-300'}>
+            {mySlot === 1 ? 'Amber' : 'Teal'} ({mySlot === 1 ? slot1Label : slot2Label})
+          </strong>
         </span>
-        <button
-          type="button"
-          onClick={() => setAutoPartner((a) => !a)}
-          className="text-amber-400 hover:underline"
-        >
-          {autoPartner ? 'Partner Auto-Drop: ON' : '2P Alternate Turn: ON'}
-        </button>
+        <span>
+          Turn:{' '}
+          <strong className={turn === mySlot ? 'text-emerald-300' : 'text-amber-300'}>
+            {turn === mySlot
+              ? 'Your Turn to Drop!'
+              : `Waiting for ${turn === 1 ? slot1Label : slot2Label}`}
+          </strong>
+        </span>
       </div>
 
-      {/* Column Drop Preview Indicators */}
       <div className="grid w-full grid-cols-7 gap-2 px-4">
         {[0, 1, 2, 3, 4, 5, 6].map((c) => (
           <div
             key={c}
             className="flex h-6 items-center justify-center font-mono text-xs text-amber-300"
           >
-            {hoverCol === c ? '▼ DROP' : `Col ${c + 1}`}
+            {hoverCol === c && turn === mySlot ? '▼ DROP' : `Col ${c + 1}`}
           </div>
         ))}
       </div>
 
-      {/* Classic Blue Vertical Slotted Connect Four Frame */}
       <div className="grid w-full grid-cols-7 gap-2.5 rounded-2xl border-4 border-[#1D4ED8] bg-[#1E3A8A] p-4 shadow-2xl">
         {grid.map((row, r) =>
           row.map((cell, c) => {
@@ -914,6 +1173,7 @@ function ConnectFourDuel({
               <button
                 key={`${r}-${c}`}
                 type="button"
+                disabled={!allHumanPlayersJoined || turn !== mySlot}
                 onMouseEnter={() => setHoverCol(c)}
                 onMouseLeave={() => setHoverCol(null)}
                 onClick={() => handleColumnDrop(c)}
@@ -943,7 +1203,7 @@ function ConnectFourDuel({
 }
 
 /* ============================================================================
-   3. BATTLESHIP (Dual 10x10 Naval Radar Grids, 5-Ship Placement & Rotation)
+   3. BATTLESHIP (100% Human vs Human Synchronized Naval Radar Grids)
    ============================================================================ */
 interface NavalShipDef {
   id: string;
@@ -962,34 +1222,73 @@ const SHIPS_TO_PLACE = [
 
 function BattleshipDuel({
   sessionSeed,
-  playerName,
-  partnerName,
+  mySlot,
+  slot1Label,
+  slot2Label,
+  allHumanPlayersJoined,
+  roomGameState,
+  onSyncRoomGameState,
   onScores,
   onFinish,
 }: {
   sessionSeed: number;
-  playerName: string;
-  partnerName: string;
+  mySlot: 1 | 2;
+  slot1Label: string;
+  slot2Label: string;
+  allHumanPlayersJoined: boolean;
   roomGameState?: Record<string, unknown>;
   onSyncRoomGameState?: (nextState: Record<string, unknown>) => void;
   onScores: (s1: number, s2: number) => void;
-  onFinish: (res: 'win' | 'loss' | 'draw', score: number, text: string) => void;
+  onFinish: (
+    res: 'win' | 'loss' | 'draw',
+    score: number,
+    text: string,
+    details?: Record<string, unknown>
+  ) => void;
 }) {
-  const [enemyFleet] = useState<NavalShipDef[]>(() =>
-    generateBattleshipFleet(sessionSeed + 97)
-  );
-  const [myFleet, setMyFleet] = useState<NavalShipDef[]>(() =>
-    generateBattleshipFleet(sessionSeed)
-  );
+  const opponentSlot: 1 | 2 = mySlot === 1 ? 2 : 1;
+
+  const defaultFleets = {
+    '1': generateBattleshipFleet(sessionSeed + 11),
+    '2': generateBattleshipFleet(sessionSeed + 97),
+  };
+
+  const syncedFleets =
+    (roomGameState?.bsFleets as Record<'1' | '2', NavalShipDef[]> | undefined) ||
+    defaultFleets;
+  const syncedShots = (roomGameState?.bsShots as
+    | Record<'1' | '2', Record<string, 'hit' | 'miss'>>
+    | undefined) || { '1': {}, '2': {} };
+  const activeTurn: 1 | 2 =
+    roomGameState?.bsTurn === 2 ? 2 : roomGameState?.bsTurn === 1 ? 1 : 1;
+
+  const myFleet = syncedFleets[String(mySlot) as '1' | '2'] || defaultFleets[mySlot];
+  const enemyFleet =
+    syncedFleets[String(opponentSlot) as '1' | '2'] || defaultFleets[opponentSlot];
+  const myShots = syncedShots[String(mySlot) as '1' | '2'] || {};
+  const incomingShots = syncedShots[String(opponentSlot) as '1' | '2'] || {};
+
   const [placingIdx, setPlacingIdx] = useState<number>(5);
   const [orientation, setOrientation] = useState<'H' | 'V'>('H');
-  const [shots, setShots] = useState<Record<string, 'hit' | 'miss'>>({});
-  const [enemyShots, setEnemyShots] = useState<Record<string, 'hit' | 'miss'>>({});
   const [combatLog, setCombatLog] = useState<string>(
-    'Randomized naval fleets deployed! Click any sector on the Enemy Target Radar (or randomize/re-place your fleet) to fire salvos!'
+    'Real-time naval link active! Fire on the Enemy Target Radar on your turn.'
   );
 
   const totalEnemyCells = enemyFleet.reduce((acc, s) => acc + s.size, 0);
+
+  function syncBattleshipState(
+    nextFleets: Record<'1' | '2', NavalShipDef[]>,
+    nextShots: Record<'1' | '2', Record<string, 'hit' | 'miss'>>,
+    nextTurn: 1 | 2
+  ) {
+    if (onSyncRoomGameState) {
+      onSyncRoomGameState({
+        bsFleets: nextFleets,
+        bsShots: nextShots,
+        bsTurn: nextTurn,
+      });
+    }
+  }
 
   function handlePlaceShipAt(r: number, c: number) {
     if (placingIdx >= SHIPS_TO_PLACE.length) return;
@@ -999,13 +1298,12 @@ function BattleshipDuel({
       const nr = orientation === 'V' ? r + i : r;
       const nc = orientation === 'H' ? c + i : c;
       if (nr >= 10 || nc >= 10) {
-        setCombatLog(`${shipSpec.name} (${shipSpec.size} cells) does not fit at (${r + 1}, ${c + 1})!`);
+        setCombatLog(`${shipSpec.name} (${shipSpec.size} cells) does not fit there!`);
         soundFX.playError();
         return;
       }
       coords.push([nr, nc]);
     }
-    // Check overlap
     const occupied = new Set(
       myFleet.flatMap((s) => s.coords.map(([sr, sc]) => `${sr}-${sc}`))
     );
@@ -1015,73 +1313,91 @@ function BattleshipDuel({
       return;
     }
 
-    const nextFleet = [
+    const updatedMyFleet = [
       ...myFleet,
-      { id: shipSpec.id, name: `${shipSpec.name} (${shipSpec.size})`, size: shipSpec.size, coords },
+      {
+        id: shipSpec.id,
+        name: `${shipSpec.name} (${shipSpec.size})`,
+        size: shipSpec.size,
+        coords,
+      },
     ];
-    setMyFleet(nextFleet);
+    const nextFleets = {
+      ...syncedFleets,
+      [String(mySlot)]: updatedMyFleet,
+    };
     const nextIdx = placingIdx + 1;
     setPlacingIdx(nextIdx);
     soundFX.playDrop();
-    if (nextIdx >= SHIPS_TO_PLACE.length) {
-      setCombatLog('All 5 vessels positioned! Fire at the Enemy Target Radar!');
-    } else {
-      setCombatLog(
-        `Placed ${shipSpec.name}! Now position your ${SHIPS_TO_PLACE[nextIdx].name} (${SHIPS_TO_PLACE[nextIdx].size} cells).`
-      );
-    }
+    syncBattleshipState(nextFleets, syncedShots, activeTurn);
   }
 
   function fireAtEnemyCoord(r: number, c: number) {
+    if (!allHumanPlayersJoined) return;
+    if (activeTurn !== mySlot) {
+      setCombatLog(
+        `Wait for ${opponentSlot === 1 ? slot1Label : slot2Label} to fire their salvo!`
+      );
+      return;
+    }
+    if (placingIdx < SHIPS_TO_PLACE.length) {
+      setCombatLog('Finish deploying all 5 ships in your Home Fleet first!');
+      return;
+    }
     const key = `${r}-${c}`;
-    if (shots[key]) return;
+    if (myShots[key]) return;
 
     const hitShip = enemyFleet.find((ship) =>
       ship.coords.some(([sr, sc]) => sr === r && sc === c)
     );
     const isHit = Boolean(hitShip);
-    const nextShots = { ...shots, [key]: isHit ? ('hit' as const) : ('miss' as const) };
-    setShots(nextShots);
+    const nextMyShots = {
+      ...myShots,
+      [key]: isHit ? ('hit' as const) : ('miss' as const),
+    };
+    const nextAllShots = {
+      ...syncedShots,
+      [String(mySlot)]: nextMyShots,
+    };
+    const nextTurn: 1 | 2 = opponentSlot;
 
     if (isHit && hitShip) {
-      const isSunk = hitShip.coords.every(
-        ([sr, sc]) => nextShots[`${sr}-${sc}`] === 'hit'
+      soundFX.playExplosion();
+      setCombatLog(
+        `DIRECT HIT on ${opponentSlot === 1 ? slot1Label : slot2Label} at Sector ${String.fromCharCode(65 + r)}${c + 1}!`
       );
-      if (isSunk) {
-        soundFX.playExplosion();
-        setCombatLog(`DIRECT HIT! You sank ${partnerName}'s ${hitShip.name}!`);
-      } else {
-        soundFX.playExplosion();
-        setCombatLog(`Direct hit on enemy vessel at Sector ${String.fromCharCode(65 + r)}${c + 1}!`);
-      }
     } else {
       soundFX.playSplash();
-      setCombatLog(`Splash at Sector ${String.fromCharCode(65 + r)}${c + 1} — missed.`);
+      setCombatLog(
+        `Splash at Sector ${String.fromCharCode(65 + r)}${c + 1} — missed.`
+      );
     }
 
-    // Enemy counter-salvo on Your Fleet
-    const shotCount = Object.keys(nextShots).length;
-    const er = (r + shotCount * 3) % 10;
-    const ec = (c + shotCount * 7) % 10;
-    const eKey = `${er}-${ec}`;
-    const eHit = myFleet.some((s) => s.coords.some(([sr, sc]) => sr === er && sc === ec));
-    setEnemyShots((prev) => ({ ...prev, [eKey]: eHit ? 'hit' : 'miss' }));
+    const p1Hits = Object.values(nextAllShots['1'] || {}).filter(
+      (v) => v === 'hit'
+    ).length;
+    const p2Hits = Object.values(nextAllShots['2'] || {}).filter(
+      (v) => v === 'hit'
+    ).length;
+    onScores(p1Hits * 110, p2Hits * 110);
+    syncBattleshipState(syncedFleets, nextAllShots, nextTurn);
 
-    const hits = Object.values(nextShots).filter((v) => v === 'hit').length;
-    const pts = hits * 110;
-    onScores(pts, Object.keys(nextShots).length * 25);
-
-    if (hits >= totalEnemyCells) {
+    const myHits = Object.values(nextMyShots).filter((v) => v === 'hit').length;
+    if (myHits >= totalEnemyCells) {
+      const myName = mySlot === 1 ? slot1Label : slot2Label;
       setTimeout(
-        () => onFinish('win', pts + 350, `${playerName} Sank All 5 Enemy Warships!`),
-        400
+        () =>
+          onFinish('win', myHits * 110 + 350, `${myName} Sank All 5 Enemy Warships!`, {
+            opponentScore: (mySlot === 1 ? p2Hits : p1Hits) * 110,
+          }),
+        350
       );
     }
   }
 
-  const hitsCount = Object.values(shots).filter((v) => v === 'hit').length;
+  const hitsCount = Object.values(myShots).filter((v) => v === 'hit').length;
   const sunkEnemyShips = enemyFleet.filter((ship) =>
-    ship.coords.every(([sr, sc]) => shots[`${sr}-${sc}`] === 'hit')
+    ship.coords.every(([sr, sc]) => myShots[`${sr}-${sc}`] === 'hit')
   );
   const myShipCells = new Set(
     myFleet.flatMap((s) => s.coords.map(([r, c]) => `${r}-${c}`))
@@ -1089,11 +1405,14 @@ function BattleshipDuel({
 
   return (
     <div className="flex flex-col gap-4">
-      {/* Naval Command Bar */}
       <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-teal-500/30 bg-slate-950 px-4 py-2.5 text-xs">
         <div className="flex items-center gap-2 text-teal-300">
           <Crosshair className="h-4 w-4" />
-          <span className="font-semibold">{combatLog}</span>
+          <span className="font-semibold">
+            {activeTurn === mySlot
+              ? `YOUR TURN TO FIRE · ${combatLog}`
+              : `Waiting for ${opponentSlot === 1 ? slot1Label : slot2Label}'s Salvo...`}
+          </span>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
@@ -1106,52 +1425,33 @@ function BattleshipDuel({
               Orientation: {orientation === 'H' ? 'Horizontal ➡' : 'Vertical ⬇'}
             </button>
           )}
-          <button
-            type="button"
-            onClick={() => {
-              setMyFleet(generateBattleshipFleet(generateFreshGameSeed()));
-              setPlacingIdx(5);
-              setCombatLog('Generated a fresh valid randomized 5-vessel fleet placement!');
-              soundFX.playFlip();
-            }}
-            className="rounded-lg border border-teal-500/40 bg-teal-500/15 px-2.5 py-1 text-teal-200 hover:border-teal-400"
-          >
-            Randomize Fleet
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              setMyFleet([]);
-              setPlacingIdx(0);
-              setCombatLog('Custom Fleet Deployment: Click Your Fleet Grid to place your Carrier (5 cells).');
-            }}
-            className="rounded-lg border border-stone-700 bg-stone-900 px-2.5 py-1 text-stone-200 hover:border-amber-400"
-          >
-            Re-Place Ships ({orientation})
-          </button>
-          <button
-            type="button"
-            onClick={() =>
-              onFinish(
-                'win',
-                Math.max(300, hitsCount * 140),
-                'Naval Fleet Reconnaissance Complete!'
-              )
-            }
-            className="text-amber-400 hover:underline"
-          >
-            Complete Naval Patrol
-          </button>
+          {Object.keys(incomingShots).length === 0 && (
+            <button
+              type="button"
+              onClick={() => {
+                const freshFleet = generateBattleshipFleet(generateFreshGameSeed());
+                setPlacingIdx(5);
+                syncBattleshipState(
+                  { ...syncedFleets, [String(mySlot)]: freshFleet },
+                  syncedShots,
+                  activeTurn
+                );
+                soundFX.playFlip();
+              }}
+              className="rounded-lg border border-teal-500/40 bg-teal-500/15 px-2.5 py-1 text-teal-200 hover:border-teal-400"
+            >
+              Randomize My Fleet
+            </button>
+          )}
         </div>
       </div>
 
-      {/* Dual 10x10 Naval Radar Boards */}
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-        {/* ENEMY TARGET RADAR (10x10) */}
+        {/* ENEMY TARGET RADAR */}
         <div className="flex flex-col items-center rounded-2xl border border-teal-500/30 bg-slate-950 p-4">
           <div className="mb-2 flex w-full items-center justify-between text-xs">
             <span className="font-bold text-rose-300">
-              🎯 ENEMY TARGET RADAR (Click to Fire Salvo)
+              🎯 ENEMY TARGET RADAR ({opponentSlot === 1 ? slot1Label : slot2Label})
             </span>
             <span className="font-mono text-teal-300">
               Hits: {hitsCount}/{totalEnemyCells} · Sunk: {sunkEnemyShips.length}/5
@@ -1161,11 +1461,12 @@ function BattleshipDuel({
           <div className="grid aspect-square w-full max-w-[360px] grid-cols-10 gap-1 rounded-xl border border-teal-900/60 bg-[#061320] p-2">
             {Array.from({ length: 10 }, (_, r) =>
               Array.from({ length: 10 }, (_, c) => {
-                const state = shots[`${r}-${c}`];
+                const state = myShots[`${r}-${c}`];
                 return (
                   <button
                     key={`target-${r}-${c}`}
                     type="button"
+                    disabled={!allHumanPlayersJoined || activeTurn !== mySlot}
                     onClick={() => fireAtEnemyCoord(r, c)}
                     aria-label={`Radar Sector ${r + 1}-${c + 1}`}
                     className={`flex aspect-square items-center justify-center rounded-xs border font-mono text-[10px] font-bold transition-colors ${
@@ -1184,12 +1485,12 @@ function BattleshipDuel({
           </div>
         </div>
 
-        {/* YOUR FLEET DEPLOYMENT GRID (10x10) */}
+        {/* YOUR HOME FLEET */}
         <div className="flex flex-col items-center rounded-2xl border border-stone-800 bg-slate-950 p-4">
           <div className="mb-2 flex w-full items-center justify-between text-xs">
             <span className="flex items-center gap-1.5 font-bold text-amber-300">
               <Shield className="h-3.5 w-3.5" />
-              <span>YOUR HOME FLEET (10x10)</span>
+              <span>YOUR HOME FLEET ({mySlot === 1 ? slot1Label : slot2Label})</span>
             </span>
             <span className="font-mono text-stone-400">
               Ships Deployed: {myFleet.length}/5
@@ -1200,7 +1501,7 @@ function BattleshipDuel({
             {Array.from({ length: 10 }, (_, r) =>
               Array.from({ length: 10 }, (_, c) => {
                 const hasShip = myShipCells.has(`${r}-${c}`);
-                const incoming = enemyShots[`${r}-${c}`];
+                const incoming = incomingShots[`${r}-${c}`];
                 return (
                   <button
                     key={`fleet-${r}-${c}`}
@@ -1217,7 +1518,13 @@ function BattleshipDuel({
                         : 'border-slate-800/80 bg-slate-900/60 hover:border-amber-400/50'
                     }`}
                   >
-                    {incoming === 'hit' ? '🔥' : hasShip ? '■' : incoming === 'miss' ? '•' : ''}
+                    {incoming === 'hit'
+                      ? '🔥'
+                      : hasShip
+                      ? '■'
+                      : incoming === 'miss'
+                      ? '•'
+                      : ''}
                   </button>
                 );
               })
@@ -1230,7 +1537,7 @@ function BattleshipDuel({
 }
 
 /* ============================================================================
-   4. DRAW & GUESS (Multi-Tool Sketch Studio, Brush Sizes & Masked Clue)
+   4. DRAW & GUESS (Real-Time Shared Canvas Strokes & Partner Guessing)
    ============================================================================ */
 const DRAW_PROMPTS = [
   'Shooting Star',
@@ -1240,25 +1547,43 @@ const DRAW_PROMPTS = [
   'Kitsune Fox',
 ];
 
+interface DrawStrokeRecord {
+  color: string;
+  size: number;
+  points: Array<{ x: number; y: number }>;
+}
+
 function DrawAndGuessParty({
   sessionSeed,
+  mySlot,
+  slot1Label,
+  slot2Label,
+  roomGameState,
+  onSyncRoomGameState,
   onScores,
   onFinish,
 }: {
   sessionSeed: number;
-  playerName: string;
-  partnerName: string;
+  mySlot: 1 | 2;
+  slot1Label: string;
+  slot2Label: string;
+  roomGameState?: Record<string, unknown>;
+  onSyncRoomGameState?: (nextState: Record<string, unknown>) => void;
   onScores: (s1: number, s2: number) => void;
   onFinish: (res: 'completed', score: number, text: string) => void;
 }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const lastPosRef = useRef<{ x: number; y: number } | null>(null);
+  const currentStrokeRef = useRef<Array<{ x: number; y: number }>>([]);
   const [drawing, setDrawing] = useState(false);
   const [brushColor, setBrushColor] = useState('#FBBF24');
   const [brushSize, setBrushSize] = useState(5);
-  const [promptIdx, setPromptIdx] = useState(0);
   const [guessText, setGuessText] = useState('');
   const [feedback, setFeedback] = useState('');
+
+  const promptIdx = Number(roomGameState?.dgPromptIdx || 0);
+  const strokes = Array.isArray(roomGameState?.dgStrokes)
+    ? (roomGameState.dgStrokes as DrawStrokeRecord[])
+    : [];
 
   const shuffledPrompts = seededShuffle(DRAW_PROMPTS, sessionSeed);
   const secretWord = shuffledPrompts[promptIdx % shuffledPrompts.length];
@@ -1267,25 +1592,68 @@ function DrawAndGuessParty({
     .map((ch, i) => (ch === ' ' ? '  ' : i === 0 || i === 4 ? ch : '_'))
     .join(' ');
 
+  // Re-render synced strokes onto canvas
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    for (const s of strokes) {
+      if (!s.points?.length) continue;
+      ctx.strokeStyle = s.color;
+      ctx.lineWidth = s.size;
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.moveTo(s.points[0].x, s.points[0].y);
+      for (let i = 1; i < s.points.length; i++) {
+        ctx.lineTo(s.points[i].x, s.points[i].y);
+      }
+      ctx.stroke();
+    }
+  }, [strokes]);
+
   function drawStroke(e: React.MouseEvent<HTMLCanvasElement>) {
     if (!drawing || !canvasRef.current) return;
     const rect = canvasRef.current.getBoundingClientRect();
-    const x = ((e.clientX - rect.left) / rect.width) * canvasRef.current.width;
-    const y = ((e.clientY - rect.top) / rect.height) * canvasRef.current.height;
+    const x = Math.round(
+      ((e.clientX - rect.left) / rect.width) * canvasRef.current.width
+    );
+    const y = Math.round(
+      ((e.clientY - rect.top) / rect.height) * canvasRef.current.height
+    );
     const ctx = canvasRef.current.getContext('2d');
+    const pts = currentStrokeRef.current;
     if (ctx) {
       ctx.strokeStyle = brushColor;
       ctx.lineWidth = brushSize;
       ctx.lineCap = 'round';
       ctx.beginPath();
-      if (lastPosRef.current) {
-        ctx.moveTo(lastPosRef.current.x, lastPosRef.current.y);
+      if (pts.length > 0) {
+        ctx.moveTo(pts[pts.length - 1].x, pts[pts.length - 1].y);
       } else {
         ctx.moveTo(x, y);
       }
       ctx.lineTo(x, y);
       ctx.stroke();
-      lastPosRef.current = { x, y };
+    }
+    pts.push({ x, y });
+  }
+
+  function finishStroke() {
+    if (!drawing) return;
+    setDrawing(false);
+    if (currentStrokeRef.current.length > 0 && onSyncRoomGameState) {
+      const nextStrokes: DrawStrokeRecord[] = [
+        ...strokes,
+        {
+          color: brushColor,
+          size: brushSize,
+          points: [...currentStrokeRef.current],
+        },
+      ];
+      currentStrokeRef.current = [];
+      onSyncRoomGameState({ dgStrokes: nextStrokes });
     }
   }
 
@@ -1294,6 +1662,9 @@ function DrawAndGuessParty({
     if (ctx && canvasRef.current) {
       ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
     }
+    if (onSyncRoomGameState) {
+      onSyncRoomGameState({ dgStrokes: [] });
+    }
   }
 
   function handleGuessSubmit(e: React.FormEvent) {
@@ -1301,7 +1672,7 @@ function DrawAndGuessParty({
     if (guessText.trim().toLowerCase() === secretWord.toLowerCase()) {
       onScores(500, 500);
       setFeedback(`Spot on! It was "${secretWord}"!`);
-      setTimeout(() => onFinish('completed', 500, 'Masterpiece Guessed!'), 450);
+      setTimeout(() => onFinish('completed', 500, 'Masterpiece Guessed Together!'), 350);
     } else {
       setFeedback(`Hint: Starts with "${secretWord.slice(0, 3)}..."`);
       soundFX.playMove();
@@ -1313,13 +1684,19 @@ function DrawAndGuessParty({
       <div className="flex flex-col items-center gap-3 lg:col-span-7">
         <div className="flex w-full items-center justify-between text-xs">
           <span className="font-semibold text-amber-300">
-            Secret Prompt to Sketch: {secretWord}
+            {mySlot === 1
+              ? `Sketch Prompt (${slot1Label}): ${secretWord}`
+              : `Clue for ${slot2Label}: ${maskedWord}`}
           </span>
           <button
             type="button"
             onClick={() => {
-              clearCanvas();
-              setPromptIdx((i) => i + 1);
+              if (onSyncRoomGameState) {
+                onSyncRoomGameState({
+                  dgStrokes: [],
+                  dgPromptIdx: promptIdx + 1,
+                });
+              }
             }}
             className="text-stone-400 hover:text-stone-200"
           >
@@ -1334,19 +1711,19 @@ function DrawAndGuessParty({
           onMouseDown={(e) => {
             setDrawing(true);
             const rect = e.currentTarget.getBoundingClientRect();
-            lastPosRef.current = {
-              x: ((e.clientX - rect.left) / rect.width) * e.currentTarget.width,
-              y: ((e.clientY - rect.top) / rect.height) * e.currentTarget.height,
-            };
+            currentStrokeRef.current = [
+              {
+                x: Math.round(
+                  ((e.clientX - rect.left) / rect.width) * e.currentTarget.width
+                ),
+                y: Math.round(
+                  ((e.clientY - rect.top) / rect.height) * e.currentTarget.height
+                ),
+              },
+            ];
           }}
-          onMouseUp={() => {
-            setDrawing(false);
-            lastPosRef.current = null;
-          }}
-          onMouseLeave={() => {
-            setDrawing(false);
-            lastPosRef.current = null;
-          }}
+          onMouseUp={finishStroke}
+          onMouseLeave={finishStroke}
           onMouseMove={drawStroke}
           className="w-full cursor-crosshair rounded-2xl border border-stone-800 bg-stone-950"
         />
@@ -1392,18 +1769,18 @@ function DrawAndGuessParty({
       <div className="flex flex-col justify-between rounded-2xl border border-stone-800 bg-stone-950 p-5 lg:col-span-5">
         <div>
           <div className="flex items-center justify-between">
-            <h4 className="text-sm font-bold text-stone-100">Partner Guess Box</h4>
+            <h4 className="text-sm font-bold text-stone-100">Live Partner Guess Box</h4>
             <span className="font-mono text-xs text-amber-300">{maskedWord}</span>
           </div>
           <p className="mt-1 text-xs text-stone-400">
-            Sketch on the canvas and enter the prompt guess below to score party points together.
+            Strokes sync live across the room. Submit the prompt guess below to score!
           </p>
           <form onSubmit={handleGuessSubmit} className="mt-4 space-y-2.5">
             <input
               type="text"
               value={guessText}
               onChange={(e) => setGuessText(e.target.value)}
-              placeholder={`Type "${secretWord}" to test match...`}
+              placeholder="Enter your guess..."
               className="w-full rounded-lg border border-stone-800 bg-stone-900 px-3 py-2 text-xs text-stone-100"
             />
             <button
@@ -1421,20 +1798,33 @@ function DrawAndGuessParty({
 }
 
 /* ============================================================================
-   5. QUIZ BATTLE (Supports Personalized Questions + Speed Streak)
+   5. QUIZ BATTLE (Synchronized Head-to-Head Trivia)
    ============================================================================ */
 function QuizBattleDuel({
   sessionSeed,
+  mySlot,
+  slot1Label,
+  slot2Label,
   personalizedItems,
+  roomGameState,
+  onSyncRoomGameState,
   onScores,
   onFinish,
 }: {
   sessionSeed: number;
-  playerName: string;
-  partnerName: string;
+  mySlot: 1 | 2;
+  slot1Label: string;
+  slot2Label: string;
   personalizedItems: PersonalizedItemRecord[];
+  roomGameState?: Record<string, unknown>;
+  onSyncRoomGameState?: (nextState: Record<string, unknown>) => void;
   onScores: (s1: number, s2: number) => void;
-  onFinish: (res: 'win', score: number, text: string) => void;
+  onFinish: (
+    res: 'win' | 'loss' | 'draw',
+    score: number,
+    text: string,
+    details?: Record<string, unknown>
+  ) => void;
 }) {
   const customQuestions = personalizedItems
     .filter((i) => i.category === 'quiz_question')
@@ -1479,24 +1869,46 @@ function QuizBattleDuel({
   ];
 
   const questions = seededShuffle(baseQuestions, sessionSeed);
-
-  const [qIdx, setQIdx] = useState(0);
-  const [pts, setPts] = useState(0);
-
+  const qIdx = Number(roomGameState?.qbQuestionIdx || 0);
+  const p1Pts = Number(roomGameState?.p1Score || 0);
+  const p2Pts = Number(roomGameState?.p2Score || 0);
+  const totalRounds = Math.min(4, questions.length);
   const currentQ = questions[qIdx % questions.length]!;
 
   function selectAnswer(idx: number) {
     const correct = idx === currentQ.answerIndex;
-    const nextPts = pts + (correct ? 250 : 50);
-    setPts(nextPts);
-    onScores(nextPts, (qIdx + 1) * 180);
+    const delta = correct ? 250 : 50;
+    const nextP1 = mySlot === 1 ? p1Pts + delta : p1Pts;
+    const nextP2 = mySlot === 2 ? p2Pts + delta : p2Pts;
+    const nextQ = qIdx + 1;
+
     if (correct) soundFX.playCapture();
     else soundFX.playError();
 
-    if (qIdx + 1 >= Math.min(4, questions.length)) {
-      setTimeout(() => onFinish('win', nextPts, 'Quiz Battle Victory!'), 350);
-    } else {
-      setQIdx(qIdx + 1);
+    onScores(nextP1, nextP2);
+    if (onSyncRoomGameState) {
+      onSyncRoomGameState({
+        qbQuestionIdx: nextQ,
+        p1Score: nextP1,
+        p2Score: nextP2,
+      });
+    }
+
+    if (nextQ >= totalRounds) {
+      const myFinal = mySlot === 1 ? nextP1 : nextP2;
+      const oppFinal = mySlot === 1 ? nextP2 : nextP1;
+      const res: 'win' | 'loss' | 'draw' =
+        myFinal > oppFinal ? 'win' : myFinal < oppFinal ? 'loss' : 'draw';
+      const winnerText =
+        nextP1 > nextP2
+          ? `${slot1Label} Wins Quiz Battle!`
+          : nextP2 > nextP1
+          ? `${slot2Label} Wins Quiz Battle!`
+          : 'Quiz Battle Tie!';
+      setTimeout(
+        () => onFinish(res, myFinal, winnerText, { opponentScore: oppFinal }),
+        350
+      );
     }
   }
 
@@ -1505,7 +1917,7 @@ function QuizBattleDuel({
       <div className="flex items-center justify-between text-xs text-amber-300">
         <span>Category: {currentQ.category}</span>
         <span>
-          Question {qIdx + 1} of {Math.min(4, questions.length)}
+          Question {Math.min(qIdx + 1, totalRounds)} of {totalRounds}
         </span>
       </div>
       <h3 className="mt-3 text-lg font-bold text-stone-100">{currentQ.question}</h3>
@@ -1526,39 +1938,67 @@ function QuizBattleDuel({
 }
 
 /* ============================================================================
-   6. WORD BATTLE (Honeycomb Letter Rack, Shuffle & Pangram Bonus)
+   6. WORD BATTLE (Shared Honeycomb Rack & Synchronized Word Forging)
    ============================================================================ */
 function WordBattleDuel({
   sessionSeed,
+  mySlot,
+  playerName,
+  roomGameState,
+  onSyncRoomGameState,
   onScores,
   onFinish,
 }: {
   sessionSeed: number;
+  mySlot: 1 | 2;
+  playerName: string;
+  roomGameState?: Record<string, unknown>;
+  onSyncRoomGameState?: (nextState: Record<string, unknown>) => void;
   onScores: (s1: number, s2: number) => void;
-  onFinish: (res: 'win', score: number, text: string) => void;
+  onFinish: (
+    res: 'win' | 'loss' | 'draw',
+    score: number,
+    text: string,
+    details?: Record<string, unknown>
+  ) => void;
 }) {
   const initialRackSpec = generateWordBattleRack(sessionSeed);
   const [rack, setRack] = useState<string[]>(initialRackSpec.rack);
   const center = initialRackSpec.center;
   const [wordInput, setWordInput] = useState('');
-  const [foundWords, setFoundWords] = useState<string[]>([]);
-  const [totalPts, setTotalPts] = useState(0);
   const [msg, setMsg] = useState(
     `Forge words of 3+ letters that include the golden center letter "${center}".`
   );
 
+  const foundEntries = Array.isArray(roomGameState?.wbFoundWords)
+    ? (roomGameState.wbFoundWords as Array<{
+        word: string;
+        by: string;
+        points: number;
+        slot: 1 | 2;
+      }>)
+    : [];
+
   function shuffleOuterLetters() {
     const outer = rack.filter((l) => l !== center);
     const rotated = [...outer.slice(1), outer[0]];
-    setRack([rotated[0], rotated[1], center, rotated[2], rotated[3], rotated[4], rotated[5]]);
+    setRack([
+      rotated[0],
+      rotated[1],
+      center,
+      rotated[2],
+      rotated[3],
+      rotated[4],
+      rotated[5],
+    ]);
     soundFX.playFlip();
   }
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     const upper = wordInput.trim().toUpperCase();
-    if (foundWords.includes(upper)) {
-      setMsg('Already forged that word!');
+    if (foundEntries.some((f) => f.word === upper)) {
+      setMsg('Already forged that word in this room!');
       return;
     }
     const check = scoreWordBattleSubmission(upper, rack, center);
@@ -1567,17 +2007,40 @@ function WordBattleDuel({
       soundFX.playError();
       return;
     }
-    const nextPts = totalPts + check.points;
-    const nextFound = [...foundWords, upper];
-    setFoundWords(nextFound);
-    setTotalPts(nextPts);
+
+    const nextEntries = [
+      ...foundEntries,
+      { word: upper, by: playerName, points: check.points, slot: mySlot },
+    ];
+    const p1Pts = nextEntries
+      .filter((e) => e.slot === 1)
+      .reduce((acc, e) => acc + e.points, 0);
+    const p2Pts = nextEntries
+      .filter((e) => e.slot === 2)
+      .reduce((acc, e) => acc + e.points, 0);
+
     setWordInput('');
     setMsg(`Forged "${upper}" for +${check.points} pts!`);
-    onScores(nextPts, nextFound.length * 45);
+    onScores(p1Pts, p2Pts);
+    if (onSyncRoomGameState) {
+      onSyncRoomGameState({
+        wbFoundWords: nextEntries,
+        p1Score: p1Pts,
+        p2Score: p2Pts,
+      });
+    }
     soundFX.playCapture();
 
-    if (nextFound.length >= 3) {
-      setTimeout(() => onFinish('win', nextPts, 'Word Battle Champion!'), 400);
+    if (nextEntries.length >= 4) {
+      const myPts = mySlot === 1 ? p1Pts : p2Pts;
+      const oppPts = mySlot === 1 ? p2Pts : p1Pts;
+      setTimeout(
+        () =>
+          onFinish('win', myPts, 'Word Battle Complete!', {
+            opponentScore: oppPts,
+          }),
+        350
+      );
     }
   }
 
@@ -1626,31 +2089,48 @@ function WordBattleDuel({
       </form>
       <p className="text-xs text-amber-300">{msg}</p>
       <div className="text-xs text-stone-400">
-        Found Words ({foundWords.length}/3 to win): {foundWords.join(' · ') || 'None yet'}
+        Shared Forged Words ({foundEntries.length}/4):{' '}
+        {foundEntries.map((f) => `${f.word} (@${f.by})`).join(' · ') || 'None yet'}
       </div>
     </div>
   );
 }
 
 /* ============================================================================
-   7. REACTION RACE (False-Start Penalty Detection + Millisecond Telemetry)
+   7. REACTION RACE (Real Human Reflex Comparison)
    ============================================================================ */
 function ReactionRaceDuel({
   sessionSeed,
+  mySlot,
+  slot1Label,
+  slot2Label,
+  roomGameState,
+  onSyncRoomGameState,
   onScores,
   onFinish,
 }: {
   sessionSeed: number;
-  playerName: string;
-  partnerName: string;
+  mySlot: 1 | 2;
+  slot1Label: string;
+  slot2Label: string;
+  roomGameState?: Record<string, unknown>;
+  onSyncRoomGameState?: (nextState: Record<string, unknown>) => void;
   onScores: (s1: number, s2: number) => void;
-  onFinish: (res: 'win', score: number, text: string) => void;
+  onFinish: (
+    res: 'win' | 'loss' | 'draw',
+    score: number,
+    text: string,
+    details?: Record<string, unknown>
+  ) => void;
 }) {
   const [phase, setPhase] = useState<'waiting' | 'ready' | 'false_start' | 'done'>(
     'waiting'
   );
   const [startTimestamp, setStartTimestamp] = useState(0);
   const [reactionMs, setReactionMs] = useState<number | null>(null);
+
+  const timesBySlot: Record<string, number> =
+    (roomGameState?.rrTimesBySlot as Record<string, number> | undefined) || {};
 
   useEffect(() => {
     if (phase !== 'waiting') return;
@@ -1674,9 +2154,42 @@ function ReactionRaceDuel({
       setReactionMs(ms);
       setPhase('done');
       const pts = Math.max(200, 1000 - ms);
-      onScores(pts, 680);
+      const nextTimes: Record<string, number> = {
+        ...timesBySlot,
+        [String(mySlot)]: ms,
+      };
+      const p1Pts = nextTimes['1'] ? Math.max(200, 1000 - nextTimes['1']) : 0;
+      const p2Pts = nextTimes['2'] ? Math.max(200, 1000 - nextTimes['2']) : 0;
+
+      onScores(p1Pts, p2Pts);
+      if (onSyncRoomGameState) {
+        onSyncRoomGameState({
+          rrTimesBySlot: nextTimes,
+          p1Score: p1Pts,
+          p2Score: p2Pts,
+        });
+      }
       soundFX.playCapture();
-      setTimeout(() => onFinish('win', pts, `Lightning Reflex: ${ms}ms!`), 550);
+
+      if (nextTimes['1'] && nextTimes['2']) {
+        const fasterSlot = nextTimes['1'] <= nextTimes['2'] ? 1 : 2;
+        const winnerName = fasterSlot === 1 ? slot1Label : slot2Label;
+        setTimeout(
+          () =>
+            onFinish(
+              fasterSlot === mySlot ? 'win' : 'loss',
+              pts,
+              `${winnerName} Won Reaction Race (${Math.min(nextTimes['1'], nextTimes['2'])}ms)!`,
+              { opponentScore: mySlot === 1 ? p2Pts : p1Pts }
+            ),
+          450
+        );
+      } else {
+        setTimeout(
+          () => onFinish('win', pts, `Lightning Reflex: ${ms}ms!`),
+          650
+        );
+      }
     }
   }
 
@@ -1697,7 +2210,7 @@ function ReactionRaceDuel({
           {phase === 'waiting' && 'Wait for Emerald Lantern...'}
           {phase === 'false_start' && 'Too Early! False Start — Resetting...'}
           {phase === 'ready' && 'STRIKE NOW! (Click Here)'}
-          {phase === 'done' && `Reaction Time: ${reactionMs} ms`}
+          {phase === 'done' && `Your Reaction Time: ${reactionMs} ms`}
         </span>
       </button>
     </div>
@@ -1705,20 +2218,24 @@ function ReactionRaceDuel({
 }
 
 /* ============================================================================
-   8. TRUTH OR DARE (Spinning Turn Selector + Custom Decks)
+   8. TRUTH OR DARE (Synchronized Turn Wheel + Custom Shared Decks)
    ============================================================================ */
 function TruthOrDareParty({
   sessionSeed,
-  playerName,
-  partnerName,
+  slot1Label,
+  slot2Label,
   personalizedItems,
+  roomGameState,
+  onSyncRoomGameState,
   onScores,
   onFinish,
 }: {
   sessionSeed: number;
-  playerName: string;
-  partnerName: string;
+  slot1Label: string;
+  slot2Label: string;
   personalizedItems: PersonalizedItemRecord[];
+  roomGameState?: Record<string, unknown>;
+  onSyncRoomGameState?: (nextState: Record<string, unknown>) => void;
   onScores: (s1: number, s2: number) => void;
   onFinish: (res: 'completed', score: number, text: string) => void;
 }) {
@@ -1760,17 +2277,16 @@ function TruthOrDareParty({
   ];
 
   const deck = seededShuffle(baseDeck, sessionSeed);
-
-  const [idx, setIdx] = useState(0);
-  const [completedCount, setCompletedCount] = useState(0);
-  const [spotlightPlayer, setSpotlightPlayer] = useState(() =>
-    sessionSeed % 2 === 0 ? playerName : partnerName
-  );
+  const idx = Number(roomGameState?.todCardIdx || 0);
+  const completedCount = Number(roomGameState?.todCompletedCount || 0);
+  const spotlightSlot: 1 | 2 = roomGameState?.todSpotlightSlot === 2 ? 2 : 1;
   const activeCard = deck[idx % deck.length]!;
 
   function spinTurnWheel() {
-    const nextP = spotlightPlayer === playerName ? partnerName : playerName;
-    setSpotlightPlayer(nextP);
+    const nextSlot: 1 | 2 = spotlightSlot === 1 ? 2 : 1;
+    if (onSyncRoomGameState) {
+      onSyncRoomGameState({ todSpotlightSlot: nextSlot });
+    }
     soundFX.playFlip();
   }
 
@@ -1785,7 +2301,7 @@ function TruthOrDareParty({
           onClick={spinTurnWheel}
           className="rounded-lg border border-stone-700 bg-stone-900 px-2.5 py-1 text-teal-300"
         >
-          Spotlight: {spotlightPlayer} (Click to Spin)
+          Spotlight: {spotlightSlot === 1 ? slot1Label : slot2Label} (Spin)
         </button>
       </div>
       <p className="text-lg font-bold leading-relaxed text-stone-100">
@@ -1796,10 +2312,18 @@ function TruthOrDareParty({
           type="button"
           onClick={() => {
             const nextC = completedCount + 1;
-            setCompletedCount(nextC);
-            setIdx((i) => i + 1);
-            spinTurnWheel();
+            const nextIdx = idx + 1;
+            const nextSlot: 1 | 2 = spotlightSlot === 1 ? 2 : 1;
             onScores(nextC * 150, nextC * 150);
+            if (onSyncRoomGameState) {
+              onSyncRoomGameState({
+                todCardIdx: nextIdx,
+                todCompletedCount: nextC,
+                todSpotlightSlot: nextSlot,
+                p1Score: nextC * 150,
+                p2Score: nextC * 150,
+              });
+            }
             soundFX.playCapture();
           }}
           className="rounded-xl bg-amber-500 px-5 py-2.5 text-xs font-bold text-stone-950 hover:bg-amber-400"
@@ -1825,44 +2349,78 @@ function TruthOrDareParty({
 }
 
 /* ============================================================================
-   9. HIGHER OR LOWER (Astral Card Deck + History Trail)
+   9. HIGHER OR LOWER (Synchronized Astral Card Deck + History Trail)
    ============================================================================ */
 function HigherOrLowerDuel({
   sessionSeed,
+  mySlot,
+  slot1Label,
+  slot2Label,
+  roomGameState,
+  onSyncRoomGameState,
   onScores,
   onFinish,
 }: {
   sessionSeed: number;
+  mySlot: 1 | 2;
+  slot1Label: string;
+  slot2Label: string;
+  roomGameState?: Record<string, unknown>;
+  onSyncRoomGameState?: (nextState: Record<string, unknown>) => void;
   onScores: (s1: number, s2: number) => void;
-  onFinish: (res: 'win', score: number, text: string) => void;
+  onFinish: (
+    res: 'win' | 'loss' | 'draw',
+    score: number,
+    text: string,
+    details?: Record<string, unknown>
+  ) => void;
 }) {
   const initialCard = generateHigherLowerStartingCard(sessionSeed);
-  const [currentVal, setCurrentVal] = useState(initialCard);
-  const [streak, setStreak] = useState(0);
-  const [history, setHistory] = useState<number[]>([initialCard]);
+  const currentVal =
+    typeof roomGameState?.holCurrentVal === 'number'
+      ? roomGameState.holCurrentVal
+      : initialCard;
+  const history = Array.isArray(roomGameState?.holHistory)
+    ? (roomGameState.holHistory as number[])
+    : [initialCard];
+  const p1Score = Number(roomGameState?.p1Score || 0);
+  const p2Score = Number(roomGameState?.p2Score || 0);
 
   function guess(dir: 'higher' | 'lower') {
     const deckSequence = seededShuffle(
       [14, 6, 18, 9, 20, 4, 15, 11, 19, 3, 16, 8, 2, 13, 17, 7],
       sessionSeed + history.length
     );
-    let nextVal = deckSequence[(history.length + streak) % deckSequence.length];
+    let nextVal = deckSequence[history.length % deckSequence.length];
     if (nextVal === currentVal) nextVal = currentVal < 21 ? currentVal + 1 : 1;
     const won =
       (dir === 'higher' && nextVal > currentVal) ||
       (dir === 'lower' && nextVal < currentVal);
-    setCurrentVal(nextVal);
-    setHistory((h) => [...h.slice(-6), nextVal]);
-    const nextStreak = won ? streak + 1 : streak;
-    setStreak(nextStreak);
-    const pts = nextStreak * 160;
-    onScores(pts, 280);
+
+    const nextHist = [...history.slice(-6), nextVal];
+    const nextP1 = mySlot === 1 ? p1Score + (won ? 160 : 0) : p1Score;
+    const nextP2 = mySlot === 2 ? p2Score + (won ? 160 : 0) : p2Score;
+
+    onScores(nextP1, nextP2);
+    if (onSyncRoomGameState) {
+      onSyncRoomGameState({
+        holCurrentVal: nextVal,
+        holHistory: nextHist,
+        p1Score: nextP1,
+        p2Score: nextP2,
+      });
+    }
     if (won) soundFX.playCapture();
     else soundFX.playMove();
 
-    if (nextStreak >= 4) {
+    const myNextScore = mySlot === 1 ? nextP1 : nextP2;
+    if (myNextScore >= 640) {
+      const winnerName = mySlot === 1 ? slot1Label : slot2Label;
       setTimeout(
-        () => onFinish('win', pts + 200, '4x Prediction Streak Achieved!'),
+        () =>
+          onFinish('win', myNextScore, `${winnerName} Reached 4x Prediction Streak!`, {
+            opponentScore: mySlot === 1 ? nextP2 : nextP1,
+          }),
         350
       );
     }
@@ -1871,7 +2429,7 @@ function HigherOrLowerDuel({
   return (
     <div className="mx-auto flex max-w-md flex-col items-center gap-4 rounded-2xl border border-stone-800 bg-stone-950 p-6 text-center">
       <span className="text-xs text-stone-400">
-        Astral Card Value (Scale 1–21) · Streak: {streak}/4
+        Astral Card Value (Scale 1–21) · First to 640 pts wins!
       </span>
       <div className="flex h-36 w-28 flex-col items-center justify-center rounded-2xl border-2 border-amber-400 bg-stone-900 font-mono text-4xl font-bold text-amber-300 tabular-nums shadow-lg">
         <span>{currentVal}</span>
@@ -1901,38 +2459,48 @@ function HigherOrLowerDuel({
 }
 
 /* ============================================================================
-   10. ESCAPE THE MAZE (Cooperative Key-Switch Dungeon)
+   10. ESCAPE THE MAZE (Synchronized Cooperative Key-Switch Dungeon)
    ============================================================================ */
 function EscapeTheMazeCoop({
   sessionSeed,
+  roomGameState,
+  onSyncRoomGameState,
   onScores,
   onFinish,
 }: {
   sessionSeed: number;
-  playerName: string;
-  partnerName: string;
+  roomGameState?: Record<string, unknown>;
+  onSyncRoomGameState?: (nextState: Record<string, unknown>) => void;
   onScores: (s1: number, s2: number) => void;
-  onFinish: (res: 'win', score: number, text: string) => void;
+  onFinish: (res: 'completed', score: number, text: string) => void;
 }) {
   const [switchCoord] = useState<[number, number]>(
     () => generateMazeKeyPositions(sessionSeed)[0]
   );
-  const [pos, setPos] = useState<[number, number]>([0, 0]);
-  const [gateUnlocked, setGateUnlocked] = useState(false);
+  const pos: [number, number] = Array.isArray(roomGameState?.mazePos)
+    ? (roomGameState.mazePos as [number, number])
+    : [0, 0];
+  const gateUnlocked = Boolean(roomGameState?.mazeGateUnlocked);
 
   function move(dr: number, dc: number) {
     const nr = Math.max(0, Math.min(4, pos[0] + dr));
     const nc = Math.max(0, Math.min(4, pos[1] + dc));
-    setPos([nr, nc]);
+    const nextUnlocked =
+      gateUnlocked || (nr === switchCoord[0] && nc === switchCoord[1]);
     soundFX.playMove();
-    if (nr === switchCoord[0] && nc === switchCoord[1]) {
-      setGateUnlocked(true);
+    if (nextUnlocked && !gateUnlocked) {
       soundFX.playCapture();
+    }
+    if (onSyncRoomGameState) {
+      onSyncRoomGameState({
+        mazePos: [nr, nc],
+        mazeGateUnlocked: nextUnlocked,
+      });
     }
     if (nr === 4 && nc === 4) {
       onScores(600, 600);
       setTimeout(
-        () => onFinish('win', 600, 'Sanctuary Maze Escaped Together!'),
+        () => onFinish('completed', 600, 'Sanctuary Maze Escaped Together!'),
         300
       );
     }
@@ -1941,7 +2509,7 @@ function EscapeTheMazeCoop({
   return (
     <div className="mx-auto flex max-w-md flex-col items-center gap-4">
       <p className="text-xs text-stone-400">
-        Step on the randomized Switch Plate (Row {switchCoord[0] + 1}, Col {switchCoord[1] + 1}) and guide the team to the Exit Portal (Bottom-Right)!
+        Step on the Switch Plate (Row {switchCoord[0] + 1}, Col {switchCoord[1] + 1}) and guide your team to the Exit Portal (Bottom-Right)!
       </p>
       <div className="grid aspect-square w-64 grid-cols-5 gap-1.5 rounded-2xl border border-stone-800 bg-stone-950 p-3">
         {Array.from({ length: 5 }, (_, r) =>
@@ -1965,7 +2533,15 @@ function EscapeTheMazeCoop({
                     : 'border-stone-800 bg-stone-900'
                 }`}
               >
-                {isPlayer ? '★' : isExit ? 'EXIT' : isSwitch ? (gateUnlocked ? 'OPEN' : 'KEY') : ''}
+                {isPlayer
+                  ? '★'
+                  : isExit
+                  ? 'EXIT'
+                  : isSwitch
+                  ? gateUnlocked
+                    ? 'OPEN'
+                    : 'KEY'
+                  : ''}
               </button>
             );
           })
@@ -1976,7 +2552,7 @@ function EscapeTheMazeCoop({
 }
 
 /* ============================================================================
-   11. COOKING TOGETHER (Cooperative Bistro Kitchen)
+   11. COOKING TOGETHER (Synchronized Cooperative Bistro Kitchen)
    ============================================================================ */
 const RECIPE_STEPS = [
   'Whisk Sweet Batter',
@@ -1987,17 +2563,19 @@ const RECIPE_STEPS = [
 
 function CookingTogetherCoop({
   sessionSeed,
+  roomGameState,
+  onSyncRoomGameState,
   onScores,
   onFinish,
 }: {
   sessionSeed: number;
-  playerName: string;
-  partnerName: string;
+  roomGameState?: Record<string, unknown>;
+  onSyncRoomGameState?: (nextState: Record<string, unknown>) => void;
   onScores: (s1: number, s2: number) => void;
-  onFinish: (res: 'win', score: number, text: string) => void;
+  onFinish: (res: 'completed', score: number, text: string) => void;
 }) {
-  const [stepIdx, setStepIdx] = useState(0);
-  const [dishesServed, setDishesServed] = useState(0);
+  const stepIdx = Number(roomGameState?.cookStepIdx || 0);
+  const dishesServed = Number(roomGameState?.cookDishesServed || 0);
   const counterButtons = seededShuffle(RECIPE_STEPS, sessionSeed);
 
   function addIngredient(stepName: string) {
@@ -2006,18 +2584,24 @@ function CookingTogetherCoop({
       soundFX.playCapture();
       if (nextStep >= RECIPE_STEPS.length) {
         const nextDishes = dishesServed + 1;
-        setDishesServed(nextDishes);
-        setStepIdx(0);
         const pts = nextDishes * 320;
         onScores(pts, pts);
+        if (onSyncRoomGameState) {
+          onSyncRoomGameState({
+            cookStepIdx: 0,
+            cookDishesServed: nextDishes,
+            p1Score: pts,
+            p2Score: pts,
+          });
+        }
         if (nextDishes >= 2) {
           setTimeout(
-            () => onFinish('win', pts, 'Co-Op Bistro Service Complete!'),
+            () => onFinish('completed', pts, 'Co-Op Bistro Service Complete!'),
             350
           );
         }
-      } else {
-        setStepIdx(nextStep);
+      } else if (onSyncRoomGameState) {
+        onSyncRoomGameState({ cookStepIdx: nextStep });
       }
     } else {
       soundFX.playError();
@@ -2034,7 +2618,6 @@ function CookingTogetherCoop({
         <span>Dishes Served: {dishesServed} / 2</span>
       </div>
 
-      {/* Recipe Progress Bar */}
       <div className="h-2.5 w-full overflow-hidden rounded-full bg-stone-900">
         <div
           className="h-full bg-teal-400 transition-all duration-300"
@@ -2065,20 +2648,27 @@ function CookingTogetherCoop({
 }
 
 /* ============================================================================
-   12. JIGSAW PUZZLE TOGETHER (True Quadrant-Sliced Keepsake Photo Tiles)
+   12. JIGSAW PUZZLE TOGETHER (Synchronized Shared Keepsake Photo Tiles)
    ============================================================================ */
 function JigsawPuzzleCoop({
   sessionSeed,
+  roomGameState,
+  onSyncRoomGameState,
   onScores,
   onFinish,
 }: {
   sessionSeed: number;
+  roomGameState?: Record<string, unknown>;
+  onSyncRoomGameState?: (nextState: Record<string, unknown>) => void;
   onScores: (s1: number, s2: number) => void;
-  onFinish: (res: 'win', score: number, text: string) => void;
+  onFinish: (res: 'completed', score: number, text: string) => void;
 }) {
-  const [tiles, setTiles] = useState<number[]>(() =>
-    generateJigsawTileOrder(sessionSeed)
-  );
+  const defaultTiles = generateJigsawTileOrder(sessionSeed);
+  const tiles =
+    Array.isArray(roomGameState?.jigsawTiles) &&
+    roomGameState.jigsawTiles.length === 9
+      ? (roomGameState.jigsawTiles as number[])
+      : defaultTiles;
   const [selectedIdx, setSelectedIdx] = useState<number | null>(null);
 
   function handleTileClick(idx: number) {
@@ -2089,15 +2679,18 @@ function JigsawPuzzleCoop({
     }
     const next = [...tiles];
     [next[selectedIdx], next[idx]] = [next[idx], next[selectedIdx]];
-    setTiles(next);
     setSelectedIdx(null);
     soundFX.playCapture();
+
+    if (onSyncRoomGameState) {
+      onSyncRoomGameState({ jigsawTiles: next });
+    }
 
     const solved = next.every((val, i) => val === i);
     if (solved) {
       onScores(650, 650);
       setTimeout(
-        () => onFinish('win', 650, 'Shared Keepsake Jigsaw Completed!'),
+        () => onFinish('completed', 650, 'Shared Keepsake Jigsaw Completed!'),
         350
       );
     }
@@ -2106,7 +2699,7 @@ function JigsawPuzzleCoop({
   return (
     <div className="mx-auto flex max-w-md flex-col items-center gap-4">
       <p className="text-xs text-stone-400">
-        Click two tiles to swap them into ascending order (1 to 9) to lock the Starlight Picnic illustration!
+        Click two tiles to swap them into ascending order (1 to 9) together!
       </p>
       <div className="grid aspect-square w-72 grid-cols-3 gap-2 rounded-2xl border border-stone-800 bg-stone-950 p-3">
         {tiles.map((pieceNum, idx) => {
@@ -2142,23 +2735,28 @@ function JigsawPuzzleCoop({
 }
 
 /* ============================================================================
-   13. TREASURE HUNT (Compass Triangulation & Archipelago Relics)
+   13. TREASURE HUNT (Synchronized Compass Triangulation & Relics)
    ============================================================================ */
 function TreasureHuntCoop({
   sessionSeed,
+  roomGameState,
+  onSyncRoomGameState,
   onScores,
   onFinish,
 }: {
   sessionSeed: number;
+  roomGameState?: Record<string, unknown>;
+  onSyncRoomGameState?: (nextState: Record<string, unknown>) => void;
   onScores: (s1: number, s2: number) => void;
-  onFinish: (res: 'win', score: number, text: string) => void;
+  onFinish: (res: 'completed', score: number, text: string) => void;
 }) {
   const [relics] = useState<[number, number][]>(() =>
     generateTreasureRelicCoords(sessionSeed)
   );
-  const [dug, setDug] = useState<Record<string, string>>({});
+  const dug =
+    (roomGameState?.treasureDug as Record<string, string> | undefined) || {};
   const [clueMsg, setClueMsg] = useState(
-    'Click any island sector to excavate and triangulate compass clues.'
+    'Click any island sector to excavate and triangulate compass clues together.'
   );
 
   function digSector(r: number, c: number) {
@@ -2170,7 +2768,6 @@ function TreasureHuntCoop({
     );
 
     const next = { ...dug, [key]: isRelic ? 'RELIC' : `${minDist}` };
-    setDug(next);
     if (isRelic) {
       setClueMsg(`Unearthed Golden Relic at Sector (${r + 1}, ${c + 1})!`);
       soundFX.playCapture();
@@ -2181,9 +2778,16 @@ function TreasureHuntCoop({
 
     const foundCount = Object.values(next).filter((v) => v === 'RELIC').length;
     onScores(foundCount * 240, foundCount * 240);
+    if (onSyncRoomGameState) {
+      onSyncRoomGameState({
+        treasureDug: next,
+        p1Score: foundCount * 240,
+        p2Score: foundCount * 240,
+      });
+    }
     if (foundCount >= relics.length) {
       setTimeout(
-        () => onFinish('win', 720, 'All 3 Archipelago Relics Unearthed!'),
+        () => onFinish('completed', 720, 'All 3 Archipelago Relics Unearthed!'),
         350
       );
     }

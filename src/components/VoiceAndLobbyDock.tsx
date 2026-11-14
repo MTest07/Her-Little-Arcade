@@ -34,11 +34,14 @@ export interface RoomParticipant {
   uid: string;
   username: string;
   avatar: string;
+  customPhotoUrl?: string;
+  equippedSkin?: string;
   coupleId?: number;
   coupleName?: string;
   teamSlot?: 1 | 2;
   ready: boolean;
   online: boolean;
+  isOnline?: boolean;
 }
 
 export interface RoomCoupleTeam {
@@ -47,7 +50,15 @@ export interface RoomCoupleTeam {
   coupleName: string;
   coupleTrophies?: number;
   score: number;
-  members: { uid: string; username: string; avatar: string }[];
+  members: {
+    uid: string;
+    username: string;
+    avatar: string;
+    customPhotoUrl?: string;
+    equippedSkin?: string;
+    isOnline?: boolean;
+    online?: boolean;
+  }[];
 }
 
 export interface RoomPendingRequest {

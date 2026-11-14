@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import { Chess } from 'chess.js';
 import { AccessToken } from 'livekit-server-sdk';
 import { db } from './index.ts';
 import {
@@ -1717,7 +1718,7 @@ export async function getCoupleContextForUser(uid: string) {
     if (!uid) {
       return { activeCouple: null, pendingOutgoing: null, pendingIncoming: null };
     }
-    const rows = await db
+    const rawRows = await db
       .select()
       .from(couplePairings)
       .where(
@@ -1728,18 +1729,55 @@ export async function getCoupleContextForUser(uid: string) {
       )
       .orderBy(desc(couplePairings.updatedAt));
 
+    // Automatically expire stale pending couple pairing records older than 24 hours
+    const twentyFourHoursAgo = Date.now() - 24 * 60 * 60_000;
+    const rows: (typeof couplePairings.$inferSelect)[] = [];
+    for (const r of rawRows) {
+      if (
+        (r.status === 'pending_partner' || r.status === 'pending_requester_confirm') &&
+        r.createdAt &&
+        new Date(r.createdAt).getTime() < twentyFourHoursAgo
+      ) {
+        await db
+          .update(couplePairings)
+          .set({ status: 'unpaired', updatedAt: new Date() })
+          .where(eq(couplePairings.id, r.id));
+        rows.push({ ...r, status: 'unpaired' });
+      } else {
+        rows.push(r);
+      }
+    }
+
     const activeRow = rows.find((r) => r.status === 'active') || null;
-    const pendingOutgoing =
-      rows.find(
-        (r) =>
-          r.requesterUid === uid &&
-          (r.status === 'pending_partner' || r.status === 'pending_requester_confirm')
-      ) || null;
-    const pendingIncoming =
-      rows.find(
-        (r) =>
-          r.partnerUid === uid && r.status === 'pending_requester_confirm'
-      ) || null;
+    const pendingOutgoing = !activeRow
+      ? rows.find(
+          (r) =>
+            r.requesterUid === uid &&
+            (r.status === 'pending_partner' || r.status === 'pending_requester_confirm')
+        ) || null
+      : null;
+    const pendingIncoming = !activeRow
+      ? rows.find(
+          (r) =>
+            r.partnerUid === uid &&
+            (r.status === 'pending_partner' || r.status === 'pending_requester_confirm')
+        ) || null
+      : null;
+
+    async function hydrateUserWithPhoto(userRow: typeof users.$inferSelect | undefined) {
+      if (!userRow) return null;
+      const sanitized = sanitizeUserRow(userRow, { isOwner: userRow.uid === uid });
+      if (!sanitized.customPhotoUrl) {
+        const picRows = await db
+          .select()
+          .from(profilePictures)
+          .where(eq(profilePictures.userUid, userRow.uid));
+        if (picRows[0]?.imageDataUrl) {
+          sanitized.customPhotoUrl = picRows[0].imageDataUrl;
+        }
+      }
+      return sanitized;
+    }
 
     async function enrichPairing(row: typeof couplePairings.$inferSelect | null) {
       if (!row) return null;
@@ -1750,12 +1788,8 @@ export async function getCoupleContextForUser(uid: string) {
       const partUserRows = row.partnerUid
         ? await db.select().from(users).where(eq(users.uid, row.partnerUid))
         : [];
-      const reqProfile = reqUserRows[0]
-        ? sanitizeUserRow(reqUserRows[0], { isOwner: reqUserRows[0].uid === uid })
-        : null;
-      const partProfile = partUserRows[0]
-        ? sanitizeUserRow(partUserRows[0], { isOwner: partUserRows[0].uid === uid })
-        : null;
+      const reqProfile = await hydrateUserWithPhoto(reqUserRows[0]);
+      const partProfile = await hydrateUserWithPhoto(partUserRows[0]);
 
       const combinedXp =
         row.coupleXp + (reqProfile?.xp || 0) + (partProfile?.xp || 0);
@@ -1779,6 +1813,235 @@ export async function getCoupleContextForUser(uid: string) {
     console.error('Database getCoupleContextForUser failed:', error);
     throw new Error('Failed to load couple pairing status.', { cause: error });
   }
+}
+
+export async function activateCoupleRelationship(input: {
+  pairingRowId: number;
+  requesterUid: string;
+  partnerUid: string;
+}) {
+  const { pairingRowId, requesterUid, partnerUid } = input;
+  if (!requesterUid || !partnerUid) {
+    throw new Error('Both partner user IDs are required to establish a couple pairing.');
+  }
+  if (requesterUid === partnerUid) {
+    throw new Error('You cannot pair with your own account.');
+  }
+
+  const reqRows = await db.select().from(users).where(eq(users.uid, requesterUid));
+  const partRows = await db.select().from(users).where(eq(users.uid, partnerUid));
+  if (!reqRows.length || !partRows.length) {
+    throw new Error('Both player accounts must exist to establish a couple pairing.');
+  }
+  const reqUser = reqRows[0];
+  const partUser = partRows[0];
+
+  // Check all active couples to enforce strictly one active couple per user
+  const activeCouples = await db
+    .select()
+    .from(couplePairings)
+    .where(eq(couplePairings.status, 'active'));
+
+  // Check if these two users already have an active couple relationship with someone else
+  const reqOtherActive = activeCouples.find(
+    (c) =>
+      (c.requesterUid === requesterUid || c.partnerUid === requesterUid) &&
+      !(
+        (c.requesterUid === requesterUid && c.partnerUid === partnerUid) ||
+        (c.requesterUid === partnerUid && c.partnerUid === requesterUid)
+      )
+  );
+  if (reqOtherActive) {
+    throw new Error(
+      `@${reqUser.username} is already in an active couple pairing with another player.`
+    );
+  }
+
+  const partOtherActive = activeCouples.find(
+    (c) =>
+      (c.requesterUid === partnerUid || c.partnerUid === partnerUid) &&
+      !(
+        (c.requesterUid === requesterUid && c.partnerUid === partnerUid) ||
+        (c.requesterUid === partnerUid && c.partnerUid === requesterUid)
+      )
+  );
+  if (partOtherActive) {
+    throw new Error(
+      `@${partUser.username} is already in an active couple pairing with another player.`
+    );
+  }
+
+  // Prevent duplicate active couples between the same two users
+  const existingSameActive = activeCouples.find(
+    (c) =>
+      (c.requesterUid === requesterUid && c.partnerUid === partnerUid) ||
+      (c.requesterUid === partnerUid && c.partnerUid === requesterUid)
+  );
+  if (existingSameActive) {
+    throw new Error('These two accounts are already actively paired together.');
+  }
+
+  const targetRows = await db
+    .select()
+    .from(couplePairings)
+    .where(eq(couplePairings.id, pairingRowId));
+  if (!targetRows.length) {
+    throw new Error('Pairing invitation record was not found.');
+  }
+  const targetRow = targetRows[0];
+
+  if (
+    targetRow.status !== 'pending_partner' &&
+    targetRow.status !== 'pending_requester_confirm'
+  ) {
+    throw new Error(
+      targetRow.status === 'active'
+        ? 'This pairing invitation has already been accepted.'
+        : 'This pairing invitation has expired or been cancelled.'
+    );
+  }
+
+  const twentyFourHoursAgo = Date.now() - 24 * 60 * 60_000;
+  if (
+    targetRow.createdAt &&
+    new Date(targetRow.createdAt).getTime() < twentyFourHoursAgo
+  ) {
+    await db
+      .update(couplePairings)
+      .set({ status: 'unpaired', updatedAt: new Date() })
+      .where(eq(couplePairings.id, targetRow.id));
+    throw new Error('This pairing invitation has expired.');
+  }
+
+  const reqName = reqUser.username || 'Partner A';
+  const partName = partUser.username || 'Partner B';
+  const todayStr = new Date().toISOString().slice(0, 10);
+
+  // Activate the single shared authoritative Couple Profile with clean-slate stats (0 trophies, Level 1)
+  const updated = await db
+    .update(couplePairings)
+    .set({
+      requesterUid,
+      partnerUid,
+      requesterConfirmed: true,
+      partnerConfirmed: true,
+      status: 'active',
+      coupleName: `${reqName} & ${partName}`,
+      anniversaryDate: todayStr,
+      coupleBio: 'Playing side by side in Her Little Arcade.',
+      coupleBanner: targetRow.coupleBanner || 'twilight-lanterns',
+      coupleTitle: 'Newborn Duo',
+      coupleTrophies: 0,
+      highestTrophies: 0,
+      claimedTrophyMilestones: '[]',
+      coupleXp: 45,
+      coupleLevel: 1,
+      coupleWins: 0,
+      coupleLosses: 0,
+      coupleDraws: 0,
+      updatedAt: new Date(),
+    })
+    .where(eq(couplePairings.id, targetRow.id))
+    .returning();
+
+  const activatedRow = updated[0];
+
+  // Clean up any other pending couple_pairings rows involving either partner
+  const allPendingPairings = await db
+    .select()
+    .from(couplePairings)
+    .where(
+      or(
+        eq(couplePairings.status, 'pending_partner'),
+        eq(couplePairings.status, 'pending_requester_confirm')
+      )
+    );
+  for (const p of allPendingPairings) {
+    if (
+      p.id !== activatedRow.id &&
+      (p.requesterUid === requesterUid ||
+        p.partnerUid === requesterUid ||
+        p.requesterUid === partnerUid ||
+        p.partnerUid === partnerUid)
+    ) {
+      await db
+        .update(couplePairings)
+        .set({ status: 'unpaired', updatedAt: new Date() })
+        .where(eq(couplePairings.id, p.id));
+    }
+  }
+
+  // Synchronize all pending couple_request invitations in gameInvitations
+  const pendingInvites = await db
+    .select()
+    .from(gameInvitations)
+    .where(
+      and(
+        eq(gameInvitations.inviteType, 'couple_request'),
+        eq(gameInvitations.status, 'pending')
+      )
+    );
+
+  for (const inv of pendingInvites) {
+    const isBetweenPair =
+      (inv.senderUid === requesterUid && inv.targetUid === partnerUid) ||
+      (inv.senderUid === partnerUid && inv.targetUid === requesterUid);
+    const involvesEither =
+      inv.senderUid === requesterUid ||
+      inv.targetUid === requesterUid ||
+      inv.senderUid === partnerUid ||
+      inv.targetUid === partnerUid;
+
+    if (isBetweenPair) {
+      await db
+        .update(gameInvitations)
+        .set({
+          status: 'accepted',
+          isRead: true,
+          senderCoupleId: activatedRow.id,
+          targetCoupleId: activatedRow.id,
+          updatedAt: new Date(),
+        })
+        .where(eq(gameInvitations.id, inv.id));
+    } else if (involvesEither) {
+      await db
+        .update(gameInvitations)
+        .set({
+          status: 'cancelled',
+          updatedAt: new Date(),
+        })
+        .where(eq(gameInvitations.id, inv.id));
+    }
+  }
+
+  // Send a real-time confirmation notification to the requester's Mailbox so both users get notified
+  await db.insert(gameInvitations).values({
+    inviteType: 'other',
+    senderUid: partnerUid,
+    senderUsername: partName,
+    senderAvatar: partUser.avatar || 'kitsune',
+    senderEquippedSkin: partUser.equippedSkin || 'skin-classic-notebook',
+    senderCustomPhotoUrl: partUser.customPhotoUrl || '',
+    senderCoupleId: activatedRow.id,
+    senderCoupleName: activatedRow.coupleName,
+    targetUid: requesterUid,
+    targetUsername: reqName,
+    targetCoupleId: activatedRow.id,
+    targetCoupleName: activatedRow.coupleName,
+    gameId: 'couple-pairing',
+    roomCode: activatedRow.pairingCode,
+    status: 'accepted',
+    isRead: false,
+    isDismissed: false,
+    metadataJson: JSON.stringify({
+      customTitle: 'Couple Pairing Activated!',
+      pairingCode: activatedRow.pairingCode,
+      pairingId: activatedRow.id,
+      message: `@${partName} accepted your Couple Pairing Request! Your Shared Couple Profile (${activatedRow.coupleName}) is now active.`,
+    }),
+  });
+
+  return activatedRow;
 }
 
 export async function createCouplePairingInvite(requesterUid: string) {
@@ -1840,8 +2103,19 @@ export async function inspectCouplePairingInvite(actorUid: string, pairingCode: 
     if (invite.status !== 'pending_partner') {
       throw new Error('This pairing code has already been used or cancelled.');
     }
+    const twentyFourHoursAgo = Date.now() - 24 * 60 * 60_000;
+    if (invite.createdAt && new Date(invite.createdAt).getTime() < twentyFourHoursAgo) {
+      await db
+        .update(couplePairings)
+        .set({ status: 'unpaired', updatedAt: new Date() })
+        .where(eq(couplePairings.id, invite.id));
+      throw new Error('This pairing code has expired.');
+    }
     if (invite.requesterUid === actorUid) {
       throw new Error('This is your own pairing code. Share it with your partner so they can enter it on their account.');
+    }
+    if (invite.partnerUid && invite.partnerUid !== actorUid) {
+      throw new Error('This pairing code was sent to a specific player and cannot be claimed by another account.');
     }
 
     const reqRows = await db
@@ -1852,9 +2126,20 @@ export async function inspectCouplePairingInvite(actorUid: string, pairingCode: 
       throw new Error('The inviting player account no longer exists.');
     }
 
+    const requesterProfile = sanitizeUserRow(reqRows[0]);
+    if (!requesterProfile.customPhotoUrl) {
+      const picRows = await db
+        .select()
+        .from(profilePictures)
+        .where(eq(profilePictures.userUid, reqRows[0].uid));
+      if (picRows[0]?.imageDataUrl) {
+        requesterProfile.customPhotoUrl = picRows[0].imageDataUrl;
+      }
+    }
+
     return {
       pairingCode: invite.pairingCode,
-      requesterProfile: sanitizeUserRow(reqRows[0]),
+      requesterProfile,
       status: invite.status,
     };
   } catch (error) {
@@ -1867,11 +2152,6 @@ export async function inspectCouplePairingInvite(actorUid: string, pairingCode: 
 export async function acceptCouplePairingInvite(partnerUid: string, pairingCode: string) {
   try {
     const cleanCode = pairingCode.trim().toUpperCase();
-    const partnerCtx = await getCoupleContextForUser(partnerUid);
-    if (partnerCtx.activeCouple) {
-      throw new Error('Your account is already in an active couple pairing.');
-    }
-
     const rows = await db
       .select()
       .from(couplePairings)
@@ -1881,30 +2161,25 @@ export async function acceptCouplePairingInvite(partnerUid: string, pairingCode:
       throw new Error('No pairing invitation found with that code.');
     }
     const invite = rows[0];
-    if (invite.status !== 'pending_partner') {
-      throw new Error('This pairing code is no longer open for acceptance.');
-    }
     if (invite.requesterUid === partnerUid) {
       throw new Error('You cannot pair with your own account.');
     }
-
-    const requesterCtx = await getCoupleContextForUser(invite.requesterUid);
-    if (requesterCtx.activeCouple) {
-      throw new Error('The inviting player is already in an active couple pairing.');
+    if (invite.partnerUid && invite.partnerUid !== partnerUid) {
+      throw new Error('Forbidden: This pairing invitation was sent to another user.');
+    }
+    if (invite.status !== 'pending_partner' && invite.status !== 'pending_requester_confirm') {
+      throw new Error(
+        invite.status === 'active'
+          ? 'This pairing code has already been accepted.'
+          : 'This pairing code is no longer open for acceptance.'
+      );
     }
 
-    const updated = await db
-      .update(couplePairings)
-      .set({
-        partnerUid,
-        partnerConfirmed: true,
-        status: 'pending_requester_confirm',
-        updatedAt: new Date(),
-      })
-      .where(eq(couplePairings.id, invite.id))
-      .returning();
-
-    return updated[0];
+    return await activateCoupleRelationship({
+      pairingRowId: invite.id,
+      requesterUid: invite.requesterUid,
+      partnerUid,
+    });
   } catch (error) {
     console.error('Database acceptCouplePairingInvite failed:', error);
     const msg = error instanceof Error ? error.message : 'Failed to accept pairing invitation.';
@@ -1924,66 +2199,71 @@ export async function confirmCouplePairingFinal(requesterUid: string, pairingCod
       throw new Error('Pairing record not found.');
     }
     const invite = rows[0];
-    if (invite.requesterUid !== requesterUid) {
-      throw new Error('Only the player who generated the invite can perform the final confirmation.');
+    if (invite.requesterUid !== requesterUid && invite.partnerUid !== requesterUid) {
+      throw new Error('Only a participant of the invite can confirm the pairing.');
     }
-    if (!invite.partnerUid || !invite.partnerConfirmed || invite.status !== 'pending_requester_confirm') {
-      throw new Error('Your partner must accept the pairing code before final confirmation.');
+    if (invite.status === 'active') {
+      return invite;
     }
-
-    const reqCtx = await getCoupleContextForUser(invite.requesterUid);
-    const partCtx = await getCoupleContextForUser(invite.partnerUid);
-    if (reqCtx.activeCouple || partCtx.activeCouple) {
-      throw new Error('One of the accounts is already in an active couple pairing.');
+    if (!invite.partnerUid) {
+      throw new Error('Your partner must accept the pairing code before confirmation.');
     }
 
-    const reqRows = await db.select().from(users).where(eq(users.uid, invite.requesterUid));
-    const partRows = await db.select().from(users).where(eq(users.uid, invite.partnerUid));
-    const reqName = reqRows[0]?.username || 'Partner A';
-    const partName = partRows[0]?.username || 'Partner B';
-
-    // Anti-duplication check: if these two exact partners previously had an unpaired record,
-    // restore their prior coupleTrophies/milestones instead of creating duplicate bonus trophies
-    const allPairings = await db.select().from(couplePairings);
-    const priorSameDuo = allPairings.find(
-      (p) =>
-        p.id !== invite.id &&
-        p.status === 'unpaired' &&
-        ((p.requesterUid === invite.requesterUid && p.partnerUid === invite.partnerUid) ||
-          (p.requesterUid === invite.partnerUid && p.partnerUid === invite.requesterUid))
-    );
-
-    const todayStr = new Date().toISOString().slice(0, 10);
-    const updated = await db
-      .update(couplePairings)
-      .set({
-        requesterConfirmed: true,
-        partnerConfirmed: true,
-        status: 'active',
-        coupleName: priorSameDuo?.coupleName || `${reqName} & ${partName}`,
-        anniversaryDate: invite.anniversaryDate || priorSameDuo?.anniversaryDate || todayStr,
-        coupleBio:
-          invite.coupleBio ||
-          priorSameDuo?.coupleBio ||
-          'Playing side by side in Her Little Arcade.',
-        coupleTitle: priorSameDuo?.coupleTitle || 'Newborn Duo',
-        coupleTrophies: priorSameDuo?.coupleTrophies || 0,
-        highestTrophies: priorSameDuo?.highestTrophies || 0,
-        claimedTrophyMilestones: priorSameDuo?.claimedTrophyMilestones || '[]',
-        coupleXp: priorSameDuo ? priorSameDuo.coupleXp : 45,
-        coupleLevel: priorSameDuo ? priorSameDuo.coupleLevel : 1,
-        coupleWins: priorSameDuo?.coupleWins || 0,
-        coupleLosses: priorSameDuo?.coupleLosses || 0,
-        coupleDraws: priorSameDuo?.coupleDraws || 0,
-        updatedAt: new Date(),
-      })
-      .where(eq(couplePairings.id, invite.id))
-      .returning();
-
-    return updated[0];
+    return await activateCoupleRelationship({
+      pairingRowId: invite.id,
+      requesterUid: invite.requesterUid,
+      partnerUid: invite.partnerUid,
+    });
   } catch (error) {
     console.error('Database confirmCouplePairingFinal failed:', error);
     const msg = error instanceof Error ? error.message : 'Failed to confirm couple pairing.';
+    throw new Error(msg, { cause: error });
+  }
+}
+
+export async function cancelCouplePairingInvite(actorUid: string, pairingCode?: string) {
+  try {
+    const cleanCode = pairingCode ? pairingCode.trim().toUpperCase() : '';
+    const pendingRows = await db
+      .select()
+      .from(couplePairings)
+      .where(
+        and(
+          eq(couplePairings.requesterUid, actorUid),
+          or(
+            eq(couplePairings.status, 'pending_partner'),
+            eq(couplePairings.status, 'pending_requester_confirm')
+          )
+        )
+      );
+
+    for (const r of pendingRows) {
+      if (!cleanCode || r.pairingCode === cleanCode) {
+        await db
+          .update(couplePairings)
+          .set({ status: 'unpaired', updatedAt: new Date() })
+          .where(eq(couplePairings.id, r.id));
+
+        await db
+          .update(gameInvitations)
+          .set({ status: 'cancelled', updatedAt: new Date() })
+          .where(
+            and(
+              eq(gameInvitations.inviteType, 'couple_request'),
+              eq(gameInvitations.roomCode, r.pairingCode),
+              eq(gameInvitations.status, 'pending')
+            )
+          );
+      }
+    }
+
+    return {
+      cancelled: true,
+      coupleContext: await getCoupleContextForUser(actorUid),
+    };
+  } catch (error) {
+    console.error('Database cancelCouplePairingInvite failed:', error);
+    const msg = error instanceof Error ? error.message : 'Failed to cancel pairing invite.';
     throw new Error(msg, { cause: error });
   }
 }
@@ -2122,11 +2402,86 @@ export async function unpairCoupleAccounts(actorUid: string) {
         )
       );
 
+    const actorRows = await db.select().from(users).where(eq(users.uid, actorUid));
+    const actorName = actorRows[0]?.username || 'Your partner';
+
     for (const r of rows) {
       await db
         .update(couplePairings)
         .set({ status: 'unpaired', updatedAt: new Date() })
         .where(eq(couplePairings.id, r.id));
+
+      // Cancel any 2v2 couple team lobbies for this couple
+      await db
+        .update(coupleTeamLobbies)
+        .set({
+          partnerInviteStatus: 'none',
+          hostReady: false,
+          partnerReady: false,
+          updatedAt: new Date(),
+        })
+        .where(eq(coupleTeamLobbies.coupleId, r.id));
+
+      // Cancel any active matchmaking queue entries for this couple
+      await db
+        .update(matchmakingQueue)
+        .set({ status: 'cancelled', updatedAt: new Date() })
+        .where(
+          and(
+            eq(matchmakingQueue.coupleId, r.id),
+            or(
+              eq(matchmakingQueue.status, 'searching'),
+              eq(matchmakingQueue.status, 'match_starting')
+            )
+          )
+        );
+
+      // Cancel any pending couple_request invitations tied to this pairing code
+      if (r.pairingCode) {
+        await db
+          .update(gameInvitations)
+          .set({ status: 'cancelled', updatedAt: new Date() })
+          .where(
+            and(
+              eq(gameInvitations.roomCode, r.pairingCode),
+              eq(gameInvitations.status, 'pending')
+            )
+          );
+      }
+
+      // If this was an active couple, notify the other partner in real time
+      if (r.status === 'active') {
+        const otherUid = r.requesterUid === actorUid ? r.partnerUid : r.requesterUid;
+        if (otherUid) {
+          const otherRows = await db.select().from(users).where(eq(users.uid, otherUid));
+          const otherName = otherRows[0]?.username || 'Partner';
+          await db.insert(gameInvitations).values({
+            inviteType: 'other',
+            senderUid: actorUid,
+            senderUsername: actorName,
+            senderAvatar: actorRows[0]?.avatar || 'kitsune',
+            senderEquippedSkin: actorRows[0]?.equippedSkin || 'skin-classic-notebook',
+            senderCustomPhotoUrl: actorRows[0]?.customPhotoUrl || '',
+            senderCoupleId: 0,
+            senderCoupleName: '',
+            targetUid: otherUid,
+            targetUsername: otherName,
+            targetCoupleId: 0,
+            targetCoupleName: '',
+            gameId: 'couple-pairing',
+            roomCode: r.pairingCode,
+            status: 'cancelled',
+            isRead: false,
+            isDismissed: false,
+            metadataJson: JSON.stringify({
+              customTitle: 'Couple Pairing Ended',
+              pairingCode: r.pairingCode,
+              pairingId: r.id,
+              message: `@${actorName} unpaired from your Shared Couple Profile. Your individual account, coins, and match history remain intact.`,
+            }),
+          });
+        }
+      }
     }
 
     return { unpaired: true };
@@ -3053,11 +3408,55 @@ export async function getArcadeBootstrapData(activeUid?: string) {
       ? await getCoupleVoiceChatState(activeUid)
       : null;
 
+    // Locate any active or lobby multiplayer room the user is currently participating in (for automatic reconnection on refresh)
+    let activeUserRoom = null;
+    if (activeUid) {
+      const twoHoursAgoMs = Date.now() - 2 * 60 * 60 * 1000;
+      for (const r of activeRooms) {
+        if (r.status !== 'playing' && r.status !== 'lobby') continue;
+        const updatedMs = r.updatedAt ? new Date(r.updatedAt).getTime() : Date.now();
+        if (updatedMs < twoHoursAgoMs) continue;
+        try {
+          const rPlayers: RoomParticipantPayload[] = JSON.parse(r.playersJson || '[]');
+          const rTeams: RoomCoupleTeamPayload[] = JSON.parse(r.teamsJson || '[]');
+          const inPlayers = rPlayers.some((p) => p.uid === activeUid);
+          const inTeams = rTeams.some((t) =>
+            Array.isArray(t.members) && t.members.some((m) => m.uid === activeUid && m.joined !== false)
+          );
+          if (inPlayers || inTeams) {
+            const hydratedPlayers = rPlayers.map((p) => {
+              const liveU = userByUid.get(p.uid);
+              return liveU
+                ? {
+                    ...p,
+                    username: liveU.username,
+                    avatar: liveU.avatar,
+                    customPhotoUrl: liveU.customPhotoUrl || p.customPhotoUrl || '',
+                    equippedSkin: liveU.equippedSkin || p.equippedSkin,
+                    equippedBanner: liveU.equippedBanner || p.equippedBanner,
+                    online: Boolean(liveU.isOnline),
+                  }
+                : p;
+            });
+            activeUserRoom = {
+              ...r,
+              playersJson: JSON.stringify(hydratedPlayers),
+            };
+            // Prefer 'playing' room over 'lobby' room if multiple exist
+            if (r.status === 'playing') break;
+          }
+        } catch {
+          // ignore malformed room json
+        }
+      }
+    }
+
     return {
       players: sanitizedPlayers,
       couplesLeaderboard: enrichedCouplesLeaderboard,
       records: recentRecords.slice(0, 50),
       rooms: activeRooms,
+      activeRoom: activeUserRoom,
       personalizedContent: scopedCustomItems,
       challenges: challengeBundle.activeChallenges,
       challengeHistory: challengeBundle.challengeHistory,
@@ -3936,6 +4335,8 @@ export async function joinValidatedMultiplayerRoom(input: {
 
           if (teamIdx >= 0) {
             teams[teamIdx].members = coupleMembers;
+            teams[teamIdx].bothJoined = coupleMembers.length >= 2;
+            teams[teamIdx].bothReady = coupleMembers.length >= 2;
           } else {
             teams.push({
               teamSlot: assignedTeamSlot,
@@ -3985,20 +4386,60 @@ export async function joinValidatedMultiplayerRoom(input: {
 
     const cleanedPending = pendingRequests.filter((r) => r.uid !== actor.uid);
 
+    const readyToAutoStart =
+      (room.mode === '1v1' && players.length >= 2) ||
+      (room.mode === '2v2' &&
+        players.length >= 4 &&
+        teams.length >= 2 &&
+        teams[0]?.coupleId !== teams[1]?.coupleId);
+
+    const nextStatus =
+      readyToAutoStart && room.status === 'lobby' ? 'playing' : room.status;
+
+    let nextGameStateJson = room.gameStateJson;
+    if (readyToAutoStart && room.status === 'lobby') {
+      const existingState = (() => {
+        try {
+          return JSON.parse(room.gameStateJson || '{}');
+        } catch {
+          return {};
+        }
+      })();
+      const roomSettings = (() => {
+        try {
+          return JSON.parse(room.settingsJson || '{}');
+        } catch {
+          return {};
+        }
+      })();
+      const initialized = buildInitialMatchGameState({
+        gameId: room.gameId,
+        mode: room.mode === '2v2' ? '2v2' : '1v1',
+        hostUid: room.hostUid,
+        players,
+        teams,
+        settings: roomSettings,
+        existingState,
+      });
+      nextGameStateJson = JSON.stringify(initialized);
+    }
+
     const updated = await db
       .update(rooms)
       .set({
+        status: nextStatus,
         playersJson: JSON.stringify(players),
         teamsJson: JSON.stringify(teams),
         pendingRequestsJson: JSON.stringify(cleanedPending),
         invitedUidsJson: JSON.stringify(invitedUids),
+        gameStateJson: nextGameStateJson,
         chatJson: JSON.stringify(chat),
         updatedAt: new Date(),
       })
       .where(eq(rooms.roomCode, room.roomCode))
       .returning();
 
-    return updated[0];
+    return (await getRoomByCode(room.roomCode)) || updated[0];
   } catch (error) {
     console.error('Database joinValidatedMultiplayerRoom failed:', error);
     const msg = error instanceof Error ? error.message : 'Failed to join room.';
@@ -4227,37 +4668,91 @@ export async function upsertMultiplayerRoom(input: {
     const effectiveMode =
       input.mode || (existingRoom?.mode as '1v1' | '2v2' | 'party') || '1v1';
 
-    // If transitioning a Party Room to 'playing', enforce that at least 3 couples are joined and ready
+    // Filter out any legacy simulated/bot entries if ever passed
+    const cleanPlayers = (Array.isArray(input.players) ? input.players : []).filter(
+      (p: unknown) => {
+        const uid = String((p as { uid?: string })?.uid || '');
+        return Boolean(uid && !uid.startsWith('party_bot_') && !uid.startsWith('bot_'));
+      }
+    );
+
+    const cleanTeams = (Array.isArray(input.teams) ? input.teams : []).filter(
+      (t: unknown) => {
+        const team = t as RoomCoupleTeamPayload;
+        if (team?.isDemoCouple) return false;
+        if (!Array.isArray(team?.members)) return false;
+        return team.members.every(
+          (m) => m.uid && !m.uid.startsWith('party_bot_') && !m.uid.startsWith('bot_')
+        );
+      }
+    ) as RoomCoupleTeamPayload[];
+
+    // If transitioning a Party Room to 'playing', enforce that at least 3 real couples (6 human players) are joined and ready
     if (
       effectiveMode === 'party' &&
       input.status === 'playing' &&
       existingRoom?.status === 'lobby'
     ) {
-      const teamList = (Array.isArray(input.teams) ? input.teams : []) as RoomCoupleTeamPayload[];
-      const readyCouples = teamList.filter(
+      const readyCouples = cleanTeams.filter(
         (t) =>
-          t.bothReady ||
-          (Array.isArray(t.members) &&
-            t.members.length >= 2 &&
-            t.members.every((m) => m.joined !== false && m.ready !== false))
+          !t.isDemoCouple &&
+          (t.bothReady ||
+            (Array.isArray(t.members) &&
+              t.members.length >= 2 &&
+              t.members.every(
+                (m) =>
+                  m.uid &&
+                  !m.uid.startsWith('party_bot_') &&
+                  m.joined !== false &&
+                  m.ready !== false
+              )))
       );
       if (readyCouples.length < 3) {
         throw new Error(
-          `Party Games require at least 3 ready couples (6 players) to start. Currently ${readyCouples.length}/3 minimum couples are ready.`
+          `Party Games require at least 3 real paired couples (6 human players) ready to start. Currently ${readyCouples.length}/3 minimum real couples are ready.`
         );
       }
-      if (teamList.length > 10) {
+      if (cleanTeams.length > 10) {
         throw new Error('Party Games support a maximum of 10 couples (20 players).');
       }
     }
 
-    const gameStateWithSeed = {
-      ...input.gameState,
-      sessionSeed:
-        typeof input.gameState?.sessionSeed === 'number' && input.gameState.sessionSeed > 0
-          ? input.gameState.sessionSeed
-          : generateFreshGameSeed(),
-    };
+    let existingGameState: Record<string, unknown> = {};
+    if (existingRoom?.gameStateJson) {
+      try {
+        existingGameState = JSON.parse(existingRoom.gameStateJson || '{}');
+      } catch {
+        existingGameState = {};
+      }
+    }
+
+    const existingVersion = Number(existingGameState.stateVersion || 0);
+    const incomingVersion = Number(input.gameState?.stateVersion || 0);
+    const isReset = Boolean(input.gameState?.forceReset);
+
+    // Prevent stale client polls from overwriting a newer authoritative gameState
+    let mergedGameState: Record<string, unknown>;
+    if (!isReset && existingVersion > 0 && incomingVersion > 0 && incomingVersion < existingVersion) {
+      mergedGameState = {
+        ...input.gameState,
+        ...existingGameState,
+        stateVersion: existingVersion,
+      };
+    } else {
+      const nextVersion = Math.max(existingVersion, incomingVersion) + 1;
+      mergedGameState = {
+        ...existingGameState,
+        ...input.gameState,
+        sessionSeed:
+          typeof input.gameState?.sessionSeed === 'number' && input.gameState.sessionSeed > 0
+            ? input.gameState.sessionSeed
+            : typeof existingGameState.sessionSeed === 'number' && existingGameState.sessionSeed > 0
+            ? existingGameState.sessionSeed
+            : generateFreshGameSeed(),
+        stateVersion: nextVersion,
+      };
+      delete mergedGameState.forceReset;
+    }
 
     const visibility: 'public' | 'private' =
       input.visibility ||
@@ -4272,6 +4767,7 @@ export async function upsertMultiplayerRoom(input: {
         : 'immediate');
 
     const mergedSettings = {
+      ...(existingRoom?.settingsJson ? JSON.parse(existingRoom.settingsJson || '{}') : {}),
       ...(input.settings || {}),
       visibility,
       joinPolicy,
@@ -4289,6 +4785,12 @@ export async function upsertMultiplayerRoom(input: {
       input.maxPlayers ||
       (effectiveMode === 'party' ? 20 : effectiveMode === '2v2' ? 4 : 2);
 
+    // Never downgrade a room from 'playing' back to 'lobby' unless explicitly resetting
+    const resolvedStatus =
+      existingRoom?.status === 'playing' && input.status === 'lobby' && !isReset
+        ? 'playing'
+        : input.status;
+
     const rows = await db
       .insert(rooms)
       .values({
@@ -4301,13 +4803,13 @@ export async function upsertMultiplayerRoom(input: {
         hostUid: input.hostUid,
         hostName: input.hostName,
         hostAvatar: input.hostAvatar || existingRoom?.hostAvatar || 'kitsune',
-        status: input.status,
+        status: resolvedStatus,
         settingsJson: JSON.stringify(mergedSettings),
-        playersJson: JSON.stringify(input.players),
-        teamsJson: JSON.stringify(input.teams || []),
+        playersJson: JSON.stringify(cleanPlayers),
+        teamsJson: JSON.stringify(cleanTeams),
         pendingRequestsJson,
         invitedUidsJson,
-        gameStateJson: JSON.stringify(gameStateWithSeed),
+        gameStateJson: JSON.stringify(mergedGameState),
         chatJson: JSON.stringify(input.chat),
         voiceParticipantsJson: JSON.stringify(input.voiceParticipants),
       })
@@ -4319,13 +4821,13 @@ export async function upsertMultiplayerRoom(input: {
           visibility,
           joinPolicy,
           maxPlayers: resolvedMaxPlayers,
-          status: input.status,
+          status: resolvedStatus,
           settingsJson: JSON.stringify(mergedSettings),
-          playersJson: JSON.stringify(input.players),
-          teamsJson: JSON.stringify(input.teams || []),
+          playersJson: JSON.stringify(cleanPlayers),
+          teamsJson: JSON.stringify(cleanTeams),
           pendingRequestsJson,
           invitedUidsJson,
-          gameStateJson: JSON.stringify(gameStateWithSeed),
+          gameStateJson: JSON.stringify(mergedGameState),
           chatJson: JSON.stringify(input.chat),
           voiceParticipantsJson: JSON.stringify(input.voiceParticipants),
           updatedAt: new Date(),
@@ -4333,7 +4835,7 @@ export async function upsertMultiplayerRoom(input: {
       })
       .returning();
 
-    return rows[0];
+    return await getRoomByCode(rows[0].roomCode);
   } catch (error) {
     console.error('Database upsertMultiplayerRoom failed:', error);
     const msg = error instanceof Error ? error.message : 'Failed to synchronize multiplayer room.';
@@ -4380,7 +4882,7 @@ export async function kickPartyRoomParticipant(input: {
     timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
   });
 
-  const updated = await db
+  await db
     .update(rooms)
     .set({
       playersJson: JSON.stringify(nextPlayers),
@@ -4388,231 +4890,19 @@ export async function kickPartyRoomParticipant(input: {
       chatJson: JSON.stringify(chat),
       updatedAt: new Date(),
     })
-    .where(eq(rooms.roomCode, cleanCode))
-    .returning();
+    .where(eq(rooms.roomCode, cleanCode));
 
-  return updated[0];
+  return await getRoomByCode(cleanCode);
 }
 
-export async function seedDemoPartyCouples(input: {
+export async function seedDemoPartyCouples(_input: {
   hostUid: string;
   roomCode: string;
   targetCouples?: number;
 }) {
-  const cleanCode = input.roomCode.trim().toUpperCase();
-  const rows = await db.select().from(rooms).where(eq(rooms.roomCode, cleanCode));
-  if (!rows.length) {
-    throw new Error(`Party Room #${cleanCode} not found.`);
-  }
-  const room = rows[0];
-  if (room.hostUid !== input.hostUid) {
-    throw new Error('Only the Party Host can manage party couple slots.');
-  }
-
-  const players: RoomParticipantPayload[] = JSON.parse(room.playersJson || '[]');
-  const teams: RoomCoupleTeamPayload[] = JSON.parse(room.teamsJson || '[]');
-  const chat = JSON.parse(room.chatJson || '[]');
-
-  // 1. Ensure the host's own couple has both partners joined & ready
-  for (let i = 0; i < teams.length; i++) {
-    const t = teams[i];
-    const updatedMembers = t.members.map((m) => ({
-      ...m,
-      joined: true,
-      ready: true,
-      online: true,
-    }));
-    teams[i] = {
-      ...t,
-      bothJoined: true,
-      bothReady: true,
-      members: updatedMembers,
-    };
-    for (const m of updatedMembers) {
-      if (!players.some((p) => p.uid === m.uid)) {
-        players.push({
-          uid: m.uid,
-          username: m.username,
-          avatar: m.avatar,
-          equippedSkin: m.equippedSkin || 'skin-classic-notebook',
-          equippedBanner: m.equippedBanner || 'banner-warm-sketchbook',
-          customPhotoUrl: m.customPhotoUrl || '',
-          coupleId: t.coupleId,
-          coupleName: t.coupleName,
-          teamSlot: t.teamSlot,
-          ready: true,
-          online: true,
-        });
-      }
-    }
-  }
-
-  const desiredTotal = Math.max(3, Math.min(10, Number(input.targetCouples || 4)));
-
-  // 2. Pull other real active couples from the database first, then fill any remaining slots up to desiredTotal
-  const allActiveCouples = await db
-    .select()
-    .from(couplePairings)
-    .where(eq(couplePairings.status, 'active'))
-    .orderBy(desc(couplePairings.coupleTrophies));
-  const allUsers = await db.select().from(users);
-  const userByUid = new Map(allUsers.map((u) => [u.uid, sanitizeUserRow(u)]));
-
-  for (const c of allActiveCouples) {
-    if (teams.length >= desiredTotal) break;
-    if (teams.some((t) => t.coupleId === c.id)) continue;
-    const pA = userByUid.get(c.requesterUid);
-    const pB = c.partnerUid ? userByUid.get(c.partnerUid) : null;
-    if (!pA || !pB) continue;
-
-    const slot = teams.length + 1;
-    teams.push({
-      teamSlot: slot,
-      coupleId: c.id,
-      coupleName: c.coupleName || `${pA.username} & ${pB.username}`,
-      coupleBanner: c.coupleBanner,
-      equippedCoupleSkin: c.equippedCoupleSkin,
-      coupleTrophies: c.coupleTrophies || 0,
-      score: 0,
-      bothJoined: true,
-      bothReady: true,
-      members: [
-        {
-          uid: pA.uid,
-          username: pA.username,
-          avatar: pA.avatar,
-          equippedSkin: pA.equippedSkin,
-          equippedBanner: pA.equippedBanner,
-          customPhotoUrl: pA.customPhotoUrl,
-          joined: true,
-          ready: true,
-          online: true,
-          individualScore: 0,
-        },
-        {
-          uid: pB.uid,
-          username: pB.username,
-          avatar: pB.avatar,
-          equippedSkin: pB.equippedSkin,
-          equippedBanner: pB.equippedBanner,
-          customPhotoUrl: pB.customPhotoUrl,
-          joined: true,
-          ready: true,
-          online: true,
-          individualScore: 0,
-        },
-      ],
-    });
-    for (const m of [pA, pB]) {
-      if (!players.some((p) => p.uid === m.uid)) {
-        players.push({
-          uid: m.uid,
-          username: m.username,
-          avatar: m.avatar,
-          equippedSkin: m.equippedSkin,
-          equippedBanner: m.equippedBanner,
-          customPhotoUrl: m.customPhotoUrl,
-          coupleId: c.id,
-          coupleName: c.coupleName,
-          teamSlot: slot,
-          ready: true,
-          online: true,
-        });
-      }
-    }
-  }
-
-  const companionRoster = [
-    {
-      coupleId: 9001,
-      coupleName: 'Starlight Foxes',
-      coupleBanner: 'banner-celestial-observatory',
-      equippedCoupleSkin: 'skin-aurora-prism',
-      a: { uid: 'party_bot_1a', username: 'luna_sketch', avatar: 'kitsune', equippedSkin: 'skin-aurora-prism' },
-      b: { uid: 'party_bot_1b', username: 'sol_wanderer', avatar: 'star-cat', equippedSkin: 'skin-gilded-constellation' },
-    },
-    {
-      coupleId: 9002,
-      coupleName: 'Lantern Owls',
-      coupleBanner: 'banner-sakura-courtyard',
-      equippedCoupleSkin: 'skin-sakura-wind',
-      a: { uid: 'party_bot_2a', username: 'mochi_cloud', avatar: 'cloud-bunny', equippedSkin: 'skin-sakura-wind' },
-      b: { uid: 'party_bot_2b', username: 'kuro_lantern', avatar: 'lantern-owl', equippedSkin: 'skin-neon-cyberdeck' },
-    },
-    {
-      coupleId: 9003,
-      coupleName: 'Velvet Comets',
-      coupleBanner: 'banner-velvet-nebula',
-      equippedCoupleSkin: 'skin-celestial-empress',
-      a: { uid: 'party_bot_3a', username: 'astra_vellum', avatar: 'kitsune', equippedSkin: 'skin-celestial-empress' },
-      b: { uid: 'party_bot_3b', username: 'orion_brass', avatar: 'star-cat', equippedSkin: 'skin-sovereign-eclipse' },
-    },
-    {
-      coupleId: 9004,
-      coupleName: 'Cozy Sprouts',
-      coupleBanner: 'banner-meadow-picnic',
-      equippedCoupleSkin: 'skin-meadow-sprout',
-      a: { uid: 'party_bot_4a', username: 'clover_tea', avatar: 'cloud-bunny', equippedSkin: 'skin-meadow-sprout' },
-      b: { uid: 'party_bot_4b', username: 'hazel_ink', avatar: 'lantern-owl', equippedSkin: 'skin-warm-terracotta' },
-    },
-  ];
-
-  for (const comp of companionRoster) {
-    if (teams.length >= desiredTotal) break;
-    if (teams.some((t) => t.coupleId === comp.coupleId)) continue;
-    const slot = teams.length + 1;
-    teams.push({
-      teamSlot: slot,
-      coupleId: comp.coupleId,
-      coupleName: comp.coupleName,
-      coupleBanner: comp.coupleBanner,
-      equippedCoupleSkin: comp.equippedCoupleSkin,
-      coupleTrophies: 0,
-      score: 0,
-      bothJoined: true,
-      bothReady: true,
-      isDemoCouple: true,
-      members: [
-        { ...comp.a, joined: true, ready: true, online: true, individualScore: 0 },
-        { ...comp.b, joined: true, ready: true, online: true, individualScore: 0 },
-      ],
-    });
-    for (const m of [comp.a, comp.b]) {
-      if (!players.some((p) => p.uid === m.uid)) {
-        players.push({
-          uid: m.uid,
-          username: m.username,
-          avatar: m.avatar,
-          equippedSkin: m.equippedSkin,
-          coupleId: comp.coupleId,
-          coupleName: comp.coupleName,
-          teamSlot: slot,
-          ready: true,
-          online: true,
-        });
-      }
-    }
-  }
-
-  chat.push({
-    id: `fill-${Date.now()}`,
-    sender: room.hostName,
-    text: `Party Lobby ready with ${teams.length}/10 Couples (${players.length} Players)!`,
-    timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-  });
-
-  const updated = await db
-    .update(rooms)
-    .set({
-      playersJson: JSON.stringify(players),
-      teamsJson: JSON.stringify(teams),
-      chatJson: JSON.stringify(chat),
-      updatedAt: new Date(),
-    })
-    .where(eq(rooms.roomCode, cleanCode))
-    .returning();
-
-  return updated[0];
+  throw new Error(
+    'Bots and simulated couples are disabled. Party Games require at least 3 real paired couples (6 registered human players) to join and ready up.'
+  );
 }
 
 export async function recordPartyMatchResult(input: {
@@ -4753,11 +5043,634 @@ export async function getRoomByCode(roomCode: string) {
   try {
     const cleanCode = roomCode.trim().toUpperCase();
     const rows = await db.select().from(rooms).where(eq(rooms.roomCode, cleanCode));
-    return rows[0] || null;
+    if (!rows.length) return null;
+    const room = rows[0];
+
+    // Hydrate participants and teams with live user profile photos, usernames, and online status
+    const allUsers = await db.select().from(users);
+    const allPhotos = await db.select().from(profilePictures);
+    const photoMap = new Map(
+      allPhotos
+        .filter((p) => p.imageDataUrl && p.imageDataUrl.trim().length > 0)
+        .map((p) => [p.userUid, p.imageDataUrl])
+    );
+    const userMap = new Map(
+      allUsers.map((u) => {
+        const sanitized = sanitizeUserRow(u);
+        const photo = sanitized.customPhotoUrl || photoMap.get(u.uid) || '';
+        return [u.uid, { ...sanitized, customPhotoUrl: photo }];
+      })
+    );
+
+    let players: RoomParticipantPayload[] = [];
+    let teams: RoomCoupleTeamPayload[] = [];
+    try {
+      players = JSON.parse(room.playersJson || '[]');
+    } catch {
+      players = [];
+    }
+    try {
+      teams = JSON.parse(room.teamsJson || '[]');
+    } catch {
+      teams = [];
+    }
+
+    const hydratedPlayers = players
+      .filter((p) => p.uid && !p.uid.startsWith('party_bot_') && !p.uid.startsWith('bot_'))
+      .map((p) => {
+        const live = userMap.get(p.uid);
+        if (!live) return p;
+        return {
+          ...p,
+          username: live.username,
+          avatar: live.avatar,
+          customPhotoUrl: live.customPhotoUrl || p.customPhotoUrl || '',
+          equippedSkin: live.equippedSkin || p.equippedSkin,
+          equippedBanner: live.equippedBanner || p.equippedBanner,
+          online: Boolean(live.isOnline),
+        };
+      });
+
+    const hydratedTeams = teams
+      .filter((t) => !t.isDemoCouple)
+      .map((t) => ({
+        ...t,
+        members: (t.members || []).map((m) => {
+          const live = userMap.get(m.uid);
+          if (!live) return m;
+          return {
+            ...m,
+            username: live.username,
+            avatar: live.avatar,
+            customPhotoUrl: live.customPhotoUrl || m.customPhotoUrl || '',
+            equippedSkin: live.equippedSkin || m.equippedSkin,
+            equippedBanner: live.equippedBanner || m.equippedBanner,
+            online: Boolean(live.isOnline),
+          };
+        }),
+      }));
+
+    return {
+      ...room,
+      playersJson: JSON.stringify(hydratedPlayers),
+      teamsJson: JSON.stringify(hydratedTeams),
+    };
   } catch (error) {
     console.error('Database getRoomByCode failed:', error);
     throw new Error('Failed to fetch room by code.', { cause: error });
   }
+}
+
+export function buildInitialMatchGameState(input: {
+  gameId: string;
+  mode: '1v1' | '2v2' | 'party';
+  hostUid: string;
+  players: RoomParticipantPayload[];
+  teams: RoomCoupleTeamPayload[];
+  settings?: Record<string, unknown>;
+  existingState?: Record<string, unknown>;
+}): Record<string, unknown> {
+  const sessionSeed =
+    typeof input.existingState?.sessionSeed === 'number' && input.existingState.sessionSeed > 0
+      ? input.existingState.sessionSeed
+      : generateFreshGameSeed();
+
+  const hostPlayer =
+    input.players.find((p) => p.uid === input.hostUid) || input.players[0] || null;
+  const guestPlayer =
+    input.players.find((p) => p.uid !== input.hostUid) || input.players[1] || null;
+
+  const baseState: Record<string, unknown> = {
+    ...(input.existingState || {}),
+    sessionSeed,
+    stateVersion: (Number(input.existingState?.stateVersion) || 0) + 1,
+    startedAt: Date.now(),
+    roundNumber: 1,
+    player1Uid: hostPlayer?.uid || input.hostUid,
+    player1Username: hostPlayer?.username || 'Player 1',
+    player1Avatar: hostPlayer?.avatar || 'kitsune',
+    player1CustomPhotoUrl: hostPlayer?.customPhotoUrl || '',
+    player2Uid: guestPlayer?.uid || '',
+    player2Username: guestPlayer?.username || 'Player 2',
+    player2Avatar: guestPlayer?.avatar || 'star-cat',
+    player2CustomPhotoUrl: guestPlayer?.customPhotoUrl || '',
+    turnUid: hostPlayer?.uid || input.hostUid,
+    turnSlot: 1,
+  };
+
+  if (input.gameId === 'chess') {
+    const rawSettings = input.settings || {};
+    const prefRaw = String(rawSettings.hostColorPreference || 'w').toLowerCase();
+    const hostPlaysWhite =
+      prefRaw === 'w' || prefRaw === 'white'
+        ? true
+        : prefRaw === 'b' || prefRaw === 'black'
+        ? false
+        : sessionSeed % 2 === 0;
+
+    const whitePlayer = hostPlaysWhite ? hostPlayer : guestPlayer || hostPlayer;
+    const blackPlayer = hostPlaysWhite ? guestPlayer : hostPlayer;
+
+    const initialTimeMs = Math.max(
+      30_000,
+      Number(rawSettings.initialTimeMs || input.existingState?.initialTimeMs || 600_000)
+    );
+    const incrementSeconds = Math.max(
+      0,
+      Number(rawSettings.incrementSeconds ?? input.existingState?.incrementSeconds ?? 5)
+    );
+    const timePresetId = String(
+      rawSettings.timePresetId || input.existingState?.timePresetId || 'rapid-10-0'
+    );
+    const timeControlLabel = String(
+      rawSettings.timeControlLabel || input.existingState?.timeControlLabel || 'Rapid 10+0'
+    );
+    const startFen = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
+    const nowTs = Date.now();
+
+    return {
+      ...baseState,
+      fen: startFen,
+      chessFen: startFen,
+      pgn: '',
+      turn: 'w',
+      whiteUid: whitePlayer?.uid || input.hostUid,
+      whiteUsername: whitePlayer?.username || 'White',
+      whiteAvatar: whitePlayer?.avatar || 'kitsune',
+      whiteCustomPhotoUrl: whitePlayer?.customPhotoUrl || '',
+      blackUid: blackPlayer?.uid || '',
+      blackUsername: blackPlayer?.username || 'Black',
+      blackAvatar: blackPlayer?.avatar || 'star-cat',
+      blackCustomPhotoUrl: blackPlayer?.customPhotoUrl || '',
+      hostColorPreference: prefRaw,
+      timePresetId,
+      timeControlLabel,
+      initialTimeMs,
+      incrementSeconds,
+      whiteTimeMs: initialTimeMs,
+      blackTimeMs: initialTimeMs,
+      lastMoveTimestamp: nowTs,
+      turnStartedAt: nowTs,
+      lastMove: null,
+      moveHistorySan: [],
+      moveHistory: [],
+      capturedByWhite: [],
+      capturedByBlack: [],
+      drawOfferByUid: null,
+      drawOfferByUsername: null,
+      matchStatus: 'playing',
+      winnerColor: null,
+      winnerSide: null,
+      winnerUid: null,
+      endReason: '',
+      gameOverReason: null,
+      winnerLabel: null,
+    };
+  }
+
+  return baseState;
+}
+
+export async function submitAuthoritativeChessAction(input: {
+  actorUid: string;
+  roomCode: string;
+  actionType: 'move' | 'offer_draw' | 'respond_draw' | 'resign' | 'claim_timeout' | 'new_game';
+  move?: { from: string; to: string; promotion?: 'q' | 'r' | 'b' | 'n' };
+  acceptDraw?: boolean;
+  timePresetId?: string;
+  initialTimeMs?: number;
+  incrementSeconds?: number;
+  timeControlLabel?: string;
+  hostColorPreference?: 'w' | 'b' | 'white' | 'black' | 'random';
+}) {
+  const cleanCode = input.roomCode.trim().toUpperCase();
+  const hydratedRoom = await getRoomByCode(cleanCode);
+  if (!hydratedRoom) {
+    throw new Error(`Room #${cleanCode} not found.`);
+  }
+
+  const players: RoomParticipantPayload[] = JSON.parse(hydratedRoom.playersJson || '[]');
+  const teams: RoomCoupleTeamPayload[] = JSON.parse(hydratedRoom.teamsJson || '[]');
+  const settings: Record<string, unknown> = JSON.parse(hydratedRoom.settingsJson || '{}');
+  const gameState: Record<string, unknown> = JSON.parse(hydratedRoom.gameStateJson || '{}');
+
+  const isParticipant = players.some((p) => p.uid === input.actorUid);
+  if (!isParticipant) {
+    throw new Error('Forbidden: Only the two match participants can perform actions in this Chess match.');
+  }
+
+  if (players.length < 2) {
+    throw new Error('Waiting for your human opponent to join the room before starting.');
+  }
+
+  const actorPlayer = players.find((p) => p.uid === input.actorUid)!;
+
+  if (input.actionType === 'new_game') {
+    const mergedSettings = {
+      ...settings,
+      ...(input.timePresetId ? { timePresetId: input.timePresetId } : {}),
+      ...(input.initialTimeMs ? { initialTimeMs: input.initialTimeMs } : {}),
+      ...(input.incrementSeconds !== undefined ? { incrementSeconds: input.incrementSeconds } : {}),
+      ...(input.timeControlLabel ? { timeControlLabel: input.timeControlLabel } : {}),
+      ...(input.hostColorPreference
+        ? { hostColorPreference: input.hostColorPreference }
+        : {
+            // Swap colors on rematch by default
+            hostColorPreference:
+              gameState.whiteUid === hydratedRoom.hostUid ? 'b' : 'w',
+          }),
+    };
+
+    const nextState = buildInitialMatchGameState({
+      gameId: 'chess',
+      mode: '1v1',
+      hostUid: hydratedRoom.hostUid,
+      players,
+      teams,
+      settings: mergedSettings,
+      existingState: {
+        stateVersion: Number(gameState.stateVersion || 1),
+        sessionSeed: generateFreshGameSeed(),
+      },
+    });
+
+    await db
+      .update(rooms)
+      .set({
+        status: 'playing',
+        settingsJson: JSON.stringify(mergedSettings),
+        gameStateJson: JSON.stringify(nextState),
+        updatedAt: new Date(),
+      })
+      .where(eq(rooms.roomCode, cleanCode));
+
+    return await getRoomByCode(cleanCode);
+  }
+
+  // Ensure White & Black UIDs are bound to the two human players
+  const hostPlayer = players.find((p) => p.uid === hydratedRoom.hostUid) || players[0];
+  const guestPlayer = players.find((p) => p.uid !== hydratedRoom.hostUid) || players[1];
+  const whiteUid = String(gameState.whiteUid || hostPlayer.uid);
+  const blackUid = String(
+    gameState.blackUid && gameState.blackUid !== whiteUid
+      ? gameState.blackUid
+      : guestPlayer?.uid || ''
+  );
+  const whitePlayer = players.find((p) => p.uid === whiteUid) || hostPlayer;
+  const blackPlayer = players.find((p) => p.uid === blackUid) || guestPlayer;
+
+  const nowMs = Date.now();
+  const initialTimeMs = Number(gameState.initialTimeMs || settings.initialTimeMs || 600_000);
+  const incrementSeconds = Number(gameState.incrementSeconds ?? settings.incrementSeconds ?? 5);
+  let whiteTimeMs = Number(gameState.whiteTimeMs ?? initialTimeMs);
+  let blackTimeMs = Number(gameState.blackTimeMs ?? initialTimeMs);
+  const lastMoveTimestamp = Number(gameState.lastMoveTimestamp || gameState.turnStartedAt || nowMs);
+  const currentMatchStatus = String(gameState.matchStatus || 'playing');
+
+  // Reconstruct authoritative Chess instance from PGN (for repetition & 50-move history) or FEN
+  const chess = new Chess();
+  const savedPgn = typeof gameState.pgn === 'string' ? gameState.pgn.trim() : '';
+  const savedFen =
+    typeof gameState.fen === 'string' && gameState.fen.trim()
+      ? gameState.fen.trim()
+      : typeof gameState.chessFen === 'string' && gameState.chessFen.trim()
+      ? gameState.chessFen.trim()
+      : 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
+
+  let loadedOk = false;
+  if (savedPgn) {
+    try {
+      chess.loadPgn(savedPgn);
+      loadedOk = true;
+    } catch {
+      loadedOk = false;
+    }
+  }
+  if (!loadedOk) {
+    try {
+      chess.load(savedFen);
+    } catch {
+      chess.reset();
+    }
+  }
+
+  const sideToMove = chess.turn(); // 'w' | 'b'
+  const elapsedMs = currentMatchStatus === 'playing' ? Math.max(0, nowMs - lastMoveTimestamp) : 0;
+
+  if (currentMatchStatus === 'playing') {
+    if (sideToMove === 'w') {
+      whiteTimeMs = Math.max(0, whiteTimeMs - elapsedMs);
+    } else {
+      blackTimeMs = Math.max(0, blackTimeMs - elapsedMs);
+    }
+  }
+
+  const nextVersion = (Number(gameState.stateVersion) || 1) + 1;
+
+  // Check if active player's clock has expired
+  if (currentMatchStatus === 'playing' && (whiteTimeMs <= 0 || blackTimeMs <= 0)) {
+    const whiteFlagged = whiteTimeMs <= 0;
+    const winnerColor = whiteFlagged ? 'b' : 'w';
+    const winnerPlayer = whiteFlagged ? blackPlayer : whitePlayer;
+    const flaggedPlayer = whiteFlagged ? whitePlayer : blackPlayer;
+    const reasonText = `@${flaggedPlayer.username} (${whiteFlagged ? 'White' : 'Black'}) ran out of time — @${winnerPlayer.username} wins on time!`;
+
+    const timeoutState = {
+      ...gameState,
+      stateVersion: nextVersion,
+      whiteUid,
+      whiteUsername: whitePlayer.username,
+      whiteAvatar: whitePlayer.avatar,
+      whiteCustomPhotoUrl: whitePlayer.customPhotoUrl || '',
+      blackUid,
+      blackUsername: blackPlayer.username,
+      blackAvatar: blackPlayer.avatar,
+      blackCustomPhotoUrl: blackPlayer.customPhotoUrl || '',
+      whiteTimeMs: whiteFlagged ? 0 : whiteTimeMs,
+      blackTimeMs: whiteFlagged ? blackTimeMs : 0,
+      lastMoveTimestamp: nowMs,
+      turnStartedAt: nowMs,
+      drawOfferByUid: null,
+      drawOfferByUsername: null,
+      matchStatus: 'gameover',
+      winnerColor,
+      winnerSide: winnerColor,
+      winnerUid: winnerPlayer.uid,
+      endReason: reasonText,
+      gameOverReason: 'Time Out',
+      winnerLabel: reasonText,
+    };
+
+    await db
+      .update(rooms)
+      .set({
+        gameStateJson: JSON.stringify(timeoutState),
+        updatedAt: new Date(),
+      })
+      .where(eq(rooms.roomCode, cleanCode));
+
+    return await getRoomByCode(cleanCode);
+  }
+
+  if (input.actionType === 'claim_timeout') {
+    return await getRoomByCode(cleanCode);
+  }
+
+  if (currentMatchStatus !== 'playing') {
+    return await getRoomByCode(cleanCode);
+  }
+
+  if (input.actionType === 'resign') {
+    const actorIsWhite = input.actorUid === whiteUid;
+    const winnerColor = actorIsWhite ? 'b' : 'w';
+    const winnerPlayer = actorIsWhite ? blackPlayer : whitePlayer;
+    const reasonText = `@${actorPlayer.username} (${actorIsWhite ? 'White' : 'Black'}) resigned — @${winnerPlayer.username} wins!`;
+
+    const resignedState = {
+      ...gameState,
+      stateVersion: nextVersion,
+      whiteUid,
+      whiteUsername: whitePlayer.username,
+      blackUid,
+      blackUsername: blackPlayer.username,
+      whiteTimeMs,
+      blackTimeMs,
+      lastMoveTimestamp: nowMs,
+      turnStartedAt: nowMs,
+      drawOfferByUid: null,
+      drawOfferByUsername: null,
+      matchStatus: 'gameover',
+      winnerColor,
+      winnerSide: winnerColor,
+      winnerUid: winnerPlayer.uid,
+      endReason: reasonText,
+      gameOverReason: 'Resignation',
+      winnerLabel: reasonText,
+    };
+
+    await db
+      .update(rooms)
+      .set({
+        gameStateJson: JSON.stringify(resignedState),
+        updatedAt: new Date(),
+      })
+      .where(eq(rooms.roomCode, cleanCode));
+
+    return await getRoomByCode(cleanCode);
+  }
+
+  if (input.actionType === 'offer_draw') {
+    const drawOfferState = {
+      ...gameState,
+      stateVersion: nextVersion,
+      whiteUid,
+      whiteUsername: whitePlayer.username,
+      blackUid,
+      blackUsername: blackPlayer.username,
+      whiteTimeMs,
+      blackTimeMs,
+      lastMoveTimestamp: nowMs,
+      turnStartedAt: nowMs,
+      drawOfferByUid: input.actorUid,
+      drawOfferByUsername: actorPlayer.username,
+    };
+
+    await db
+      .update(rooms)
+      .set({
+        gameStateJson: JSON.stringify(drawOfferState),
+        updatedAt: new Date(),
+      })
+      .where(eq(rooms.roomCode, cleanCode));
+
+    return await getRoomByCode(cleanCode);
+  }
+
+  if (input.actionType === 'respond_draw') {
+    const pendingOfferUid = String(gameState.drawOfferByUid || '');
+    if (!pendingOfferUid || pendingOfferUid === input.actorUid) {
+      throw new Error('No active draw offer from your opponent to respond to.');
+    }
+
+    const accepted = Boolean(input.acceptDraw);
+    const reasonText = `Draw by mutual agreement between @${whitePlayer.username} and @${blackPlayer.username}.`;
+    const respondedState = accepted
+      ? {
+          ...gameState,
+          stateVersion: nextVersion,
+          whiteTimeMs,
+          blackTimeMs,
+          lastMoveTimestamp: nowMs,
+          turnStartedAt: nowMs,
+          drawOfferByUid: null,
+          drawOfferByUsername: null,
+          matchStatus: 'gameover',
+          winnerColor: 'draw',
+          winnerSide: 'draw',
+          winnerUid: null,
+          endReason: reasonText,
+          gameOverReason: 'Mutual Draw Agreement',
+          winnerLabel: reasonText,
+        }
+      : {
+          ...gameState,
+          stateVersion: nextVersion,
+          whiteTimeMs,
+          blackTimeMs,
+          lastMoveTimestamp: nowMs,
+          turnStartedAt: nowMs,
+          drawOfferByUid: null,
+          drawOfferByUsername: null,
+        };
+
+    await db
+      .update(rooms)
+      .set({
+        gameStateJson: JSON.stringify(respondedState),
+        updatedAt: new Date(),
+      })
+      .where(eq(rooms.roomCode, cleanCode));
+
+    return await getRoomByCode(cleanCode);
+  }
+
+  // actionType === 'move'
+  if (!input.move || !input.move.from || !input.move.to) {
+    throw new Error('Move coordinates (from, to) are required.');
+  }
+
+  if (sideToMove === 'w' && input.actorUid !== whiteUid) {
+    throw new Error(`It is White’s turn (@${whitePlayer.username}). Please wait for your turn.`);
+  }
+  if (sideToMove === 'b' && input.actorUid !== blackUid) {
+    throw new Error(`It is Black’s turn (@${blackPlayer.username}). Please wait for your turn.`);
+  }
+
+  let executedMove;
+  try {
+    executedMove = chess.move({
+      from: input.move.from,
+      to: input.move.to,
+      promotion: input.move.promotion || 'q',
+    });
+  } catch {
+    executedMove = null;
+  }
+
+  if (!executedMove) {
+    throw new Error('Illegal chess move according to official FIDE rules.');
+  }
+
+  // Add increment to the player who just completed a legal move
+  const incrementMs = incrementSeconds * 1000;
+  if (sideToMove === 'w') {
+    whiteTimeMs += incrementMs;
+  } else {
+    blackTimeMs += incrementMs;
+  }
+
+  // Compute captured pieces from full move history
+  const verboseHistory = chess.history({ verbose: true });
+  const capturedByWhite: string[] = [];
+  const capturedByBlack: string[] = [];
+  for (const m of verboseHistory) {
+    if (m.captured) {
+      if (m.color === 'w') capturedByWhite.push(m.captured);
+      else capturedByBlack.push(m.captured);
+    }
+  }
+
+  // Determine if the move ended the game
+  let nextMatchStatus = 'playing';
+  let winnerColor: 'w' | 'b' | 'draw' | null = null;
+  let winnerUid: string | null = null;
+  let endReason = '';
+  let gameOverReason: string | null = null;
+
+  if (chess.isCheckmate()) {
+    nextMatchStatus = 'gameover';
+    winnerColor = sideToMove;
+    winnerUid = input.actorUid;
+    gameOverReason = 'Checkmate';
+    endReason = `Checkmate! @${actorPlayer.username} (${sideToMove === 'w' ? 'White' : 'Black'}) wins!`;
+  } else if (chess.isStalemate()) {
+    nextMatchStatus = 'gameover';
+    winnerColor = 'draw';
+    gameOverReason = 'Stalemate';
+    endReason = 'Draw by Stalemate — no legal moves available.';
+  } else if (chess.isThreefoldRepetition()) {
+    nextMatchStatus = 'gameover';
+    winnerColor = 'draw';
+    gameOverReason = 'Threefold Repetition';
+    endReason = 'Draw by Threefold Repetition.';
+  } else if (chess.isInsufficientMaterial()) {
+    nextMatchStatus = 'gameover';
+    winnerColor = 'draw';
+    gameOverReason = 'Insufficient Material';
+    endReason = 'Draw by Insufficient Material.';
+  } else if (chess.isDraw()) {
+    nextMatchStatus = 'gameover';
+    winnerColor = 'draw';
+    gameOverReason = '50-Move Rule';
+    endReason = 'Draw by 50-Move Rule.';
+  }
+
+  const nextFen = chess.fen();
+  const nextHistorySan = chess.history();
+
+  const nextState = {
+    ...gameState,
+    stateVersion: nextVersion,
+    fen: nextFen,
+    chessFen: nextFen,
+    pgn: chess.pgn(),
+    turn: chess.turn(),
+    inCheck: chess.inCheck(),
+    whiteUid,
+    whiteUsername: whitePlayer.username,
+    whiteAvatar: whitePlayer.avatar,
+    whiteCustomPhotoUrl: whitePlayer.customPhotoUrl || '',
+    blackUid,
+    blackUsername: blackPlayer.username,
+    blackAvatar: blackPlayer.avatar,
+    blackCustomPhotoUrl: blackPlayer.customPhotoUrl || '',
+    whiteTimeMs,
+    blackTimeMs,
+    lastMoveTimestamp: nowMs,
+    turnStartedAt: nowMs,
+    lastMove: {
+      from: executedMove.from,
+      to: executedMove.to,
+      san: executedMove.san,
+      color: executedMove.color,
+      piece: executedMove.piece,
+      captured: executedMove.captured || null,
+      promotion: executedMove.promotion || null,
+    },
+    moveHistorySan: nextHistorySan,
+    moveHistory: nextHistorySan,
+    capturedByWhite,
+    capturedByBlack,
+    drawOfferByUid: null,
+    drawOfferByUsername: null,
+    matchStatus: nextMatchStatus,
+    winnerColor,
+    winnerSide: winnerColor,
+    winnerUid,
+    endReason,
+    gameOverReason,
+    winnerLabel: endReason || null,
+  };
+
+  await db
+    .update(rooms)
+    .set({
+      gameStateJson: JSON.stringify(nextState),
+      updatedAt: new Date(),
+    })
+    .where(eq(rooms.roomCode, cleanCode));
+
+  return await getRoomByCode(cleanCode);
 }
 
 /* ============================================================================
@@ -5418,13 +6331,31 @@ async function expireStaleGameInvitations() {
     .where(eq(gameInvitations.status, 'pending'));
 
   const fiveMinutesAgo = Date.now() - 5 * 60_000;
+  const twentyFourHoursAgo = Date.now() - 24 * 60 * 60_000;
   for (const inv of pendingRows) {
     const createdTs = inv.createdAt ? new Date(inv.createdAt).getTime() : Date.now();
-    if (createdTs < fiveMinutesAgo) {
+    const cutoff =
+      inv.inviteType === 'couple_request' ? twentyFourHoursAgo : fiveMinutesAgo;
+    if (createdTs < cutoff) {
       await db
         .update(gameInvitations)
         .set({ status: 'expired', updatedAt: new Date() })
         .where(eq(gameInvitations.id, inv.id));
+
+      if (inv.inviteType === 'couple_request' && inv.roomCode) {
+        await db
+          .update(couplePairings)
+          .set({ status: 'unpaired', updatedAt: new Date() })
+          .where(
+            and(
+              eq(couplePairings.pairingCode, inv.roomCode),
+              or(
+                eq(couplePairings.status, 'pending_partner'),
+                eq(couplePairings.status, 'pending_requester_confirm')
+              )
+            )
+          );
+      }
     }
   }
 }
@@ -5732,17 +6663,29 @@ export async function getMatchmakingStateForUser(actorUid: string) {
     const queue1v1Count = activeQueues.filter((q) => q.queueMode === '1v1').length;
     const queue2v2Count = activeQueues.filter((q) => q.queueMode === '2v2').length;
 
+    const c = coupleCtx.activeCouple;
     const outgoingRows = await db
       .select()
       .from(gameInvitations)
-      .where(eq(gameInvitations.senderUid, actorUid))
+      .where(
+        c
+          ? or(
+              eq(gameInvitations.senderUid, actorUid),
+              and(
+                eq(gameInvitations.senderCoupleId, c.id),
+                eq(gameInvitations.inviteType, '2v2')
+              )
+            )
+          : eq(gameInvitations.senderUid, actorUid)
+      )
       .orderBy(desc(gameInvitations.createdAt))
       .limit(12);
 
-    if (!coupleCtx.activeCouple) {
+    if (!c) {
       return {
         myQueueEntry: null,
         matchedRoom: null,
+        activeMatchRoom: null,
         queueCounts: { queue1v1Count, queue2v2Count },
         partnerOnline: false,
         coupleAvailable: false,
@@ -5751,7 +6694,6 @@ export async function getMatchmakingStateForUser(actorUid: string) {
       };
     }
 
-    const c = coupleCtx.activeCouple;
     const partnerProfile =
       c.requesterUid === actorUid ? c.partnerProfile : c.requesterProfile;
     const requesterOnline = Boolean(c.requesterProfile?.isOnline);
@@ -5787,6 +6729,7 @@ export async function getMatchmakingStateForUser(actorUid: string) {
         return {
           myQueueEntry: { ...activeEntry, status: 'cancelled' },
           matchedRoom: null,
+          activeMatchRoom: null,
           queueCounts: { queue1v1Count, queue2v2Count },
           partnerOnline,
           coupleAvailable: false,
@@ -5814,6 +6757,11 @@ export async function getMatchmakingStateForUser(actorUid: string) {
       matchedRoom = await getRoomByCode(latestEntry.matchedRoomCode);
     }
 
+    let activeMatchRoom = null;
+    if (activeMatchCheck.inMatch && activeMatchCheck.roomCode) {
+      activeMatchRoom = await getRoomByCode(activeMatchCheck.roomCode);
+    }
+
     const waitSeconds =
       latestEntry && latestEntry.createdAt
         ? Math.max(0, Math.floor((Date.now() - new Date(latestEntry.createdAt).getTime()) / 1000))
@@ -5830,6 +6778,7 @@ export async function getMatchmakingStateForUser(actorUid: string) {
           }
         : null,
       matchedRoom,
+      activeMatchRoom,
       queueCounts: { queue1v1Count, queue2v2Count },
       partnerOnline,
       bothPartnersOnline: requesterOnline && partnerOnline,
@@ -5860,11 +6809,28 @@ async function matchPairedPartnersFor1v1(queueId: number) {
     visibility: 'private',
     settings: { matchmaking: '1v1_paired_couple', format: 'Standard Match (Best of 3)' },
     includePairedPartner: true,
+    internalAllow1v1: true,
+  });
+
+  const players: RoomParticipantPayload[] = JSON.parse(createdRoom.playersJson || '[]');
+  const teams: RoomCoupleTeamPayload[] = JSON.parse(createdRoom.teamsJson || '[]');
+  const settings: Record<string, unknown> = JSON.parse(createdRoom.settingsJson || '{}');
+  const initialState = buildInitialMatchGameState({
+    gameId: entry.gameId,
+    mode: '1v1',
+    hostUid: createdRoom.hostUid,
+    players,
+    teams,
+    settings,
   });
 
   await db
     .update(rooms)
-    .set({ status: 'playing', updatedAt: new Date() })
+    .set({
+      status: 'playing',
+      gameStateJson: JSON.stringify(initialState),
+      updatedAt: new Date(),
+    })
     .where(eq(rooms.roomCode, createdRoom.roomCode));
 
   const opponentProfiles = [
@@ -6017,7 +6983,9 @@ async function tryMatch2v2Couples(queueId: number) {
         coupleName: candidate.coupleName,
         coupleTrophies: candidate.coupleTrophies || 0,
         score: 0,
-        members: team1Members,
+        bothJoined: true,
+        bothReady: true,
+        members: team1Members.map((m) => ({ ...m, joined: true, ready: true, online: true })),
       },
       {
         teamSlot: 2,
@@ -6025,11 +6993,24 @@ async function tryMatch2v2Couples(queueId: number) {
         coupleName: myEntry.coupleName,
         coupleTrophies: myEntry.coupleTrophies || 0,
         score: 0,
-        members: team2Members,
+        bothJoined: true,
+        bothReady: true,
+        members: team2Members.map((m) => ({ ...m, joined: true, ready: true, online: true })),
       },
     ];
 
-    const sessionSeed = generateFreshGameSeed();
+    const initialGameState = buildInitialMatchGameState({
+      gameId: myEntry.gameId,
+      mode: '2v2',
+      hostUid: candidate.requesterUid,
+      players,
+      teams,
+      settings: {
+        matchmaking: '2v2_couple_queue',
+        format: 'Standard Match (Best of 3)',
+        trophyDiff,
+      },
+    });
 
     const systemChat = [
       {
@@ -6060,7 +7041,7 @@ async function tryMatch2v2Couples(queueId: number) {
       teamsJson: JSON.stringify(teams),
       pendingRequestsJson: JSON.stringify([]),
       invitedUidsJson: JSON.stringify([]),
-      gameStateJson: JSON.stringify({ sessionSeed, roundNumber: 1 }),
+      gameStateJson: JSON.stringify(initialGameState),
       chatJson: JSON.stringify(systemChat),
       voiceParticipantsJson: JSON.stringify([]),
     });
@@ -6457,6 +7438,7 @@ export async function sendGameInvitationByUsername(input: {
   targetUsername?: string;
   targetCoupleId?: number;
   gameId: string;
+  settings?: Record<string, unknown>;
 }) {
   try {
     await expireStaleGameInvitations();
@@ -6512,7 +7494,7 @@ export async function sendGameInvitationByUsername(input: {
         );
       }
 
-      // Cancel any stale pending 1v1 invitations for other games from this sender to their partner
+      // Cancel any stale pending 1v1 invitations from this sender to their partner
       const existingPending = await db
         .select()
         .from(gameInvitations)
@@ -6526,7 +7508,20 @@ export async function sendGameInvitationByUsername(input: {
         );
       if (existingPending.length > 0 && existingPending[0].gameId === input.gameId) {
         const existingRoom = await getRoomByCode(existingPending[0].roomCode);
-        return { invitation: existingPending[0], room: existingRoom };
+        if (existingRoom && existingRoom.status === 'lobby') {
+          if (input.settings && Object.keys(input.settings).length > 0) {
+            const prevSettings = JSON.parse(existingRoom.settingsJson || '{}');
+            await db
+              .update(rooms)
+              .set({
+                settingsJson: JSON.stringify({ ...prevSettings, ...input.settings }),
+                updatedAt: new Date(),
+              })
+              .where(eq(rooms.roomCode, existingRoom.roomCode));
+          }
+          const updatedRoom = await getRoomByCode(existingPending[0].roomCode);
+          return { invitation: existingPending[0], room: updatedRoom };
+        }
       }
       for (const oldInv of existingPending) {
         await db
@@ -6544,6 +7539,7 @@ export async function sendGameInvitationByUsername(input: {
         joinPolicy: 'immediate',
         invitedUids: [sender.uid, partnerUser.uid],
         settings: {
+          ...(input.settings || {}),
           inviteMode: 'partner_1v1',
           invitedUid: partnerUser.uid,
           invitedUsername: partnerUser.username,
@@ -6559,6 +7555,8 @@ export async function sendGameInvitationByUsername(input: {
           senderUid: sender.uid,
           senderUsername: sender.username,
           senderAvatar: sender.avatar,
+          senderEquippedSkin: sender.equippedSkin || 'skin-classic-notebook',
+          senderCustomPhotoUrl: sender.customPhotoUrl || '',
           senderCoupleId: senderCouple.id,
           senderCoupleName: senderCouple.coupleName,
           targetUid: partnerUser.uid,
@@ -6568,10 +7566,16 @@ export async function sendGameInvitationByUsername(input: {
           gameId: input.gameId,
           roomCode: room.roomCode,
           status: 'pending',
+          metadataJson: JSON.stringify({
+            ...(input.settings || {}),
+            roomCode: room.roomCode,
+            gameId: input.gameId,
+          }),
         })
         .returning();
 
-      return { invitation: inserted[0], room };
+      const hydratedRoom = await getRoomByCode(room.roomCode);
+      return { invitation: inserted[0], room: hydratedRoom || room };
     }
 
     // 2v2 Couple Invitation: find target couple by targetCoupleId or by partner username/couple name
@@ -6639,6 +7643,7 @@ export async function sendGameInvitationByUsername(input: {
       joinPolicy: 'immediate',
       invitedUids: [sender.uid, targetPartnerA.uid, targetPartnerB.uid],
       settings: {
+        ...(input.settings || {}),
         inviteMode: 'couple_2v2',
         invitedCoupleId: targetCouple.id,
         invitedCoupleName: targetCouple.coupleName,
@@ -6653,6 +7658,8 @@ export async function sendGameInvitationByUsername(input: {
         senderUid: sender.uid,
         senderUsername: sender.username,
         senderAvatar: sender.avatar,
+        senderEquippedSkin: sender.equippedSkin || 'skin-classic-notebook',
+        senderCustomPhotoUrl: sender.customPhotoUrl || '',
         senderCoupleId: senderCouple.id,
         senderCoupleName: senderCouple.coupleName,
         targetUid: targetPartnerA.uid,
@@ -6665,7 +7672,8 @@ export async function sendGameInvitationByUsername(input: {
       })
       .returning();
 
-    return { invitation: inserted[0], room };
+    const hydratedRoom = await getRoomByCode(room.roomCode);
+    return { invitation: inserted[0], room: hydratedRoom || room };
   } catch (error) {
     console.error('Database sendGameInvitationByUsername failed:', error);
     const msg = error instanceof Error ? error.message : 'Failed to send invitation.';
@@ -6728,6 +7736,15 @@ export async function respondToGameInvitation(input: {
       throw new Error('Invitation not found.');
     }
     const inv = rows[0];
+
+    // Gracefully handle duplicate accept clicks on an already-accepted invitation
+    if (inv.status === 'accepted' && input.accept && inv.roomCode) {
+      const existingRoom = await getRoomByCode(inv.roomCode);
+      if (existingRoom) {
+        return { invitation: inv, room: existingRoom };
+      }
+    }
+
     if (inv.status !== 'pending') {
       throw new Error(`This invitation has already been ${inv.status}.`);
     }
@@ -6760,6 +7777,12 @@ export async function respondToGameInvitation(input: {
         .set({ status: 'declined', updatedAt: new Date() })
         .where(eq(gameInvitations.id, inv.id))
         .returning();
+      if (inv.roomCode && inv.inviteType === '1v1') {
+        await db
+          .update(rooms)
+          .set({ status: 'expired', updatedAt: new Date() })
+          .where(eq(rooms.roomCode, inv.roomCode));
+      }
       return { invitation: declined[0], room: null };
     }
 
@@ -6779,13 +7802,14 @@ export async function respondToGameInvitation(input: {
 
     // For Party Room partner invitations, keep the room in 'lobby' status until the Party Host starts the game with >= 3 couples
     if (inv.inviteType === 'party' || joinedRoom.mode === 'party') {
+      const hydratedPartyRoom = await getRoomByCode(inv.roomCode);
       return {
         invitation: accepted[0],
-        room: joinedRoom,
+        room: hydratedPartyRoom || joinedRoom,
       };
     }
 
-    // For 1v1 and 2v2 challenges, transition room to playing with a fresh synchronized sessionSeed
+    // For 1v1 and 2v2 challenges, initialize authoritative game state and transition room to 'playing'
     const existingState = (() => {
       try {
         return JSON.parse(joinedRoom.gameStateJson || '{}');
@@ -6793,23 +7817,52 @@ export async function respondToGameInvitation(input: {
         return {};
       }
     })();
+    const roomSettings = (() => {
+      try {
+        return JSON.parse(joinedRoom.settingsJson || '{}');
+      } catch {
+        return {};
+      }
+    })();
+    const joinedPlayers: RoomParticipantPayload[] = (() => {
+      try {
+        return JSON.parse(joinedRoom.playersJson || '[]');
+      } catch {
+        return [];
+      }
+    })();
+    const joinedTeams: RoomCoupleTeamPayload[] = (() => {
+      try {
+        return JSON.parse(joinedRoom.teamsJson || '[]');
+      } catch {
+        return [];
+      }
+    })();
 
-    const playingRoomRows = await db
+    const initializedState = buildInitialMatchGameState({
+      gameId: joinedRoom.gameId,
+      mode: joinedRoom.mode === '2v2' ? '2v2' : '1v1',
+      hostUid: joinedRoom.hostUid,
+      players: joinedPlayers,
+      teams: joinedTeams,
+      settings: roomSettings,
+      existingState,
+    });
+
+    await db
       .update(rooms)
       .set({
         status: 'playing',
-        gameStateJson: JSON.stringify({
-          ...existingState,
-          sessionSeed: existingState.sessionSeed || generateFreshGameSeed(),
-        }),
+        gameStateJson: JSON.stringify(initializedState),
         updatedAt: new Date(),
       })
-      .where(eq(rooms.roomCode, inv.roomCode))
-      .returning();
+      .where(eq(rooms.roomCode, inv.roomCode));
+
+    const hydratedPlayingRoom = await getRoomByCode(inv.roomCode);
 
     return {
       invitation: accepted[0],
-      room: playingRoomRows[0] || joinedRoom,
+      room: hydratedPlayingRoom || joinedRoom,
     };
   } catch (error) {
     console.error('Database respondToGameInvitation failed:', error);
@@ -7164,6 +8217,8 @@ export async function sendCouplePairingRequestByUsername(input: {
   senderUid: string;
   targetUsername: string;
 }) {
+  await expireStaleGameInvitations();
+
   const senderCtx = await getCoupleContextForUser(input.senderUid);
   if (senderCtx.activeCouple) {
     throw new Error(
@@ -7177,6 +8232,15 @@ export async function sendCouplePairingRequestByUsername(input: {
     throw new Error('Authenticated user account not found.');
   }
   const sender = sanitizeUserRow(senderRow);
+  if (!sender.customPhotoUrl) {
+    const picRows = await db
+      .select()
+      .from(profilePictures)
+      .where(eq(profilePictures.userUid, sender.uid));
+    if (picRows[0]?.imageDataUrl) {
+      sender.customPhotoUrl = picRows[0].imageDataUrl;
+    }
+  }
 
   const cleanTarget = (input.targetUsername || '').trim().replace(/^@+/, '').toLowerCase();
   if (!cleanTarget) {
@@ -7201,7 +8265,38 @@ export async function sendCouplePairingRequestByUsername(input: {
     );
   }
 
-  // Prevent duplicate pending couple pairing requests between these two users
+  // Simultaneous / mutual request check: if target ALREADY sent a pending pairing request to sender,
+  // resolve them into ONE active Couple Profile immediately instead of creating duplicate requests!
+  const mutualIncomingPairings = await db
+    .select()
+    .from(couplePairings)
+    .where(
+      and(
+        eq(couplePairings.requesterUid, target.uid),
+        eq(couplePairings.partnerUid, sender.uid),
+        or(
+          eq(couplePairings.status, 'pending_partner'),
+          eq(couplePairings.status, 'pending_requester_confirm')
+        )
+      )
+    );
+
+  if (mutualIncomingPairings.length > 0) {
+    const mutualRow = mutualIncomingPairings[0];
+    const activated = await activateCoupleRelationship({
+      pairingRowId: mutualRow.id,
+      requesterUid: target.uid,
+      partnerUid: sender.uid,
+    });
+    return {
+      invitation: null,
+      pairingCode: activated.pairingCode,
+      autoMatchedMutual: true,
+      coupleContext: await getCoupleContextForUser(sender.uid),
+    };
+  }
+
+  // Prevent duplicate pending couple pairing requests from sender to target
   const existingInvites = await db
     .select()
     .from(gameInvitations)
@@ -7217,7 +8312,7 @@ export async function sendCouplePairingRequestByUsername(input: {
     throw new Error(`You already have a pending Couple Pairing Request sent to @${target.username}.`);
   }
 
-  // Create or reuse a pending couple_pairings row
+  // Create a pending couple_pairings row tied to both users
   const pairingInvite = await createCouplePairingInvite(sender.uid);
   await db
     .update(couplePairings)
@@ -7258,6 +8353,7 @@ export async function sendCouplePairingRequestByUsername(input: {
   return {
     invitation: inserted[0],
     pairingCode: pairingInvite.pairingCode,
+    autoMatchedMutual: false,
     coupleContext: await getCoupleContextForUser(sender.uid),
   };
 }
@@ -7452,6 +8548,8 @@ export async function respondToMailboxItem(input: {
   invitationId: number;
   accept: boolean;
 }) {
+  await expireStaleGameInvitations();
+
   const rows = await db
     .select()
     .from(gameInvitations)
@@ -7462,10 +8560,12 @@ export async function respondToMailboxItem(input: {
   const inv = rows[0];
 
   // Mark as read immediately
-  await db
-    .update(gameInvitations)
-    .set({ isRead: true, updatedAt: new Date() })
-    .where(eq(gameInvitations.id, inv.id));
+  if (inv.targetUid === input.actorUid) {
+    await db
+      .update(gameInvitations)
+      .set({ isRead: true, updatedAt: new Date() })
+      .where(eq(gameInvitations.id, inv.id));
+  }
 
   if (inv.status !== 'pending') {
     throw new Error(`This request has already been ${inv.status}.`);
@@ -7474,9 +8574,14 @@ export async function respondToMailboxItem(input: {
   // Handle Couple Pairing Request ('couple_request')
   if (inv.inviteType === 'couple_request') {
     if (!input.accept) {
+      // Allow either target to decline OR sender to cancel their outgoing request
+      if (inv.targetUid !== input.actorUid && inv.senderUid !== input.actorUid) {
+        throw new Error('Forbidden: You are not authorized to modify this Couple Pairing Request.');
+      }
+      const nextStatus = inv.senderUid === input.actorUid ? 'cancelled' : 'declined';
       await db
         .update(gameInvitations)
-        .set({ status: 'declined', isRead: true, updatedAt: new Date() })
+        .set({ status: nextStatus, isRead: true, updatedAt: new Date() })
         .where(eq(gameInvitations.id, inv.id));
 
       if (inv.roomCode) {
@@ -7487,24 +8592,17 @@ export async function respondToMailboxItem(input: {
       }
 
       return {
-        status: 'declined',
+        status: nextStatus,
         targetSection: 'mailbox' as const,
         coupleContext: await getCoupleContextForUser(input.actorUid),
         mailbox: await getMailboxForUser(input.actorUid),
       };
     }
 
-    // Enforce one-active-pairing-per-user rule on both accounts before activating
-    const actorCtx = await getCoupleContextForUser(input.actorUid);
-    if (actorCtx.activeCouple) {
+    // Strict authorization check: only the recipient (targetUid) can accept a pairing request
+    if (inv.targetUid !== input.actorUid) {
       throw new Error(
-        'You are already in an active couple pairing. Only one active pairing per user is permitted.'
-      );
-    }
-    const senderCtx = await getCoupleContextForUser(inv.senderUid);
-    if (senderCtx.activeCouple) {
-      throw new Error(
-        `@${inv.senderUsername} is already in an active couple pairing with another account.`
+        'Forbidden: Only the invited recipient can accept this Couple Pairing Request.'
       );
     }
 
@@ -7517,34 +8615,11 @@ export async function respondToMailboxItem(input: {
     }
     const pairingRow = pairingRows[0];
 
-    const allUsers = await db.select().from(users);
-    const reqUser = allUsers.find((u) => u.uid === pairingRow.requesterUid);
-    const partUser = allUsers.find((u) => u.uid === input.actorUid);
-    const reqName = reqUser?.username || inv.senderUsername;
-    const partName = partUser?.username || inv.targetUsername;
-    const todayStr = new Date().toISOString().slice(0, 10);
-
-    await db
-      .update(couplePairings)
-      .set({
-        partnerUid: input.actorUid,
-        requesterConfirmed: true,
-        partnerConfirmed: true,
-        status: 'active',
-        coupleName: pairingRow.coupleName || `${reqName} & ${partName}`,
-        anniversaryDate: pairingRow.anniversaryDate || todayStr,
-        coupleBio:
-          pairingRow.coupleBio || 'Playing side by side in Her Little Arcade.',
-        coupleTitle: pairingRow.coupleTitle || 'Newborn Duo',
-        coupleXp: Math.max(pairingRow.coupleXp || 0, 45),
-        updatedAt: new Date(),
-      })
-      .where(eq(couplePairings.id, pairingRow.id));
-
-    await db
-      .update(gameInvitations)
-      .set({ status: 'accepted', isRead: true, updatedAt: new Date() })
-      .where(eq(gameInvitations.id, inv.id));
+    await activateCoupleRelationship({
+      pairingRowId: pairingRow.id,
+      requesterUid: pairingRow.requesterUid,
+      partnerUid: input.actorUid,
+    });
 
     return {
       status: 'accepted',

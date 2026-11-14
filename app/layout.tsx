@@ -20,15 +20,30 @@ const monoFont = JetBrains_Mono({
   variable: '--font-mono',
 });
 
+const resolvedAppUrl = (() => {
+  try {
+    const raw = process.env.APP_URL || 'https://herlittlearcade.app';
+    return new URL(raw.startsWith('http') ? raw : `https://${raw}`);
+  } catch {
+    return new URL('https://herlittlearcade.app');
+  }
+})();
+
 export const metadata: Metadata = {
+  metadataBase: resolvedAppUrl,
   title: 'Her Little Arcade',
   description:
     'A cozy, personalized online arcade for two with 21 single-player and multiplayer games, custom chess clocks, private rooms, voice and text chat, shared memories, and progression.',
+  alternates: {
+    canonical: '/',
+  },
   openGraph: {
     title: 'Her Little Arcade',
     description:
       'A cozy, personalized online arcade for two with 21 single-player and multiplayer games, custom chess clocks, private rooms, voice and text chat, shared memories, and progression.',
     type: 'website',
+    siteName: 'Her Little Arcade',
+    url: '/',
   },
   twitter: {
     card: 'summary_large_image',

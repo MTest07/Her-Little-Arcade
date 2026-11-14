@@ -1,6 +1,6 @@
 {
   "name": "Her Little Arcade",
   "description": "A cozy, personalized online arcade for two with 21 single-player and multiplayer games, custom chess clocks, private rooms, voice and text chat, shared memories, and progression.",
-  "requestFramePermissions": ["microphone"],
+  "requestFramePermissions": ["camera", "microphone"],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

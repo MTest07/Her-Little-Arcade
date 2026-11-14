@@ -1,5 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { adminAuth } from '@/src/lib/firebase-admin';
+
+export const dynamic = 'force-dynamic';
+export const runtime = 'nodejs';
+
 import {
   getArcadeBootstrapData,
   registerUserWithEmail,
@@ -27,6 +31,7 @@ import {
   inspectCouplePairingInvite,
   acceptCouplePairingInvite,
   confirmCouplePairingFinal,
+  cancelCouplePairingInvite,
   updateSharedCoupleProfile,
   claimCoupleTrophyMilestone,
   unpairCoupleAccounts,
@@ -59,6 +64,7 @@ import {
   kickPartyRoomParticipant,
   seedDemoPartyCouples,
   recordPartyMatchResult,
+  submitAuthoritativeChessAction,
   getMailboxForUser,
   sendCouplePairingRequestByUsername,
   sendDirectRoomOrPartyInvitation,
@@ -190,8 +196,29 @@ export async function GET(req: NextRequest) {
           { status: 403 }
         );
       }
-      const mailbox = await getMailboxForUser(verifiedUid);
-      return NextResponse.json({ mailbox });
+      const [mailbox, coupleContext] = await Promise.all([
+        getMailboxForUser(verifiedUid),
+        getCoupleContextForUser(verifiedUid),
+      ]);
+      return NextResponse.json({ mailbox, coupleContext });
+    }
+
+    const coupleContextParam = searchParams.get('coupleContext');
+    if (coupleContextParam) {
+      if (!verifiedUid) {
+        return NextResponse.json(
+          { error: 'Unauthorized: Sign in required for Couple Context.' },
+          { status: 401 }
+        );
+      }
+      if (requestedUid && requestedUid !== verifiedUid) {
+        return NextResponse.json(
+          { error: 'Forbidden: Cannot access another user’s Couple Context.' },
+          { status: 403 }
+        );
+      }
+      const coupleContext = await getCoupleContextForUser(verifiedUid);
+      return NextResponse.json({ coupleContext });
     }
 
     const coupleVoiceParam = searchParams.get('coupleVoice');
@@ -585,6 +612,7 @@ export async function POST(req: NextRequest) {
         targetUsername: body.targetUsername ? String(body.targetUsername) : undefined,
         targetCoupleId: body.targetCoupleId ? Number(body.targetCoupleId) : undefined,
         gameId: String(body.gameId || 'chess'),
+        settings: body.settings && typeof body.settings === 'object' ? body.settings : undefined,
       });
       return NextResponse.json(out);
     }
@@ -706,6 +734,14 @@ export async function POST(req: NextRequest) {
       );
       const coupleContext = await getCoupleContextForUser(identity.uid);
       return NextResponse.json({ pairing: confirmed, coupleContext });
+    }
+
+    if (action === 'cancel_couple_invite') {
+      const out = await cancelCouplePairingInvite(
+        identity.uid,
+        body.pairingCode ? String(body.pairingCode) : undefined
+      );
+      return NextResponse.json(out);
     }
 
     if (action === 'update_couple_profile') {
@@ -842,6 +878,52 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ room });
     }
 
+    if (action === 'chess_action') {
+      const movePayload =
+        body.move && typeof body.move === 'object'
+          ? body.move
+          : body.from && body.to
+          ? {
+              from: String(body.from),
+              to: String(body.to),
+              promotion: body.promotion,
+            }
+          : undefined;
+      const newSettings =
+        body.newGameSettings && typeof body.newGameSettings === 'object'
+          ? (body.newGameSettings as Record<string, unknown>)
+          : {};
+      const room = await submitAuthoritativeChessAction({
+        actorUid: identity.uid,
+        roomCode: String(body.roomCode || ''),
+        actionType: body.actionType || 'move',
+        move: movePayload,
+        acceptDraw: Boolean(body.acceptDraw),
+        timePresetId:
+          body.timePresetId || newSettings.timePresetId
+            ? String(body.timePresetId || newSettings.timePresetId)
+            : undefined,
+        initialTimeMs:
+          body.initialTimeMs || newSettings.initialTimeMs
+            ? Number(body.initialTimeMs || newSettings.initialTimeMs)
+            : undefined,
+        incrementSeconds:
+          body.incrementSeconds !== undefined
+            ? Number(body.incrementSeconds)
+            : newSettings.incrementSeconds !== undefined
+            ? Number(newSettings.incrementSeconds)
+            : undefined,
+        timeControlLabel:
+          body.timeControlLabel || newSettings.timeControlLabel
+            ? String(body.timeControlLabel || newSettings.timeControlLabel)
+            : undefined,
+        hostColorPreference:
+          body.hostColorPreference ||
+          (newSettings.hostColorPreference as 'w' | 'b' | 'white' | 'black' | 'random' | undefined),
+      });
+      return NextResponse.json({ room });
+    }
+
     // Match Result & Profile Updates
     if (action === 'record_game') {
       const out = await recordGameMatchResult({
@@ -893,8 +975,11 @@ export async function POST(req: NextRequest) {
 
     // Universal Mailbox Actions
     if (action === 'get_mailbox') {
-      const mailbox = await getMailboxForUser(identity.uid);
-      return NextResponse.json({ mailbox });
+      const [mailbox, coupleContext] = await Promise.all([
+        getMailboxForUser(identity.uid),
+        getCoupleContextForUser(identity.uid),
+      ]);
+      return NextResponse.json({ mailbox, coupleContext });
     }
 
     if (action === 'mark_mailbox_read') {

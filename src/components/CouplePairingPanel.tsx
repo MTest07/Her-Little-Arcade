@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { PlayerProfile } from './AuthModal';
 import { ArcadeCircularLoader, ArcadeInlineSpinner } from './ArcadeLoader';
 import {
@@ -22,6 +22,8 @@ import {
   AlertCircle,
   CheckCircle2,
   Search,
+  Send,
+  XCircle,
 } from 'lucide-react';
 
 export interface EnrichedCouplePairing {
@@ -87,6 +89,7 @@ export function CouplePairingPanel({
   onOpenCosmeticsVault,
 }: CouplePairingPanelProps) {
   const [enteredCode, setEnteredCode] = useState(initialPairCodeFromUrl);
+  const [targetUsernameInput, setTargetUsernameInput] = useState('');
   const [inspectedInvite, setInspectedInvite] = useState<{
     pairingCode: string;
     requesterProfile: PlayerProfile;
@@ -107,6 +110,38 @@ export function CouplePairingPanel({
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
 
+  const onCoupleContextChangedRef = useRef(onCoupleContextChanged);
+  useEffect(() => {
+    onCoupleContextChangedRef.current = onCoupleContextChanged;
+  });
+
+  // Real-time poll while CouplePairingPanel is open so both accounts see pairing acceptance & online status live
+  useEffect(() => {
+    if (!currentUser.uid || !sessionToken) return;
+    let cancelled = false;
+    const poll = setInterval(async () => {
+      try {
+        const res = await fetch('/api/arcade?coupleContext=1', {
+          credentials: 'include',
+          headers: {
+            Authorization: `Bearer ${sessionToken}`,
+          },
+        });
+        if (!res.ok || cancelled) return;
+        const data = await res.json();
+        if (data?.coupleContext && !cancelled) {
+          onCoupleContextChangedRef.current(data.coupleContext);
+        }
+      } catch {
+        // Ignore transient network errors
+      }
+    }, 2500);
+    return () => {
+      cancelled = true;
+      clearInterval(poll);
+    };
+  }, [currentUser.uid, sessionToken]);
+
   async function callCoupleAction(payload: Record<string, unknown>) {
     const res = await fetch('/api/arcade', {
       method: 'POST',
@@ -121,6 +156,42 @@ export function CouplePairingPanel({
       throw new Error(data.error || 'Couple pairing request failed');
     }
     return data;
+  }
+
+  async function handleSendUsernameRequest(e: React.FormEvent) {
+    e.preventDefault();
+    setErrorMsg(null);
+    setStatusMsg(null);
+    const clean = targetUsernameInput.trim().replace(/^@+/, '');
+    if (!clean) {
+      setErrorMsg('Please enter your partner’s registered @username.');
+      return;
+    }
+    setLoading(true);
+    try {
+      const data = await callCoupleAction({
+        action: 'send_couple_pairing_request',
+        targetUsername: clean,
+      });
+      if (data.coupleContext) {
+        onCoupleContextChanged(data.coupleContext);
+      }
+      setTargetUsernameInput('');
+      if (data.autoMatchedMutual) {
+        setStatusMsg(
+          `Mutual request matched! You and @${clean} both requested each other — your Shared Couple Profile is now active!`
+        );
+      } else {
+        setStatusMsg(
+          `Couple Pairing Request sent to @${clean}! As soon as they accept in their Mailbox or Couple Profile, both accounts will link automatically.`
+        );
+      }
+      soundFX.playSuccess();
+    } catch (err: unknown) {
+      setErrorMsg(err instanceof Error ? err.message : 'Failed to send pairing request.');
+    } finally {
+      setLoading(false);
+    }
   }
 
   async function handleGenerateInviteCode() {
@@ -138,6 +209,27 @@ export function CouplePairingPanel({
       soundFX.playSuccess();
     } catch (err: unknown) {
       setErrorMsg(err instanceof Error ? err.message : 'Failed to generate pairing code.');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleCancelInvite(code?: string) {
+    setErrorMsg(null);
+    setStatusMsg(null);
+    setLoading(true);
+    try {
+      const data = await callCoupleAction({
+        action: 'cancel_couple_invite',
+        pairingCode: code,
+      });
+      if (data.coupleContext) {
+        onCoupleContextChanged(data.coupleContext);
+      }
+      setStatusMsg('Pending couple pairing invitation cancelled.');
+      soundFX.playMove();
+    } catch (err: unknown) {
+      setErrorMsg(err instanceof Error ? err.message : 'Failed to cancel invite.');
     } finally {
       setLoading(false);
     }
@@ -179,11 +271,17 @@ export function CouplePairingPanel({
       });
       if (data.coupleContext) {
         onCoupleContextChanged(data.coupleContext);
+        if (data.coupleContext.activeCouple) {
+          setEditCoupleName(data.coupleContext.activeCouple.coupleName);
+          setEditAnniversary(data.coupleContext.activeCouple.anniversaryDate);
+          setEditBio(data.coupleContext.activeCouple.coupleBio);
+          setEditBanner(data.coupleContext.activeCouple.coupleBanner);
+        }
       }
       setInspectedInvite(null);
       setEnteredCode('');
       setStatusMsg(
-        'You confirmed the pairing invitation! Waiting for your partner to click Confirm Pairing on their account to complete the mutual link.'
+        'Couple Pairing complete! Your Shared Couple Profile is now active for both you and your partner.'
       );
       soundFX.playSuccess();
     } catch (err: unknown) {
@@ -510,6 +608,7 @@ export function CouplePairingPanel({
             {[activeCouple.requesterProfile, activeCouple.partnerProfile].map((partner, idx) => {
               if (!partner) return null;
               const isMe = partner.uid === currentUser.uid;
+              const isOnline = isMe ? true : Boolean(partner.isOnline);
               return (
                 <div
                   key={partner.uid}
@@ -523,10 +622,30 @@ export function CouplePairingPanel({
                       size="sm"
                     />
                     <div>
-                      <div className="font-bold text-stone-100">
-                        {partner.username} {isMe ? '(You)' : `(Partner ${idx + 1})`}
+                      <div className="flex items-center gap-2 font-bold text-stone-100">
+                        <span>
+                          @{partner.username} {isMe ? '(You)' : `(Partner ${idx + 1})`}
+                        </span>
+                        <span
+                          className={`inline-flex items-center gap-1 font-mono text-[10px] ${
+                            isOnline ? 'text-emerald-400' : 'text-stone-400'
+                          }`}
+                        >
+                          <span
+                            className={`h-2 w-2 rounded-full ${
+                              isOnline ? 'bg-emerald-400 animate-pulse' : 'bg-stone-600'
+                            }`}
+                          />
+                          {isOnline
+                            ? partner.presenceStatus === 'in_match'
+                              ? 'In Match'
+                              : 'Online'
+                            : 'Offline'}
+                        </span>
                       </div>
-                      <div className="text-stone-400">{partner.email}</div>
+                      <div className="text-stone-400">
+                        {partner.email || `Couple ID #${activeCouple.id} · Paired ${activeCouple.anniversaryDate}`}
+                      </div>
                     </div>
                   </div>
                   <div className="text-right font-mono tabular-nums">
@@ -661,22 +780,50 @@ export function CouplePairingPanel({
         </div>
       ) : (
         /* ====================================================================
-           STATE B: UNPAIRED — GENERATE CODE, ACCEPT CODE & MUTUAL CONFIRMATION
+           STATE B: UNPAIRED — INVITE BY USERNAME OR CODE & INSTANT 1-STEP ACCEPT
            ==================================================================== */
         <div className="mt-5 grid grid-cols-1 gap-8 lg:grid-cols-12">
-          {/* Left Column: Generate Pairing Code & Confirm Partner Acceptance */}
+          {/* Left Column: Invite Partner by @username or 6-Character Code */}
           <div className="space-y-4 lg:col-span-6">
             <h3 className="text-sm font-bold text-stone-100">
               Step 1: Invite Your Partner
             </h3>
             <p className="text-xs leading-relaxed text-stone-400">
-              Generate a unique 6-character pairing code or invitation link and share it with your partner. Once they enter it on their registered account, both of you confirm the pairing.
+              Send a direct Couple Pairing Request by entering your partner&apos;s{' '}
+              <span className="font-mono text-stone-200">@username</span>, or generate a 6-character pairing code to share with them. As soon as your partner accepts, both accounts will automatically link to the same Shared Couple Profile in real time.
             </p>
+
+            {/* Direct @username Request Form */}
+            <form onSubmit={handleSendUsernameRequest} className="flex gap-2">
+              <label htmlFor="partner-username-request-input" className="sr-only">
+                Partner Username
+              </label>
+              <input
+                id="partner-username-request-input"
+                type="text"
+                value={targetUsernameInput}
+                onChange={(e) => setTargetUsernameInput(e.target.value)}
+                placeholder="Enter partner's @username"
+                className="w-full rounded-lg border border-stone-800 bg-stone-900 px-3 py-2 text-xs text-stone-100 focus:border-amber-500 focus:outline-none"
+              />
+              <button
+                type="submit"
+                disabled={loading}
+                className="flex items-center gap-1.5 rounded-lg bg-amber-500 px-3.5 py-2 text-xs font-bold text-stone-950 hover:bg-amber-400 whitespace-nowrap shrink-0"
+              >
+                <Send className="h-3.5 w-3.5" />
+                <span>Send Request</span>
+              </button>
+            </form>
 
             {coupleContext.pendingOutgoing ? (
               <div className="space-y-3 rounded-xl border border-amber-500/30 bg-amber-500/5 p-3.5">
                 <div className="flex items-center justify-between text-xs">
-                  <span className="font-semibold text-amber-200">Your Active Invite Code</span>
+                  <span className="font-semibold text-amber-200">
+                    {coupleContext.pendingOutgoing.partnerProfile
+                      ? `Pending Request to @${coupleContext.pendingOutgoing.partnerProfile.username}`
+                      : 'Your Active Invite Code'}
+                  </span>
                   <span className="font-mono text-base font-bold text-amber-300 tabular-nums">
                     #{coupleContext.pendingOutgoing.pairingCode}
                   </span>
@@ -712,84 +859,101 @@ export function CouplePairingPanel({
                     )}
                     <span>{copiedLink ? 'Invitation Link Copied!' : 'Copy Invite Link'}</span>
                   </button>
+
+                  <button
+                    type="button"
+                    disabled={loading}
+                    onClick={() => handleCancelInvite(coupleContext.pendingOutgoing!.pairingCode)}
+                    className="flex items-center gap-1.5 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-1.5 text-xs font-semibold text-rose-200 hover:bg-rose-500/20"
+                  >
+                    <XCircle className="h-3.5 w-3.5" />
+                    <span>Cancel Invite</span>
+                  </button>
                 </div>
 
-                {/* Mutual Confirmation Step when Partner has accepted */}
-                {coupleContext.pendingOutgoing.status === 'pending_requester_confirm' &&
-                coupleContext.pendingOutgoing.partnerProfile ? (
-                  <div className="mt-3 rounded-xl border border-teal-500/50 bg-teal-500/10 p-3 text-xs">
-                    <div className="font-bold text-teal-200">
-                      Partner Accepted: {coupleContext.pendingOutgoing.partnerProfile.username} (
-                      {coupleContext.pendingOutgoing.partnerProfile.email})
-                    </div>
-                    <p className="mt-1 text-stone-300">
-                      {coupleContext.pendingOutgoing.partnerProfile.username} has confirmed your pairing code! Complete the mutual confirmation below to activate your Shared Couple Profile.
-                    </p>
-                    <button
-                      type="button"
-                      disabled={loading}
-                      onClick={() =>
-                        handleFinalRequesterConfirm(coupleContext.pendingOutgoing!.pairingCode)
-                      }
-                      className="mt-2.5 flex items-center gap-1.5 rounded-lg bg-teal-400 px-4 py-2 text-xs font-bold text-stone-950 hover:bg-teal-300"
-                    >
-                      <UserCheck className="h-4 w-4" />
-                      <span>
-                        Confirm Pairing with {coupleContext.pendingOutgoing.partnerProfile.username}
+                <p className="text-[11px] text-stone-400">
+                  {coupleContext.pendingOutgoing.partnerProfile ? (
+                    <>
+                      Waiting for{' '}
+                      <span className="font-semibold text-stone-200">
+                        @{coupleContext.pendingOutgoing.partnerProfile.username}
+                      </span>{' '}
+                      to accept in their Mailbox or enter code{' '}
+                      <span className="font-mono font-semibold text-stone-200">
+                        {coupleContext.pendingOutgoing.pairingCode}
                       </span>
-                    </button>
-                  </div>
-                ) : (
-                  <p className="text-[11px] text-stone-400">
-                    Status: Waiting for your partner to enter code{' '}
-                    <span className="font-mono font-semibold text-stone-200">
-                      {coupleContext.pendingOutgoing.pairingCode}
-                    </span>{' '}
-                    on their account...
-                  </p>
-                )}
+                      . Your page will update automatically as soon as they accept!
+                    </>
+                  ) : (
+                    <>
+                      Waiting for your partner to enter code{' '}
+                      <span className="font-mono font-semibold text-stone-200">
+                        {coupleContext.pendingOutgoing.pairingCode}
+                      </span>{' '}
+                      on their account. Your page will update automatically as soon as they accept!
+                    </>
+                  )}
+                </p>
               </div>
             ) : (
               <button
                 type="button"
                 disabled={loading}
                 onClick={handleGenerateInviteCode}
-                className="flex items-center gap-2 rounded-xl bg-amber-500 px-4 py-2.5 text-xs font-bold text-stone-950 transition-colors hover:bg-amber-400"
+                className="flex items-center gap-2 rounded-xl border border-amber-500/40 bg-stone-900 px-4 py-2.5 text-xs font-bold text-amber-300 transition-colors hover:bg-stone-800"
               >
                 {loading ? (
                   <ArcadeInlineSpinner size={15} label="Generating Code..." />
                 ) : (
                   <>
                     <Sparkles className="h-4 w-4" />
-                    <span>Generate Partner Pairing Code</span>
+                    <span>Or Generate 6-Character Pairing Code</span>
                   </>
                 )}
               </button>
             )}
           </div>
 
-          {/* Right Column: Enter Partner's Pairing Code & Confirm */}
+          {/* Right Column: Accept Incoming Request or Enter Partner's Pairing Code */}
           <div className="space-y-4 lg:col-span-6">
             <h3 className="text-sm font-bold text-stone-100">
-              Step 2: Have a Partner&apos;s Pairing Code?
+              Step 2: Accept Partner Request or Enter Code
             </h3>
             <p className="text-xs leading-relaxed text-stone-400">
-              Enter the 6-character pairing code from your partner to verify their profile and confirm the invitation.
+              Accept an incoming Couple Pairing Request below or enter the 6-character pairing code from your partner to activate your Shared Couple Profile immediately.
             </p>
 
             {coupleContext.pendingIncoming && coupleContext.pendingIncoming.requesterProfile && (
-              <div className="rounded-xl border border-teal-500/40 bg-teal-500/10 p-3.5 text-xs">
-                <div className="font-bold text-teal-200">
-                  Invitation Accepted — Awaiting Final Confirmation
+              <div className="rounded-xl border border-teal-500/50 bg-teal-500/10 p-3.5 text-xs space-y-2.5">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2.5">
+                    <AnimatedSkinnedAvatar
+                      avatarId={coupleContext.pendingIncoming.requesterProfile.avatar}
+                      customPhotoUrl={coupleContext.pendingIncoming.requesterProfile.customPhotoUrl}
+                      skinId={coupleContext.pendingIncoming.requesterProfile.equippedSkin}
+                      size="sm"
+                    />
+                    <div>
+                      <div className="font-bold text-teal-200">
+                        Incoming Pairing Request from @{coupleContext.pendingIncoming.requesterProfile.username}
+                      </div>
+                      <div className="text-stone-300">
+                        Lv.{coupleContext.pendingIncoming.requesterProfile.level} · Code #{coupleContext.pendingIncoming.pairingCode}
+                      </div>
+                    </div>
+                  </div>
                 </div>
-                <p className="mt-1 text-stone-300">
-                  You accepted the pairing invite from{' '}
-                  <strong className="text-stone-100">
-                    {coupleContext.pendingIncoming.requesterProfile.username}
-                  </strong>{' '}
-                  (#{coupleContext.pendingIncoming.pairingCode}). Once they click{' '}
-                  <strong className="text-stone-100">Confirm Pairing</strong> on their account, your Shared Couple Profile will activate!
-                </p>
+                <button
+                  type="button"
+                  disabled={loading}
+                  onClick={() => handleAcceptInvite(coupleContext.pendingIncoming!.pairingCode)}
+                  className="flex w-full items-center justify-center gap-1.5 rounded-lg bg-teal-400 py-2 text-xs font-bold text-stone-950 hover:bg-teal-300"
+                >
+                  <UserCheck className="h-4 w-4" />
+                  <span>
+                    Accept &amp; Activate Couple Profile with @{coupleContext.pendingIncoming.requesterProfile.username}
+                  </span>
+                </button>
               </div>
             )}
 
@@ -826,16 +990,19 @@ export function CouplePairingPanel({
               <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 p-3.5 text-xs">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2.5">
-                    <div className="flex h-10 w-10 items-center justify-center rounded-xl border border-amber-500/50 bg-stone-950 text-lg">
-                      {getAvatarEmoji(inspectedInvite.requesterProfile.avatar)}
-                    </div>
+                    <AnimatedSkinnedAvatar
+                      avatarId={inspectedInvite.requesterProfile.avatar}
+                      customPhotoUrl={inspectedInvite.requesterProfile.customPhotoUrl}
+                      skinId={inspectedInvite.requesterProfile.equippedSkin}
+                      size="sm"
+                    />
                     <div>
                       <div className="font-bold text-stone-100">
-                        {inspectedInvite.requesterProfile.username} · Lv.
+                        @{inspectedInvite.requesterProfile.username} · Lv.
                         {inspectedInvite.requesterProfile.level}
                       </div>
                       <div className="text-stone-400">
-                        {inspectedInvite.requesterProfile.email}
+                        {inspectedInvite.requesterProfile.isOnline ? 'Online Now' : 'Registered Player'}
                       </div>
                     </div>
                   </div>
@@ -852,7 +1019,7 @@ export function CouplePairingPanel({
                 >
                   <UserCheck className="h-4 w-4" />
                   <span>
-                    Accept &amp; Confirm Pairing with {inspectedInvite.requesterProfile.username}
+                    Accept &amp; Activate Pairing with @{inspectedInvite.requesterProfile.username}
                   </span>
                 </button>
               </div>

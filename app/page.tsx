@@ -188,6 +188,7 @@ export default function HerLittleArcadePage() {
     useState<CoupleVoiceChatState | null>(null);
   const [latestMailboxToast, setLatestMailboxToast] = useState<MailboxItemRecord | null>(null);
   const lastNotifiedMailboxIdRef = useRef<number>(0);
+  const prevActiveCoupleIdRef = useRef<number | null>(null);
   const [activeShopTab, setActiveShopTab] = useState<
     'shop-profile' | 'shop-banners' | 'shop-avatars' | 'shop-chests' | 'shop-keys'
   >('shop-chests');
@@ -527,6 +528,22 @@ export default function HerLittleArcadePage() {
         setChestOpenings(data.chestOpenings);
       }
 
+      if (data.activeRoom) {
+        const restoredRoom = parseRawDatabaseRoom(data.activeRoom);
+        setActiveRoom((prev) => prev || restoredRoom);
+        if (!hasBootstrappedOnceRef.current && restoredRoom.status === 'playing') {
+          setSelectedMultiplayerMode(restoredRoom.mode);
+          if (restoredRoom.mode === 'party') {
+            setActiveSection('mp-party');
+          } else {
+            handleLaunchGame(restoredRoom.gameId, {
+              mode: restoredRoom.mode,
+              autostart: true,
+            });
+          }
+        }
+      }
+
       hasBootstrappedOnceRef.current = true;
     } catch {
       // Non-fatal network error
@@ -534,7 +551,7 @@ export default function HerLittleArcadePage() {
       setIsFetchingDatabase(false);
       setIsBootstrappingProfile(false);
     }
-  }, []);
+  }, [handleLaunchGame]);
 
   // Restore persistent or active session on initial website boot
   useEffect(() => {
@@ -683,7 +700,7 @@ export default function HerLittleArcadePage() {
 
     async function sendHeartbeat(statusOverride?: 'online' | 'in_match' | 'offline') {
       try {
-        await fetch('/api/arcade', {
+        const res = await fetch('/api/arcade', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -696,6 +713,12 @@ export default function HerLittleArcadePage() {
             activeRoomCode: currentRoomCode,
           }),
         });
+        if (res.ok) {
+          const hbData = await res.json();
+          if (hbData?.coupleContext) {
+            setCoupleContext(hbData.coupleContext);
+          }
+        }
       } catch {
         // Ignore transient network error
       }
@@ -704,7 +727,7 @@ export default function HerLittleArcadePage() {
     sendHeartbeat();
     const interval = setInterval(() => sendHeartbeat(), 18000);
 
-    // Real-time background Mailbox poll every 8s for incoming invitations & requests
+    // Real-time background Mailbox & Couple Context poll every 3.5s
     const mailboxPoll = setInterval(async () => {
       try {
         const res = await fetch('/api/arcade', {
@@ -716,21 +739,46 @@ export default function HerLittleArcadePage() {
           body: JSON.stringify({ action: 'get_mailbox' }),
         });
         const data = await res.json();
-        if (res.ok && data.mailbox && Array.isArray(data.mailbox.items)) {
-          setMailboxState(data.mailbox);
-          const newestUnread = (data.mailbox.items as MailboxItemRecord[]).find(
-            (it) => it.isIncoming && !it.isRead && it.status === 'pending'
-          );
-          if (newestUnread && newestUnread.id > lastNotifiedMailboxIdRef.current) {
-            lastNotifiedMailboxIdRef.current = newestUnread.id;
-            setLatestMailboxToast(newestUnread);
-            soundFX.playSuccess();
+        if (res.ok) {
+          if (data.coupleContext) {
+            const nextCouple = data.coupleContext.activeCouple as EnrichedCouplePairing | null;
+            const nextCoupleId = nextCouple?.id || 0;
+            if (
+              prevActiveCoupleIdRef.current !== null &&
+              prevActiveCoupleIdRef.current === 0 &&
+              nextCoupleId > 0 &&
+              nextCouple
+            ) {
+              soundFX.playSuccess();
+              setCouplesLeaderboard((prev) => {
+                const filtered = prev.filter((c) => c.id !== nextCouple.id);
+                return [nextCouple, ...filtered];
+              });
+            }
+            prevActiveCoupleIdRef.current = nextCoupleId;
+            setCoupleContext(data.coupleContext);
+          }
+
+          if (data.mailbox && Array.isArray(data.mailbox.items)) {
+            setMailboxState(data.mailbox);
+            const newestUnread = (data.mailbox.items as MailboxItemRecord[]).find(
+              (it) =>
+                it.isIncoming &&
+                !it.isRead &&
+                (it.status === 'pending' ||
+                  (it.inviteType === 'other' && it.gameId === 'couple-pairing'))
+            );
+            if (newestUnread && newestUnread.id > lastNotifiedMailboxIdRef.current) {
+              lastNotifiedMailboxIdRef.current = newestUnread.id;
+              setLatestMailboxToast(newestUnread);
+              soundFX.playSuccess();
+            }
           }
         }
       } catch {
         // Ignore transient network error
       }
-    }, 8000);
+    }, 3500);
 
     const handleBeforeUnload = () => {
       sendHeartbeat('offline');
@@ -744,6 +792,66 @@ export default function HerLittleArcadePage() {
     };
   }, [currentUid, sessionToken, currentRoomCode, isPlayingMultiplayer]);
 
+  // Real-time active room & invitation synchronization (every 1200ms)
+  useEffect(() => {
+    if (!currentUid || !sessionToken || !currentRoomCode) return;
+    let cancelled = false;
+
+    const pollRoom = async () => {
+      try {
+        const res = await fetch(
+          `/api/arcade?roomCode=${encodeURIComponent(currentRoomCode)}`,
+          {
+            credentials: 'include',
+            headers: {
+              Authorization: `Bearer ${sessionToken}`,
+            },
+          }
+        );
+        if (!res.ok || cancelled) return;
+        const data = await res.json();
+        if (!data?.room || cancelled) return;
+
+        const nextRoom = parseRawDatabaseRoom(data.room);
+        setActiveRoom((prev) => {
+          const prevStatus = prev?.status;
+          const minRequired =
+            nextRoom.mode === 'party' ? 6 : nextRoom.mode === '2v2' ? 4 : 2;
+          // If the room just transitioned from 'lobby' to 'playing' (e.g., partner accepted 1v1 challenge!),
+          // automatically close the setup modal and transition the inviter into the live match!
+          if (
+            prevStatus === 'lobby' &&
+            nextRoom.status === 'playing' &&
+            nextRoom.players.length >= minRequired
+          ) {
+            Promise.resolve().then(() => {
+              setPlaySetupModal((m) => ({ ...m, isOpen: false }));
+              setSelectedMultiplayerMode(nextRoom.mode);
+              if (nextRoom.mode === 'party') {
+                handleLaunchGame(null);
+                setActiveSection('mp-party');
+              } else {
+                handleLaunchGame(nextRoom.gameId, {
+                  mode: nextRoom.mode,
+                  autostart: true,
+                });
+              }
+            });
+          }
+          return nextRoom;
+        });
+      } catch {
+        // Ignore transient error
+      }
+    };
+
+    const timer = setInterval(pollRoom, 1200);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [currentUid, sessionToken, currentRoomCode, handleLaunchGame]);
+
   // Top-level Couple Voice Call Controller (persists across 1v1, 2v2, Party Games & all tabs)
   const coupleVoiceController = useCoupleVoiceCallController({
     currentUser,
@@ -756,7 +864,7 @@ export default function HerLittleArcadePage() {
     setActiveRoom(nextRoom);
     if (!sessionToken) return;
     try {
-      await fetch('/api/arcade', {
+      const res = await fetch('/api/arcade', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -767,6 +875,10 @@ export default function HerLittleArcadePage() {
           ...nextRoom,
         }),
       });
+      const data = await res.json();
+      if (res.ok && data?.room) {
+        setActiveRoom(parseRawDatabaseRoom(data.room));
+      }
     } catch {
       // Non-blocking sync
     }
@@ -1790,6 +1902,16 @@ export default function HerLittleArcadePage() {
                   <ChessArena
                     playerName={currentUser.username}
                     partnerName={partnerDisplayName}
+                    currentUser={{
+                      uid: currentUser.uid,
+                      username: currentUser.username,
+                      avatar: currentUser.avatar,
+                      customPhotoUrl: currentUser.customPhotoUrl,
+                      equippedSkin: currentUser.equippedSkin,
+                    }}
+                    activeRoom={activeRoom}
+                    authFetcher={authFetcher}
+                    onRoomUpdated={(nextRoom) => setActiveRoom(nextRoom)}
                     autostart={autostartGame}
                     roomGameState={activeRoom?.gameState}
                     onSyncRoomGameState={(nextGameState) => {
@@ -1815,6 +1937,14 @@ export default function HerLittleArcadePage() {
                     gameId={activeGameDef.id}
                     playerName={currentUser.username}
                     partnerName={partnerDisplayName}
+                    currentUser={{
+                      uid: currentUser.uid,
+                      username: currentUser.username,
+                      avatar: currentUser.avatar,
+                      customPhotoUrl: currentUser.customPhotoUrl,
+                      equippedSkin: currentUser.equippedSkin,
+                    }}
+                    activeRoom={activeRoom}
                     roomMode={
                       activeRoom?.mode === '2v2' || selectedMultiplayerMode === '2v2'
                         ? '2v2'
@@ -4370,11 +4500,19 @@ export default function HerLittleArcadePage() {
               </div>
               <div className="min-w-0">
                 <div className="truncate text-xs font-bold text-stone-100">
-                  New Mailbox Request · @{latestMailboxToast.senderUsername}
+                  {latestMailboxToast.inviteType === 'other' &&
+                  latestMailboxToast.gameId === 'couple-pairing'
+                    ? `Couple Pairing Update · @${latestMailboxToast.senderUsername}`
+                    : `New Mailbox Request · @${latestMailboxToast.senderUsername}`}
                 </div>
                 <div className="truncate text-[11px] text-stone-400">
                   {latestMailboxToast.inviteType === 'couple_request'
                     ? 'Sent you a Couple Pairing Request'
+                    : latestMailboxToast.inviteType === 'other' &&
+                      latestMailboxToast.gameId === 'couple-pairing'
+                    ? latestMailboxToast.status === 'accepted'
+                      ? 'Accepted your Couple Pairing Request! Your Shared Couple Profile is active.'
+                      : 'Your Shared Couple Profile has been updated'
                     : latestMailboxToast.inviteType === '1v1'
                     ? 'Challenged you to a 1v1 Partner Duel'
                     : latestMailboxToast.inviteType === '2v2_partner_team'
@@ -4394,6 +4532,118 @@ export default function HerLittleArcadePage() {
             </button>
           </div>
           <div className="mt-2.5 flex items-center justify-end gap-2">
+            {latestMailboxToast.inviteType === 'couple_request' &&
+              latestMailboxToast.status === 'pending' && (
+                <button
+                  type="button"
+                  onClick={async () => {
+                    const toastItem = latestMailboxToast;
+                    setLatestMailboxToast(null);
+                    try {
+                      const res = await authFetcher('/api/arcade', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                          action: 'respond_mailbox_item',
+                          invitationId: toastItem.id,
+                          accept: true,
+                        }),
+                      });
+                      const data = await res.json();
+                      if (res.ok) {
+                        if (data.coupleContext) {
+                          setCoupleContext(data.coupleContext);
+                        }
+                        if (data.mailbox) {
+                          setMailboxState(data.mailbox);
+                        }
+                        soundFX.playSuccess();
+                        handleLaunchGame(null);
+                        setActiveSection('couple-profile');
+                      }
+                    } catch {
+                      handleLaunchGame(null);
+                      setActiveSection('mailbox');
+                    }
+                  }}
+                  className="rounded-xl bg-emerald-500 px-3.5 py-1.5 text-xs font-bold text-stone-950 hover:bg-emerald-400"
+                >
+                  Accept Pairing
+                </button>
+              )}
+            {latestMailboxToast.inviteType === 'other' &&
+              latestMailboxToast.gameId === 'couple-pairing' && (
+                <button
+                  type="button"
+                  onClick={async () => {
+                    const toastItem = latestMailboxToast;
+                    setLatestMailboxToast(null);
+                    try {
+                      await authFetcher('/api/arcade', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                          action: 'mark_mailbox_read',
+                          invitationIds: [toastItem.id],
+                        }),
+                      });
+                    } catch {
+                      // Non-fatal
+                    }
+                    handleLaunchGame(null);
+                    setActiveSection('couple-profile');
+                  }}
+                  className="rounded-xl bg-emerald-500 px-3.5 py-1.5 text-xs font-bold text-stone-950 hover:bg-emerald-400"
+                >
+                  View Couple Profile
+                </button>
+              )}
+            {(latestMailboxToast.inviteType === '1v1' ||
+              latestMailboxToast.inviteType === '2v2' ||
+              latestMailboxToast.inviteType === 'party' ||
+              latestMailboxToast.inviteType === 'room_invite') && (
+              <button
+                type="button"
+                onClick={async () => {
+                  const toastItem = latestMailboxToast;
+                  setLatestMailboxToast(null);
+                  try {
+                    const res = await authFetcher('/api/arcade', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({
+                        action: 'respond_mailbox_item',
+                        invitationId: toastItem.id,
+                        accept: true,
+                      }),
+                    });
+                    const data = await res.json();
+                    if (res.ok && data.room) {
+                      const joinedRoom = parseRawDatabaseRoom(data.room);
+                      setActiveRoom(joinedRoom);
+                      setPlaySetupModal((m) => ({ ...m, isOpen: false }));
+                      setSelectedMultiplayerMode(joinedRoom.mode);
+                      if (joinedRoom.mode === 'party') {
+                        handleLaunchGame(null);
+                        setActiveSection('mp-party');
+                      } else {
+                        handleLaunchGame(joinedRoom.gameId, {
+                          mode: joinedRoom.mode,
+                          autostart: true,
+                        });
+                      }
+                      loadBootstrapData(currentUser.uid, sessionToken);
+                    }
+                  } catch {
+                    handleLaunchGame(null);
+                    setActiveSection('mailbox');
+                  }
+                }}
+                className="rounded-xl bg-emerald-500 px-3.5 py-1.5 text-xs font-bold text-stone-950 hover:bg-emerald-400"
+              >
+                Accept &amp; Enter Match
+              </button>
+            )}
             <button
               type="button"
               onClick={() => {

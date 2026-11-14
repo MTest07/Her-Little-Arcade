@@ -237,7 +237,25 @@ export function PlayGameSetupModal({
   // 1v1 Partner-Only Challenge state
   const [sendingInviteUid, setSendingInviteUid] = useState<string | null>(null);
   const [cancellingInviteId, setCancellingInviteId] = useState<number | null>(null);
+  const [respondingIncomingId, setRespondingIncomingId] = useState<number | null>(null);
   const [outgoingInvitations, setOutgoingInvitations] = useState<OutgoingInvitationItem[]>([]);
+  const [incomingPartnerInvites, setIncomingPartnerInvites] = useState<
+    Array<{
+      id: number;
+      inviteType: string;
+      senderUid: string;
+      senderUsername: string;
+      gameId: string;
+      roomCode: string;
+      status: string;
+    }>
+  >([]);
+
+  // 1v1 Chess Clock Preset & Color Assignment (Host configures before challenging partner)
+  const [chessPresetId, setChessPresetId] = useState<string>('rapid-10-0');
+  const [chessCustomMinutes, setChessCustomMinutes] = useState<number>(10);
+  const [chessCustomIncrement, setChessCustomIncrement] = useState<number>(5);
+  const [hostColorPreference, setHostColorPreference] = useState<'white' | 'black' | 'random'>('white');
 
   // Party Room setup state (3–10 Couples)
   const [partyVisibility, setPartyVisibility] = useState<'public' | 'private'>('public');
@@ -301,7 +319,36 @@ export function PlayGameSetupModal({
       .join(' ');
   };
 
-  // Poll matchmaking, outgoing 1v1 invitations, and 2v2 Couple Team Lobby while modal is open
+  const getResolvedChessSettings = useCallback(() => {
+    const presets: Record<string, { label: string; initialTimeMs: number; incrementSeconds: number }> = {
+      'bullet-1-0': { label: 'Bullet 1+0', initialTimeMs: 60 * 1000, incrementSeconds: 0 },
+      'blitz-3-2': { label: 'Blitz 3+2', initialTimeMs: 3 * 60 * 1000, incrementSeconds: 2 },
+      'blitz-5-0': { label: 'Blitz 5+0', initialTimeMs: 5 * 60 * 1000, incrementSeconds: 0 },
+      'rapid-10-0': { label: 'Rapid 10+0', initialTimeMs: 10 * 60 * 1000, incrementSeconds: 0 },
+      'classical-15-10': { label: 'Classical 15+10', initialTimeMs: 15 * 60 * 1000, incrementSeconds: 10 },
+    };
+    const chosen = presets[chessPresetId];
+    if (chosen) {
+      return {
+        timePresetId: chessPresetId,
+        timeControlLabel: chosen.label,
+        initialTimeMs: chosen.initialTimeMs,
+        incrementSeconds: chosen.incrementSeconds,
+        hostColorPreference,
+      };
+    }
+    const mins = Math.max(1, Math.min(60, Number(chessCustomMinutes) || 10));
+    const inc = Math.max(0, Math.min(30, Number(chessCustomIncrement) || 0));
+    return {
+      timePresetId: 'custom',
+      timeControlLabel: `Custom ${mins}+${inc}`,
+      initialTimeMs: mins * 60 * 1000,
+      incrementSeconds: inc,
+      hostColorPreference,
+    };
+  }, [chessPresetId, chessCustomMinutes, chessCustomIncrement, hostColorPreference]);
+
+  // Poll matchmaking, outgoing 1v1/2v2 invitations, active room status, and 2v2 Couple Team Lobby while modal is open
   const pollModalLiveState = useCallback(async () => {
     if (!isOpen || !currentUser.uid) return;
     try {
@@ -311,25 +358,48 @@ export function PlayGameSetupModal({
       if (!res.ok) return;
       const data = await res.json();
 
+      if (Array.isArray(data.incomingInvitations)) {
+        setIncomingPartnerInvites(data.incomingInvitations);
+      }
+
+      // Check if an active match room is already in 'playing' state for this user
+      if (data.activeMatchRoom) {
+        const parsedActive = parseRoomPayload(data.activeMatchRoom);
+        const minPlayersRequired =
+          parsedActive.mode === 'party' ? 6 : parsedActive.mode === '2v2' ? 4 : 2;
+        if (
+          parsedActive.status === 'playing' &&
+          parsedActive.players.length >= minPlayersRequired &&
+          (parsedActive.gameId === selectedGameId ||
+            (activeRoom && parsedActive.roomCode === activeRoom.roomCode))
+        ) {
+          onRoomJoinedOrCreated(parsedActive, true);
+          return;
+        }
+      }
+
       if (Array.isArray(data.outgoingInvitations)) {
         setOutgoingInvitations(data.outgoingInvitations);
-        // Check if an outgoing 1v1 invitation for this session was just accepted by the paired partner
-        const accepted1v1 = (data.outgoingInvitations as OutgoingInvitationItem[]).find(
+        // Check if an outgoing 1v1 or 2v2 invitation was accepted — always transition when modal is open!
+        const acceptedInvite = (data.outgoingInvitations as OutgoingInvitationItem[]).find(
           (inv) =>
-            inv.inviteType === '1v1' &&
+            (inv.inviteType === '1v1' || inv.inviteType === '2v2') &&
             inv.status === 'accepted' &&
-            inv.gameId === selectedGameId &&
-            inv.roomCode
+            inv.roomCode &&
+            (inv.gameId === selectedGameId ||
+              (activeRoom && inv.roomCode === activeRoom.roomCode))
         );
-        if (accepted1v1 && (!activeRoom || activeRoom.roomCode !== accepted1v1.roomCode)) {
+        if (acceptedInvite) {
           const roomRes = await authFetcher(
-            `/api/arcade?roomCode=${encodeURIComponent(accepted1v1.roomCode)}`
+            `/api/arcade?roomCode=${encodeURIComponent(acceptedInvite.roomCode)}`
           );
           const roomData = await roomRes.json();
           if (roomData?.room) {
             const parsed = parseRoomPayload(roomData.room);
-            onRoomJoinedOrCreated(parsed, true);
-            return;
+            if (parsed.status === 'playing' && parsed.players.length >= 2) {
+              onRoomJoinedOrCreated(parsed, true);
+              return;
+            }
           }
         }
       }
@@ -391,9 +461,46 @@ export function PlayGameSetupModal({
     Promise.resolve().then(() => {
       pollModalLiveState();
     });
-    const interval = window.setInterval(pollModalLiveState, 2200);
+    const interval = window.setInterval(pollModalLiveState, 1200);
     return () => window.clearInterval(interval);
   }, [isOpen, pollModalLiveState]);
+
+  const handleRespondIncomingChallenge = async (invitationId: number, accept: boolean) => {
+    setRespondingIncomingId(invitationId);
+    setStatusBanner(null);
+    try {
+      const res = await authFetcher('/api/arcade', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'respond_game_invitation',
+          invitationId,
+          accept,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Could not respond to invitation.');
+      }
+      if (accept && data.room) {
+        const parsed = parseRoomPayload(data.room);
+        onRoomJoinedOrCreated(parsed, true);
+        return;
+      }
+      setStatusBanner({
+        type: 'info',
+        text: 'Invitation declined.',
+      });
+      await pollModalLiveState();
+    } catch (err: unknown) {
+      setStatusBanner({
+        type: 'error',
+        text: err instanceof Error ? err.message : 'Failed to respond to invitation.',
+      });
+    } finally {
+      setRespondingIncomingId(null);
+    }
+  };
 
   const handleSend1v1PartnerChallenge = async () => {
     if (!activeCouple || activeCouple.status !== 'active' || !pairedPartner) {
@@ -406,6 +513,8 @@ export function PlayGameSetupModal({
     setSendingInviteUid(pairedPartner.uid);
     setStatusBanner(null);
     try {
+      const matchSettings =
+        selectedGameId === 'chess' ? getResolvedChessSettings() : {};
       const res = await authFetcher('/api/arcade', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -414,6 +523,7 @@ export function PlayGameSetupModal({
           inviteType: '1v1',
           targetUsername: pairedPartner.username,
           gameId: selectedGameId,
+          settings: matchSettings,
         }),
       });
       const data = await res.json();
@@ -426,7 +536,7 @@ export function PlayGameSetupModal({
       }
       setStatusBanner({
         type: 'success',
-        text: `1v1 Challenge sent to your partner @${pairedPartner.username}! Match begins as soon as they accept.`,
+        text: `1v1 Challenge sent to your partner @${pairedPartner.username}! Both of you will automatically enter the match as soon as they accept.`,
       });
       await pollModalLiveState();
     } catch (err: unknown) {
@@ -1010,6 +1120,195 @@ export function PlayGameSetupModal({
                   </div>
                 </div>
 
+                {/* Incoming 1v1 Challenge from Partner (Instant 1-Click Accept) */}
+                {incomingPartnerInvites
+                  .filter(
+                    (inv) =>
+                      inv.inviteType === '1v1' &&
+                      inv.status === 'pending' &&
+                      (!pairedPartner || inv.senderUid === pairedPartner.uid)
+                  )
+                  .map((inc) => {
+                    const incGame = ALL_ARCADE_GAMES.find((g) => g.id === inc.gameId);
+                    return (
+                      <div
+                        key={inc.id}
+                        className="p-4 rounded-2xl bg-[#DEF7EC] border-2 border-[#2C2523] shadow-[3px_3px_0px_#2C2523] flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3"
+                      >
+                        <div>
+                          <div className="text-xs font-black uppercase tracking-wider text-[#03543F]">
+                            Incoming 1v1 Partner Challenge · Room #{inc.roomCode}
+                          </div>
+                          <p className="text-xs font-bold text-[#2C2523] mt-0.5">
+                            @{inc.senderUsername} challenged you to play{' '}
+                            <strong>{incGame?.title || inc.gameId}</strong>! Accept now to launch both of you into the live match immediately.
+                          </p>
+                        </div>
+                        <div className="flex items-center gap-2 shrink-0">
+                          <button
+                            type="button"
+                            disabled={respondingIncomingId === inc.id}
+                            onClick={() => handleRespondIncomingChallenge(inc.id, true)}
+                            className="px-4 py-2.5 rounded-xl bg-[#03543F] hover:bg-[#023E2F] text-white text-xs font-bold border-2 border-[#2C2523] shadow-[2px_2px_0px_#2C2523] flex items-center gap-1.5 disabled:opacity-50"
+                          >
+                            {respondingIncomingId === inc.id ? (
+                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            ) : (
+                              <CheckCircle2 className="w-3.5 h-3.5" />
+                            )}
+                            Accept & Enter Match
+                          </button>
+                          <button
+                            type="button"
+                            disabled={respondingIncomingId === inc.id}
+                            onClick={() => handleRespondIncomingChallenge(inc.id, false)}
+                            className="px-3 py-2.5 rounded-xl bg-white hover:bg-[#FDE8E8] text-[#9B1C1C] text-xs font-bold border-2 border-[#2C2523]"
+                          >
+                            Decline
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+
+                {/* Chess Clock Preset & Color Assignment (when 1v1 Chess is selected) */}
+                {selectedGameId === 'chess' && (
+                  <div className="p-4 rounded-2xl bg-[#FDFBF7] border-2 border-[#2C2523] shadow-[3px_3px_0px_#2C2523] space-y-4">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <div className="text-xs font-black uppercase tracking-wider text-[#2C2523]">
+                          Official Chess Match Settings (Clock & Piece Colors)
+                        </div>
+                        <p className="text-xs text-[#6B5E58]">
+                          Choose the match clock preset and your preferred piece color before sending the challenge to your partner.
+                        </p>
+                      </div>
+                      <span className="px-2.5 py-1 rounded-lg bg-[#FEF3C7] border border-[#2C2523] text-[11px] font-black text-[#92400E]">
+                        {getResolvedChessSettings().timeControlLabel} · Host:{' '}
+                        {hostColorPreference.toUpperCase()}
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      {/* Clock Preset Selector */}
+                      <div className="space-y-2">
+                        <label className="block text-[11px] font-black uppercase tracking-wider text-[#2C2523]">
+                          Time Control Preset
+                        </label>
+                        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                          {[
+                            { id: 'bullet-1-0', label: 'Bullet 1+0', desc: '1 min' },
+                            { id: 'blitz-3-2', label: 'Blitz 3+2', desc: '3m + 2s' },
+                            { id: 'blitz-5-0', label: 'Blitz 5+0', desc: '5 min' },
+                            { id: 'rapid-10-0', label: 'Rapid 10+0', desc: '10 min' },
+                            { id: 'classical-15-10', label: 'Classical 15+10', desc: '15m + 10s' },
+                            { id: 'custom', label: 'Custom Clock', desc: 'Set m + s' },
+                          ].map((preset) => (
+                            <button
+                              key={preset.id}
+                              type="button"
+                              onClick={() => setChessPresetId(preset.id)}
+                              className={`p-2 rounded-xl border-2 border-[#2C2523] text-left transition-all ${
+                                chessPresetId === preset.id
+                                  ? 'bg-[#FEF3C7] shadow-[2px_2px_0px_#2C2523]'
+                                  : 'bg-white hover:bg-[#F3EFE6]'
+                              }`}
+                            >
+                              <div className="text-xs font-bold text-[#2C2523]">
+                                {preset.label}
+                              </div>
+                              <div className="text-[10px] text-[#6B5E58]">{preset.desc}</div>
+                            </button>
+                          ))}
+                        </div>
+
+                        {chessPresetId === 'custom' && (
+                          <div className="grid grid-cols-2 gap-2 pt-1">
+                            <div>
+                              <label className="block text-[10px] font-bold text-[#6B5E58]">
+                                Minutes (1–60)
+                              </label>
+                              <input
+                                type="number"
+                                min={1}
+                                max={60}
+                                value={chessCustomMinutes}
+                                onChange={(e) =>
+                                  setChessCustomMinutes(
+                                    Math.max(1, Math.min(60, Number(e.target.value) || 10))
+                                  )
+                                }
+                                className="mt-0.5 w-full rounded-lg border-2 border-[#2C2523] bg-white px-2.5 py-1.5 text-xs font-bold text-[#2C2523]"
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-[10px] font-bold text-[#6B5E58]">
+                                Increment Sec (0–30)
+                              </label>
+                              <input
+                                type="number"
+                                min={0}
+                                max={30}
+                                value={chessCustomIncrement}
+                                onChange={(e) =>
+                                  setChessCustomIncrement(
+                                    Math.max(0, Math.min(30, Number(e.target.value) || 0))
+                                  )
+                                }
+                                className="mt-0.5 w-full rounded-lg border-2 border-[#2C2523] bg-white px-2.5 py-1.5 text-xs font-bold text-[#2C2523]"
+                              />
+                            </div>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Piece Color Selector */}
+                      <div className="space-y-2">
+                        <label className="block text-[11px] font-black uppercase tracking-wider text-[#2C2523]">
+                          Your Piece Color Assignment
+                        </label>
+                        <div className="grid grid-cols-3 gap-2">
+                          {[
+                            {
+                              id: 'white' as const,
+                              label: '♔ White',
+                              desc: 'You move first',
+                            },
+                            {
+                              id: 'black' as const,
+                              label: '♚ Black',
+                              desc: 'Partner moves 1st',
+                            },
+                            {
+                              id: 'random' as const,
+                              label: '🎲 Random',
+                              desc: '50/50 coin toss',
+                            },
+                          ].map((opt) => (
+                            <button
+                              key={opt.id}
+                              type="button"
+                              onClick={() => setHostColorPreference(opt.id)}
+                              className={`p-2.5 rounded-xl border-2 border-[#2C2523] text-center transition-all ${
+                                hostColorPreference === opt.id
+                                  ? 'bg-[#E3E8FF] shadow-[2px_2px_0px_#2C2523]'
+                                  : 'bg-white hover:bg-[#F3EFE6]'
+                              }`}
+                            >
+                              <div className="text-xs font-bold text-[#2C2523]">
+                                {opt.label}
+                              </div>
+                              <div className="text-[10px] text-[#6B5E58] mt-0.5">
+                                {opt.desc}
+                              </div>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
                 {/* Partner Offline Warning */}
                 {pairedPartner && !pairedPartner.isOnline && (
                   <div className="p-3.5 rounded-2xl bg-[#FEF3C7] border-2 border-[#2C2523] flex items-center justify-between gap-3 text-xs font-bold text-[#92400E]">
@@ -1028,7 +1327,7 @@ export function PlayGameSetupModal({
                     <p className="text-xs text-[#6B5E58] mt-0.5">
                       Send a direct 1v1 invitation for{' '}
                       <strong className="text-[#2C2523]">{selectedGame.title}</strong> to{' '}
-                      {pairedPartner ? `@${pairedPartner.username}` : 'your paired partner'}. The match starts automatically once your partner accepts.
+                      {pairedPartner ? `@${pairedPartner.username}` : 'your paired partner'}. Both players automatically enter the same room as soon as your partner accepts.
                     </p>
                   </div>
 
